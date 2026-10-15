@@ -2,7 +2,7 @@
 
 A separate TV player for local movies, with PC-assisted English dubbing and optional upscaling.
 
-**Development version 0.3.1 — playback and model processing remain unvalidated.**
+**Development version 0.3.2 — playback and model processing remain unvalidated.**
 
 KevFLIX keeps the original files intact and uses the PC for source decoding, audio processing, scaling and encoding. A NAS can supply the source files. The TV receives a local-network HLS stream and decodes that final stream for display. The standard Plex installation is not modified.
 
@@ -47,3 +47,7 @@ See [THIRD-PARTY.md](THIRD-PARTY.md) for model/runtime provenance. Upstream name
 ## Connection setup
 
 Start-KevFLIX-Setup.cmd enables pairing without playback or inference. See [connection setup](docs/CONNECTION-SETUP.md). The launcher now shows connection progress and errors, and accepts a PC address without requiring the HTTP prefix or default port to be typed.
+
+## TV navigation
+
+The simplified sidebar, poster grid, movie details and on-screen pairing keypad use arrows, OK and Back. No numeric remote is required. See [remote controls](docs/REMOTE-CONTROLS.md).

@@ -1,36 +1,73 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>KevFLIX</title><link rel="stylesheet" href="player.css"></head>
 <body>
-<header id="header"><div><small>KevFLIX</small><h1 id="heading">Your movie library</h1></div><div class="header-actions"><span id="version">0.3.0 · development</span><button id="settings-button">Connection</button></div></header>
-<main>
-  <section id="pair-panel" hidden><h2>Pair this TV</h2><p>On the PC dashboard, choose “Pair a TV” and enter the six-digit code here.</p>
-    <form id="pair-form"><label>Pairing code<input id="pair-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label><button>Pair TV</button></form>
-    <p id="worker-address"></p><button id="forget">Forget this TV’s pairing</button>
-    <p><a id="plex-admin" target="_blank" rel="noreferrer" hidden>Open local Plex administration</a></p>
+<aside id="sidebar">
+  <div class="brand">Kev<span>FLIX</span></div>
+  <nav aria-label="Main navigation">
+    <button id="nav-home" class="nav active" data-page="home"><span class="symbol">⌂</span>Home</button>
+    <button id="nav-movies" class="nav" data-page="movies"><span class="symbol">▤</span>Movies</button>
+    <button id="nav-search" class="nav" data-page="search"><span class="symbol">⌕</span>Search</button>
+    <button id="nav-settings" class="nav" data-page="settings"><span class="symbol">⚙</span>Settings</button>
+  </nav>
+  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.3.2</small></div>
+</aside>
+<main id="main">
+  <header id="header"><div><small id="eyebrow">YOUR COLLECTION</small><h1 id="heading">Home</h1></div><span id="worker-mode"></span></header>
+  <section id="library-panel">
+    <div id="search-bar" hidden><form id="search-form" novalidate><input id="search" aria-label="Movie search" placeholder="Press OK to enter a title" readonly><button id="find-movies" class="primary" type="submit">Search</button></form></div>
+    <div class="browse-tools"><button id="back-folder" hidden>‹ Back to folder</button><button id="source-button">Movie folders</button><button id="reload">Refresh</button></div>
+    <section id="continue-section" hidden><h2>Continue watching</h2><div id="continue-row" class="poster-row"></div></section>
+    <section><h2 id="library-heading">Your movies</h2><div id="library" class="poster-grid"></div><p id="empty" hidden>No movies here.</p><button id="more" hidden>Load more</button></section>
   </section>
-  <section id="library-panel"><div class="toolbar"><select id="library-source" aria-label="Library source"><option value="folders">Movie folders</option><option value="plex">Plex library</option></select><select id="plex-section" aria-label="Plex movie library" hidden></select><button id="back-folder">Up one folder</button><form id="search-form"><input id="search" placeholder="Search movies" aria-label="Search movies"><button>Find</button></form><button id="reload">Refresh</button></div><div id="library" class="library"></div><button id="more" hidden>More movies</button><p id="empty" hidden>No movies here.</p></section>
-  <p id="notice" role="status" aria-live="polite"></p>
+  <section id="settings-page" hidden>
+    <div class="settings-group"><h2>Library and connection</h2><button id="settings-source" class="setting-row"><span>Movie library</span><span id="source-label">Movie folders</span></button><button id="connection-button" class="setting-row"><span>Pair this TV</span><span>Connect to your PC</span></button><button id="plex-admin" class="setting-row" hidden><span>Plex administration</span><span>Open the local Plex interface ↗</span></button></div>
+    <div class="settings-group"><h2>Picture defaults</h2><button id="default-quality" class="setting-row"><span>Output limit</span><span id="default-quality-value">4K</span></button><button id="default-upscale" class="setting-row"><span>Upscaling</span><span id="default-upscale-value">Off</span></button><button id="default-hdr" class="setting-row"><span>HDR</span><span id="default-hdr-value">Automatic</span></button></div>
+    <div class="settings-group"><h2>Dubbing and Sem</h2><button id="default-dub" class="setting-row"><span>English dubbing at start</span><span id="default-dub-value">Off</span></button><button id="default-watch" class="setting-row"><span>Watch with Sem</span><span id="default-watch-value">Off</span></button><button id="default-commentary" class="setting-row"><span>Sem commentary</span><span id="default-commentary-value">Balanced</span></button></div>
+    <p class="muted" id="worker-address"></p><button id="forget">Forget this TV’s pairing</button>
+  </section>
 </main>
+<section id="pair-panel" class="modal pairing" hidden aria-label="Pair this TV">
+  <div class="pair-card"><div class="brand">Kev<span>FLIX</span></div><h1>Connect your TV</h1><p>Use the arrow buttons and OK to enter the six-digit code from your PC.</p>
+    <form id="pair-form" novalidate><input id="pair-code" aria-label="Pairing code" maxlength="6" readonly tabindex="-1">
+      <div id="pair-keypad" class="pin-grid">
+        <button id="pin-first" type="button" data-digit="1">1</button><button type="button" data-digit="2">2</button><button type="button" data-digit="3">3</button>
+        <button type="button" data-digit="4">4</button><button type="button" data-digit="5">5</button><button type="button" data-digit="6">6</button>
+        <button type="button" data-digit="7">7</button><button type="button" data-digit="8">8</button><button type="button" data-digit="9">9</button>
+        <button id="pin-delete" type="button">Delete</button><button type="button" data-digit="0">0</button><button id="pin-clear" type="button">Clear</button>
+      </div><button id="pair-submit" class="primary" type="button">Pair TV</button>
+    </form><button id="pair-back">Back</button><p id="pair-message" class="muted" role="status"></p>
+  </div>
+</section>
+<section id="details" hidden>
+  <button id="details-back" class="back-button">‹ Back</button>
+  <div class="detail-layout"><div id="detail-poster" class="detail-poster"></div><div><small>YOUR LIBRARY</small><h1 id="detail-title"></h1><p id="detail-meta" class="muted"></p><p id="detail-summary"></p>
+    <div class="detail-actions"><button id="detail-play" class="primary">Play</button><button id="detail-restart">Play from beginning</button></div>
+    <div class="detail-actions"><button id="detail-dub">English dubbing: off</button><button id="detail-watch">Watch with Sem: off</button></div>
+    <p class="muted">Video and audio processing stay on your PC.</p>
+  </div></div>
+</section>
 <section id="player" hidden>
   <video id="video" playsinline preload="auto"></video>
   <div id="buffering" hidden><div class="spinner"></div><h2 id="buffer-title">Preparing playback</h2><p id="buffer-detail"></p></div>
-  <div id="player-controls"><div class="play-title"><div><h2 id="movie-title"></h2><p id="profile"></p></div><span id="time">0:00 / 0:00</span></div>
-    <div class="progress"><div id="progress-fill"></div></div>
-    <div class="controls"><button id="leave-player">Library</button><button id="rewind">−30 sec</button><button id="play-pause">Play</button><button id="forward">+30 sec</button><button id="dub">English dubbing: off</button><button id="watch">Watch with Sem: off</button><button id="playback-settings">Playback settings</button></div>
+  <div id="player-controls"><div class="play-title"><div><h2 id="movie-title"></h2><p id="profile"></p></div><span id="time"></span></div>
+    <button id="timeline" class="timeline" aria-label="Seek position"><span id="progress-fill"></span></button>
+    <div class="controls"><button id="leave-player">‹ Movie</button><button id="rewind">−10 sec</button><button id="play-pause" class="primary">Pause</button><button id="forward">+10 sec</button><button id="dub">Dubbing: off</button><button id="watch">Sem: off</button><button id="playback-settings">Settings</button></div>
     <p id="player-message" role="status"></p>
   </div>
-  <aside id="playback-panel" hidden><h2>Playback settings</h2>
-    <label>Output limit<select id="quality"><option value="2160">4K · 2160p</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option></select></label>
-    <label>Upscaling<select id="upscale"><option value="off">Off · keep source size</option><option value="on">Lanczos · resize up to output limit</option></select></label>
-    <label>HDR<select id="hdr-mode"><option value="auto">Preserve HDR signal when present</option><option value="sdr">Convert HDR to SDR on PC</option></select></label>
-    <button id="apply-quality">Apply picture settings</button>
-    <label>Original audio<select id="audio-track"></select></label>
-    <label>Subtitles<select id="subtitle-track"><option value="off">Off</option><option value="auto">External subtitle file</option><option value="dub">English dubbing text</option></select></label>
-    <label>Sem commentary<select id="watch-mode"><option value="balanced">Balanced reactions</option><option value="quiet">Quiet · reactions spaced apart</option><option value="ask-only">Only when I ask Sem</option></select></label>
-    <label>Plex playback progress<select id="progress-sync"><option value="off">Keep progress in this session</option><option value="on">Also save progress to Plex</option></select></label>
-    <button id="close-playback-settings">Done</button>
-  </aside>
+  <aside id="playback-panel" hidden><h2>Playback settings</h2><div id="playback-options"></div><button id="close-playback-settings" class="primary">Done</button></aside>
 </section>
+<section id="choice-panel" class="modal" hidden><div class="choice-card"><h2 id="choice-title"></h2><div id="choice-list"></div><button id="choice-back">Back</button></div></section>
+<div hidden aria-hidden="true"><button id="settings-button"></button>
+  <select id="library-source"><option value="folders">Movie folders</option><option value="plex">Plex library</option></select><select id="plex-section"></select>
+  <select id="quality"><option value="2160">4K</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option></select>
+  <select id="upscale"><option value="off">Off</option><option value="on">Lanczos upscaling</option></select>
+  <select id="hdr-mode"><option value="auto">Automatic HDR</option><option value="sdr">Convert to SDR</option></select><button id="apply-quality"></button>
+  <select id="audio-track"></select><select id="subtitle-track"></select>
+  <select id="watch-mode"><option value="balanced">Balanced</option><option value="quiet">Quiet</option><option value="ask-only">Only when asked</option></select>
+  <select id="progress-sync"><option value="off">Off</option><option value="on">Save to Plex</option></select>
+</div>
+<div id="notice" role="status" aria-live="polite" hidden></div>
 <script src="player.js"></script>
 </body></html>

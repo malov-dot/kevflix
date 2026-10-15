@@ -37,7 +37,7 @@
   }
   document.getElementById('connect').onsubmit=connect;
   button.onclick=connect;
-  document.addEventListener('keydown',function(event){
+  window.addEventListener('keydown',function(event){
     if(event.keyCode===13&&document.activeElement===button){connect(event);return;}
     if(event.keyCode===40){event.preventDefault();button.focus();}
     if(event.keyCode===38){event.preventDefault();input.focus();}
