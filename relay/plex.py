@@ -29,7 +29,7 @@ class Plex:
         self.headers = {
             "Accept": "application/json", "X-Plex-Token": config["plex"]["token"],
             "X-Plex-Client-Identifier": "kevflix",
-            "X-Plex-Product": "KevFLIX", "X-Plex-Version": "0.3.0",
+            "X-Plex-Product": "KevFLIX", "X-Plex-Version": "0.3.1",
             "X-Plex-Platform": "Windows",
         }
 

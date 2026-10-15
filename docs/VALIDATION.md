@@ -2,7 +2,7 @@
 
 **Not run. This is an unvalidated development release.**
 
-File construction and dependency installation do not establish playback correctness. No tests were added or run during this work. No model, decoder, encoder, TV player or generated-media preview was executed.
+File construction and dependency installation do not establish playback correctness. No test suite, model, decoder, encoder or generated-media preview was run. Version 0.3.1 adds a setup-only server mode. Its local connection endpoint was diagnosed while playback and model jobs remained disabled. TV pairing still needs owner confirmation.
 
 Deferred acceptance includes:
 

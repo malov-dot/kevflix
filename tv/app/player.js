@@ -1,11 +1,11 @@
 (function () {
   'use strict';
-  var VERSION='0.3.0', $=function(id){return document.getElementById(id);};
+  var VERSION='0.3.1', $=function(id){return document.getElementById(id);};
   var token=localStorage.getItem('sem-tv-token')||'', device=localStorage.getItem('sem-tv-device')||'';
   var folder=null,parent=null,offset=0,rows=[],session=null,loadedGeneration=0,wantedPlay=false;
   var operation=0,polling=false,loading=false,pollTimer=null,hideTimer=null,lastHeartbeat=0,reportedError='';
   var video=$('video'),desiredPosition=0,mediaStart=0,loadAbort=null,loadSerial=0;
-  var sourceMode='folders',posterUrls=[],posterEpoch=0,captionKey='';
+  var sourceMode='folders',posterUrls=[],posterEpoch=0,captionKey='',setupOnly=false;
   $('worker-address').textContent='Worker: '+location.origin;
   function message(text){$('notice').textContent=text||'';}
   function playerMessage(text){$('player-message').textContent=text||'';}
@@ -126,6 +126,7 @@
     updateCaptions(false);
   }
   async function openMovie(item){
+    if(setupOnly){message('Setup-only mode: TV pairing is available; playback and dubbing remain disabled.');return;}
     await leave();
     var number=++operation;
     message('Opening movie…');
@@ -294,7 +295,11 @@
   });
   try{['MediaPlay','MediaPause','MediaPlayPause','MediaStop','MediaRewind','MediaFastForward','Info','ColorF0Red'].forEach(function(key){tizen.tvinputdevice.registerKey(key);});}catch(ignore){}
   $('version').textContent=VERSION+' · development';
-  api('version',undefined,true).then(function(value){$('version').textContent='KevFLIX '+VERSION+' · worker '+value.version+' · '+value.player_release.slice(0,8);}).catch(function(){});
+  api('version',undefined,true).then(function(value){
+    setupOnly=value.setup_only===true;
+    $('version').textContent='KevFLIX '+VERSION+' · worker '+value.version+(setupOnly?' · setup only':' · '+value.player_release.slice(0,8));
+    if(setupOnly)message('Setup-only mode: pairing is available. Playback and dubbing are disabled.');
+  }).catch(function(){});
   if(token)api('settings').then(function(value){
     if(value.plex_url){$('plex-admin').href=value.plex_url.replace(/\/$/,'')+'/web/';$('plex-admin').hidden=false;}
   }).catch(function(){});

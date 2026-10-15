@@ -9,6 +9,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 DEFAULTS = {
+    "setup_only": False,
     "bind": "127.0.0.1", "port": 8787,
     "state_dir": "./state", "cache_dir": "./state/cache",
     "api_token": "", "nas_token": "", "stream_secret": "", "webhook_secret": "",

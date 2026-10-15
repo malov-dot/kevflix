@@ -45,6 +45,8 @@ class Application:
         self.lock = threading.Lock()
 
     def start(self):
+        if self.config["setup_only"]:
+            return
         self.jobs.start()
         self.plex.start()
         self.tv.start()
@@ -181,6 +183,9 @@ class Handler(BaseHTTPRequestHandler):
         path = parsed.path
         query = {k: v[-1] for k, v in parse_qs(parsed.query).items()}
         try:
+            if self.app.config["setup_only"] and (path.startswith(("/tv-media/", "/stream/"))
+                                                 or path == "/api/watch/context"):
+                return self.json_response({"error": "Setup-only mode: playback and model processing are disabled"}, 423)
             if path in ("/tv", "/tv/"):
                 self.send_response(302)
                 self.send_header("Location", "/tv-ui/" + self.app.updates.active + "/index.html")
@@ -193,7 +198,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.file(self.app.updates.file(ui_asset[1], ui_asset[2]), tv_asset=True)
             if path == "/tv-api/version":
                 return self.json_response({"version": __version__, "validation": "untested",
-                                           "player_release": self.app.updates.active})
+                                           "player_release": self.app.updates.active,
+                                           "setup_only": self.app.config["setup_only"]})
             if path.startswith("/tv-api/"):
                 device = self.tv_device()
                 if path == "/tv-api/library":
@@ -243,7 +249,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self.authorized():
                 return self.json_response({"error": "Authentication required"}, 401)
             if path == "/api/status":
-                return self.json_response({"version": __version__, "config": self.app.config.public(),
+                return self.json_response({"version": __version__, "setup_only": self.app.config["setup_only"], "config": self.app.config.public(),
                     "jobs": self.app.store.jobs(), "sessions": self.app.store.records("sessions"),
                     "leases": self.app.store.records("leases"), "plex_error": self.app.plex.last_error,
                     "watch_enabled": self.app.plex.watch_enabled, "validation": "Unvalidated build; owner deferred testing"})
@@ -294,6 +300,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         try:
+            if self.app.config["setup_only"] and path not in (
+                    "/tv-api/pair", "/api/tv/pair-code", "/api/tv/revoke"):
+                self.close_connection = True
+                return self.json_response({"error": "Setup-only mode: only TV pairing is enabled; playback and model processing are disabled"}, 423)
             if path == "/tv-api/pair":
                 if not self.app.config["tv"]["enabled"]:
                     raise ValueError("TV player is disabled")
@@ -487,8 +497,12 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="relay-config.json")
+    parser.add_argument("--setup-only", action="store_true",
+                        help="Serve the interface and pairing without starting media, model or update workers")
     args = parser.parse_args()
     config = Config(args.config)
+    if args.setup_only:
+        config.data["setup_only"] = True
     application = Application(config)
     server = ThreadingHTTPServer((config["bind"], int(config["port"])), Handler)
     server.daemon_threads = True
@@ -500,7 +514,8 @@ def main():
     signal.signal(signal.SIGINT, stop)
     signal.signal(signal.SIGTERM, stop)
     try:
-        logging.info("Movie Dub Relay %s listening on configured interface, port %s", __version__, config["port"])
+        logging.info("KevFLIX %s listening on configured interface, port %s; setup_only=%s",
+                     __version__, config["port"], config["setup_only"])
         server.serve_forever()
     finally:
         application.close()
