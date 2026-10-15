@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KevFLIX</title><link rel="stylesheet" href="player.css"></head>
+<body>
+<header id="header"><div><small>KevFLIX</small><h1 id="heading">Your movie library</h1></div><div class="header-actions"><span id="version">0.3.0 · development</span><button id="settings-button">Connection</button></div></header>
+<main>
+  <section id="pair-panel" hidden><h2>Pair this TV</h2><p>On the PC dashboard, choose “Pair a TV” and enter the six-digit code here.</p>
+    <form id="pair-form"><label>Pairing code<input id="pair-code" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="off" required></label><button>Pair TV</button></form>
+    <p id="worker-address"></p><button id="forget">Forget this TV’s pairing</button>
+    <p><a id="plex-admin" target="_blank" rel="noreferrer" hidden>Open local Plex administration</a></p>
+  </section>
+  <section id="library-panel"><div class="toolbar"><select id="library-source" aria-label="Library source"><option value="folders">Movie folders</option><option value="plex">Plex library</option></select><select id="plex-section" aria-label="Plex movie library" hidden></select><button id="back-folder">Up one folder</button><form id="search-form"><input id="search" placeholder="Search movies" aria-label="Search movies"><button>Find</button></form><button id="reload">Refresh</button></div><div id="library" class="library"></div><button id="more" hidden>More movies</button><p id="empty" hidden>No movies here.</p></section>
+  <p id="notice" role="status" aria-live="polite"></p>
+</main>
+<section id="player" hidden>
+  <video id="video" playsinline preload="auto"></video>
+  <div id="buffering" hidden><div class="spinner"></div><h2 id="buffer-title">Preparing playback</h2><p id="buffer-detail"></p></div>
+  <div id="player-controls"><div class="play-title"><div><h2 id="movie-title"></h2><p id="profile"></p></div><span id="time">0:00 / 0:00</span></div>
+    <div class="progress"><div id="progress-fill"></div></div>
+    <div class="controls"><button id="leave-player">Library</button><button id="rewind">−30 sec</button><button id="play-pause">Play</button><button id="forward">+30 sec</button><button id="dub">English dubbing: off</button><button id="watch">Watch with Sem: off</button><button id="playback-settings">Playback settings</button></div>
+    <p id="player-message" role="status"></p>
+  </div>
+  <aside id="playback-panel" hidden><h2>Playback settings</h2>
+    <label>Output limit<select id="quality"><option value="2160">4K · 2160p</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option></select></label>
+    <label>Upscaling<select id="upscale"><option value="off">Off · keep source size</option><option value="on">Lanczos · resize up to output limit</option></select></label>
+    <label>HDR<select id="hdr-mode"><option value="auto">Preserve HDR signal when present</option><option value="sdr">Convert HDR to SDR on PC</option></select></label>
+    <button id="apply-quality">Apply picture settings</button>
+    <label>Original audio<select id="audio-track"></select></label>
+    <label>Subtitles<select id="subtitle-track"><option value="off">Off</option><option value="auto">External subtitle file</option><option value="dub">English dubbing text</option></select></label>
+    <label>Sem commentary<select id="watch-mode"><option value="balanced">Balanced reactions</option><option value="quiet">Quiet · reactions spaced apart</option><option value="ask-only">Only when I ask Sem</option></select></label>
+    <label>Plex playback progress<select id="progress-sync"><option value="off">Keep progress in this session</option><option value="on">Also save progress to Plex</option></select></label>
+    <button id="close-playback-settings">Done</button>
+  </aside>
+</section>
+<script src="player.js"></script>
+</body></html>

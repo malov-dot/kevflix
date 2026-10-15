@@ -1,0 +1,35 @@
+{
+  "name": "kevflix",
+  "version": "0.3.0",
+  "description": "KevFLIX: local movies with PC-assisted English dubbing and upscaling. Unvalidated development build.",
+  "packageType": "app",
+  "appName": "KevFLIX",
+  "appPath": "tv/bootstrap/index.html",
+  "keys": [
+    "MediaPlay",
+    "MediaPause",
+    "MediaPlayPause",
+    "MediaStop",
+    "MediaRewind",
+    "MediaFastForward",
+    "Info",
+    "ColorF0Red"
+  ],
+  "license": "UNLICENSED",
+  "private": true,
+  "semPlayer": {
+    "apiVersion": 1,
+    "minimumTizen": "6.5",
+    "targetTizenBrew": "2.0.5",
+    "validation": "not-tested",
+    "updateFiles": [
+      "index.html",
+      "player.css",
+      "player.js"
+    ]
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/malov-dot/kevflix.git"
+  }
+}

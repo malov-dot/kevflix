@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>KevFLIX Worker</title><link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header><div><small>LOCAL ENGLISH DUBBING · TIZENBREW</small><h1>KevFLIX Worker</h1></div><span id="version">0.3.0 · awaiting validation</span></header>
+<main>
+  <section id="connection"><h2>Connect to your worker</h2><p>The access key stays in this browser session.</p>
+    <form id="connect"><input id="token" type="password" autocomplete="off" placeholder="Worker access key" required><button>Connect</button><button type="button" id="logout">Disconnect</button></form>
+  </section>
+  <p id="notice" role="status"></p>
+  <section><h2>Your TV player</h2><p>Video, dubbing and upscaling run on this PC. Your NAS supplies the source files.</p>
+    <button id="pair-tv">Pair a TV</button><p id="pair-code"></p><div id="tv-devices"></div>
+  </section>
+  <section><h2>Your Plex session</h2><p id="session">No session information yet.</p>
+    <div class="actions"><button data-control="pause">Pause TV</button><button data-control="play">Resume TV</button><button id="watch">Enable watch context</button><button id="watch-stop">Stop watch context</button></div>
+    <form id="seek"><label>Playback position in seconds<input id="seek-position" type="number" min="0" step="1" required></label><button>Seek on TV</button></form>
+    <p id="worker"></p><p id="plex-error" class="warning"></p>
+  </section>
+  <section><h2>Choose a movie</h2>
+    <form id="search"><select id="sections" aria-label="Plex library"></select><input id="query" placeholder="Search this library"><button>Search Plex</button></form>
+    <div id="library" class="cards"></div>
+    <details><summary>Prepare a file on this PC or a mapped NAS share</summary>
+      <form id="local"><label>Media path<input id="source" required></label><label>Subtitle path, if needed<input id="subtitles"></label>
+        <button>Prepare English version</button></form>
+    </details>
+  </section>
+  <section><h2>Dubbing jobs</h2><div id="jobs" class="cards"></div></section>
+  <section id="review" hidden><h2>Review a segment</h2><p id="review-description"></p><div id="preview" class="actions"></div>
+    <label>Segment<select id="review-segment"></select></label>
+    <audio id="audio" controls></audio><div id="issues"></div><div id="cues"></div>
+    <div class="actions"><button id="save-corrections">Save corrections and regenerate</button><button id="approve">Approve this exact audio after listening</button></div>
+  </section>
+  <details><summary>Recent activity</summary><pre id="events"></pre></details>
+</main>
+<footer>Original media is preserved. English output and uncertain dialogue are tracked separately from file creation.</footer>
+<script src="/app.js" defer></script>
+</body>
+</html>

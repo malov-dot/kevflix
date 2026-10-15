@@ -1,0 +1,19 @@
+# Direct dependency pins for isolated Python 3.11, Windows x64.
+# Resolver/install has NOT been run. Transitive versions are captured by setup.
+# Torch/torchaudio are installed first from the official cu128 index.
+torch==2.11.0
+torchaudio==2.11.0
+torchcodec==0.17.0
+numpy==2.3.5
+scipy==1.16.3
+soundfile==0.14.0
+faster-whisper==1.2.1
+ctranslate2==4.6.0
+transformers==4.57.1
+huggingface-hub==0.36.0
+sentencepiece==0.2.2
+pyannote.audio==4.0.7
+demucs==4.1.0
+piper-tts==1.8.0
+lingua-language-detector==2.1.1
+pysubs2==1.8.0

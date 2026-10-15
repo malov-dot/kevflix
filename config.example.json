@@ -1,0 +1,69 @@
+{
+  "bind": "127.0.0.1",
+  "port": 8787,
+  "public_url": "http://127.0.0.1:8787",
+  "state_dir": "./state",
+  "cache_dir": "./state/cache",
+  "api_token": "GENERATE_WITH_CONFIGURE",
+  "nas_token": "GENERATE_WITH_CONFIGURE",
+  "stream_secret": "GENERATE_WITH_CONFIGURE",
+  "webhook_secret": "GENERATE_WITH_CONFIGURE",
+  "ffmpeg": "./tools/ffmpeg-9.0.2-full_build-shared/bin/ffmpeg.exe",
+  "ffprobe": "./tools/ffmpeg-9.0.2-full_build-shared/bin/ffprobe.exe",
+  "media_roots": [
+    "%USERPROFILE%/Videos"
+  ],
+  "path_mappings": [],
+  "device": "cpu",
+  "cpu_threads": 2,
+  "gpu_min_free_mib": 10000,
+  "sem_status_file": "",
+  "segment_seconds": 30,
+  "context_seconds": 3,
+  "lookahead_segments": 2,
+  "asr_model": "./models/faster-whisper-small",
+  "translation_model": "./models/m2m100_418M",
+  "diarization_model": "./models/pyannote-community-1",
+  "separation_model_dir": "./models/htdemucs",
+  "speech_engine": "piper",
+  "piper_models": [
+    {
+      "path": "./models/piper/en_US-libritts_r-medium.onnx"
+    }
+  ],
+  "auto_dub": false,
+  "delivery_mode": "prepared",
+  "publish_dir": "",
+  "plex_publish_path": "",
+  "plex_publish_section": "",
+  "plex": {
+    "url": "",
+    "token": "",
+    "client_id": "",
+    "owner_id": "",
+    "poll_seconds": 2
+  },
+  "tv": {
+    "enabled": true,
+    "roots": [],
+    "local_only": true,
+    "max_height": 2160,
+    "video_encoder": "auto",
+    "nvenc_min_free_mib": 2048,
+    "encoder_threads": 2,
+    "buffer_segments": 2,
+    "upscale": false,
+    "hdr_mode": "auto",
+    "pc_process_all": true,
+    "sync_plex_progress": false,
+    "allow_plex_controls": false
+  },
+  "updates": {
+    "enabled": true,
+    "repository": "malov-dot/kevflix",
+    "branch": "main",
+    "path": "tv",
+    "interval_seconds": 3600,
+    "token_env": "MOVIEDUB_GITHUB_TOKEN"
+  }
+}
