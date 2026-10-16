@@ -4,6 +4,46 @@
   var button=document.getElementById('open-player'),edit=document.getElementById('edit-address'),busy=false,currentRequest=null,attempt=0,editing=false;
   var form=document.getElementById('connect'),instructions=document.getElementById('instructions'),change=document.getElementById('change-address');
   try{input.value=localStorage.getItem('kevflix-worker-address')||localStorage.getItem('sem-worker-address')||'';}catch(ignore){}
+  function refreshTizenBrewEntry(){
+    // TizenBrew's UI normally asks for its service's cached list. Request a fresh
+    // list on the same TV instead, preserving the original module identity.
+    var route=location.pathname.match(/^\/module\/([^/]+)\//),name='';
+    try{name=route?decodeURIComponent(route[1]):'';}catch(ignore){}
+    if(!route||!/^gh\/malov-dot\/kevflix$/i.test(name)||location.port!=='8081'||
+        ['localhost','127.0.0.1'].indexOf(location.hostname)<0||typeof WebSocket==='undefined')return Promise.resolve('');
+    return new Promise(function(resolve){
+      var socket=null,settled=false,timer=setTimeout(function(){done('');},6000);
+      function done(next){
+        if(settled)return;settled=true;clearTimeout(timer);
+        if(socket){socket.onopen=socket.onmessage=socket.onerror=socket.onclose=null;try{socket.close();}catch(ignore){}}
+        resolve(next||'');
+      }
+      try{
+        socket=new WebSocket('ws://'+location.host);
+        socket.onopen=function(){socket.send(JSON.stringify({type:4,payload:true}));};
+        socket.onerror=socket.onclose=function(){done('');};
+        socket.onmessage=function(event){
+          try{
+            var response=JSON.parse(event.data);
+            if(response.type!==4)return;
+            if(!Array.isArray(response.payload)){done('');return;}
+            var entry=response.payload.find(function(item){return item.fullName===name;});
+            if(!entry){done('');return;}
+            var current=document.querySelector('meta[name="kevflix-version"]'),version=current?current.content:'';
+            if(entry.version===version){done('');return;}
+            if(!/^\d+\.\d+\.\d+$/.test(entry.version)||!/^\d+\.\d+\.\d+$/.test(version)){done('');return;}
+            var oldParts=version.split('.').map(Number),newParts=entry.version.split('.').map(Number),newer=false;
+            for(var i=0;i<3;i++){if(newParts[i]!==oldParts[i]){newer=newParts[i]>oldParts[i];break;}}
+            var next=new URL(entry.appPath),prefix='/module/'+encodeURIComponent(name)+'/tv/';
+            if(!newer||next.origin!==location.origin||next.pathname.indexOf(prefix)!==0||
+                !/\/launchers\/\d+\.\d+\.\d+\/index\.html$/.test(next.pathname)){done('');return;}
+            done(next.href);
+          }catch(ignore){done('');}
+        };
+      }catch(ignore){done('');}
+    });
+  }
+  var menuRefresh=refreshTizenBrewEntry();
   function editAddress(text){
     attempt++;if(currentRequest){currentRequest.abort();currentRequest=null;}
     busy=false;button.disabled=false;form.hidden=false;instructions.hidden=false;change.hidden=true;
@@ -46,8 +86,12 @@
       if(xhr.status!==200||!result||result.product!=='KevFLIX'){fail('That address did not return a KevFLIX worker. Check the address and port.');return;}
       try{localStorage.setItem('kevflix-worker-address',origin);localStorage.setItem('sem-worker-address',origin);}catch(ignore){}
       form.hidden=true;instructions.hidden=true;change.hidden=true;message.textContent='Opening your home screen…';
-      var launcher=location.href.split('#')[0];
-      window.location.replace(origin+'/tv/#launcher='+encodeURIComponent(launcher));
+      menuRefresh.then(function(updatedLauncher){
+        if(number!==attempt)return;
+        if(updatedLauncher){window.location.replace(updatedLauncher);return;}
+        var launcher=location.href.split('#')[0];
+        window.location.replace(origin+'/tv/#launcher='+encodeURIComponent(launcher));
+      });
     };
     xhr.onerror=function(){fail('Cannot reach the PC worker. Start it, check the address, and allow its port on your private network.');};
     xhr.ontimeout=function(){fail('The PC did not respond. Check that the worker is running and the TV is on the same local network.');};

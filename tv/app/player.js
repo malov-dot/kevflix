@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  var VERSION='0.4.3', $=function(id){return document.getElementById(id);};
+  var VERSION='0.4.4', $=function(id){return document.getElementById(id);};
   var token=localStorage.getItem('sem-tv-token')||'', device=localStorage.getItem('sem-tv-device')||'';
   var folder=null,parent=null,offset=0,rows=[],session=null,loadedGeneration=0,wantedPlay=false;
   var operation=0,polling=false,loading=false,pollTimer=null,hideTimer=null,lastHeartbeat=0,reportedError='';
