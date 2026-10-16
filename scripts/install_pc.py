@@ -20,7 +20,7 @@ def main():
     os.chdir(ROOT)
     sys.path.insert(0, str(ROOT))
     config = ROOT / "relay-config.json"
-    if not config.exists():
+    if not config.exists() or config.stat().st_size == 0:
         settings = json.loads((ROOT / "config.example.json").read_text())
         for name in ("api_token", "nas_token", "stream_secret", "webhook_secret"):
             settings[name] = secrets.token_urlsafe(48)
@@ -32,7 +32,7 @@ def main():
                         start_with_windows=args.startup == "on")
         settings["media_roots"] = [str(Path.home() / "Videos")]
         settings["tv"]["roots"] = settings["media_roots"]
-        config.touch(exist_ok=False)
+        config.touch(exist_ok=True)
         # Apply the current user's SID, not their name, before writing secrets.
         sid = json.loads(subprocess.check_output(["powershell.exe", "-NoProfile", "-Command",
             "[System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value | ConvertTo-Json"],

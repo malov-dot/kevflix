@@ -72,6 +72,7 @@ class Setup : Form {
         string backup=Safe(backupName);Directory.CreateDirectory(backup);
         bool success=false, replacedEnvironment=false;
         try {
+            if(!existing)File.WriteAllText(marker,"KevFLIX\npartial\n");
             using(var payload=Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip"))
             using(var zip=new ZipArchive(payload,ZipArchiveMode.Read)) {
                 foreach(var entry in zip.Entries) {
@@ -83,7 +84,7 @@ class Setup : Form {
                     using(var input=entry.Open())using(var output=File.Create(dest)){input.CopyTo(output);}
                 }
             }
-            if(!existing) {
+            if(!existing || !File.Exists(Safe("relay-config.json")) || new FileInfo(Safe("relay-config.json")).Length==0) {
                 Run(Path.Combine(Root,"runtime/python/python.exe"),"\""+Path.Combine(Root,"scripts/install_pc.py")+"\" --startup "+(Startup?"on":"off"),true);
             }
             if(existing && Directory.Exists(Safe(".venv")) && oldRequirements!=File.ReadAllText(Safe("requirements.txt"))) {
@@ -97,12 +98,14 @@ class Setup : Form {
                 key.SetValue("DisplayName",Product);key.SetValue("DisplayVersion",Version);key.SetValue("Publisher",Product);key.SetValue("InstallLocation",Root);
                 key.SetValue("UninstallString","\""+Path.Combine(Root,"runtime/python/pythonw.exe")+"\" \""+Path.Combine(Root,"scripts/uninstall_pc.py")+"\"");key.SetValue("NoModify",1);key.SetValue("NoRepair",1);
             }
+            string pending=Safe("state/desktop-updates/pending.json");
+            if(File.Exists(pending))File.Delete(pending);
             success=true;
         } catch {
             if(replacedEnvironment){if(Directory.Exists(Safe(".venv")))Directory.Move(Safe(".venv"),Safe(backupName+"/failed-venv"));Directory.Move(Safe(backupName+"/previous-venv"),Safe(".venv"));}
             foreach(var name in changed)File.Copy(Path.Combine(backup,name),Safe(name),true);
             foreach(var name in created)if(File.Exists(Safe(name)))File.Delete(Safe(name));
-            if(previousMarker!=null)File.WriteAllText(marker,previousMarker);else if(File.Exists(marker))File.Delete(marker);
+            if(previousMarker!=null)File.WriteAllText(marker,previousMarker);else File.WriteAllText(marker,"KevFLIX\npartial\n");
             if(existing){Directory.CreateDirectory(Safe("state"));File.WriteAllText(Safe("state/desktop-update-result.json"),"{\"version\":\""+Version+"\",\"revision\":\""+BuildInfo.Revision+"\",\"ok\":false}");}
             throw;
         } finally {
