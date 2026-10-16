@@ -97,10 +97,10 @@ class PlexBrowse:
         container = kind in ("show", "season", "artist", "album", "photoalbum", "collection")
         return {"id": str(item["ratingKey"]), "title": item.get("title", ""),
                 "year": item.get("year"), "summary": item.get("summary", ""), "type": kind,
-                "resume": float(item.get("viewOffset", 0)) / 1000,
-                "duration": float(item.get("duration", 0)) / 1000,
-                "watched": int(item.get("viewCount", 0)) > 0,
-                "unwatched_count": max(0, int(item.get("leafCount", 0)) - int(item.get("viewedLeafCount", 0))),
+                "resume": float(item.get("viewOffset") or 0) / 1000,
+                "duration": float(item.get("duration") or 0) / 1000,
+                "watched": int(item.get("viewCount") or 0) > 0,
+                "unwatched_count": max(0, int(item.get("leafCount") or 0) - int(item.get("viewedLeafCount") or 0)),
                 "folder": False, "container": container, "playable": kind in ("movie", "episode", "clip"),
                 "plex": True, "poster": bool(item.get("thumb"))}
 

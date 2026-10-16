@@ -19,12 +19,14 @@
       var url=new URL(address);
       if(!/^https?:$/.test(url.protocol)||url.username||url.password)throw Error('Enter the PC worker HTTP or HTTPS address.');
       var h=url.hostname;
-      if(!(/^(10\.|192\.168\.|127\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(h)||h==='localhost'||/\.local$/.test(h)))
+      var parts=h.split('.'),ipv4=parts.length===4&&parts.every(function(n){return /^\d{1,3}$/.test(n)&&Number(n)<=255;});
+      var privateIP=ipv4&&(Number(parts[0])===10||Number(parts[0])===127||Number(parts[0])===192&&Number(parts[1])===168||Number(parts[0])===172&&Number(parts[1])>=16&&Number(parts[1])<=31);
+      if(!(privateIP||h==='localhost'||/\.local$/.test(h)))
         throw Error('Use your PC’s private LAN address and worker port.');
       if(!url.port)url.port='8787';
       origin=url.origin;
       input.value=origin;
-    }catch(error){message.textContent=error.message;return;}
+    }catch(error){editAddress(error.message);return;}
     busy=true;button.disabled=true;message.textContent='Opening KevFLIX…';change.hidden=false;
     var number=++attempt,xhr=new XMLHttpRequest();currentRequest=xhr;
     xhr.open('GET',origin+'/tv-api/version',true);xhr.timeout=8000;
