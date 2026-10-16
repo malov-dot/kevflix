@@ -6,7 +6,7 @@ The source and packages are development artifacts. No runtime tests, model infer
 
 ## Windows installer
 
-Download KevFLIX-Setup-0.4.1.exe from Releases. It installs under %LOCALAPPDATA%/Programs/KevFLIX with a private Python runtime. Startup with Windows is checked by default. The desktop shortcut opens the PC control panel already authenticated, with a large six-digit pairing code and a New pairing code button.
+Download KevFLIX-Setup-0.4.2.exe from Releases. It installs under %LOCALAPPDATA%/Programs/KevFLIX with a private Python runtime. Startup with Windows is checked by default. The desktop shortcut opens the PC control panel already authenticated, with a large six-digit pairing code and a New pairing code button.
 
 Connect Plex, select a local server, and add movie folders. Show Plex library paths gives the NAS paths to map to their corresponding PC-accessible folders. Verify the worker URL is the PC address reachable by the TV, particularly if there are multiple network adapters. No router forwarding is needed.
 

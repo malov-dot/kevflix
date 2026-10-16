@@ -118,6 +118,13 @@ class PlexBrowse:
                            for m in array(item.get("Media"))]
         return result
 
+    def continuing(self, section):
+        if not str(section).isdigit():
+            raise ValueError("Choose a Plex library")
+        result = self.plex.call(f"/hubs/sections/{section}/continueWatching/items",
+                               {"X-Plex-Container-Start": 0, "X-Plex-Container-Size": 10})
+        return [self.item(item) for item in self.plex.entries(result, "Metadata") if item.get("ratingKey")]
+
     def watched(self, key, enabled):
         if not str(key).isdigit():
             raise ValueError("Invalid Plex item")

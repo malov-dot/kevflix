@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  var VERSION='0.4.1', $=function(id){return document.getElementById(id);};
+  var VERSION='0.4.2', $=function(id){return document.getElementById(id);};
   var token=localStorage.getItem('sem-tv-token')||'', device=localStorage.getItem('sem-tv-device')||'';
   var folder=null,parent=null,offset=0,rows=[],session=null,loadedGeneration=0,wantedPlay=false;
   var operation=0,polling=false,loading=false,pollTimer=null,hideTimer=null,lastHeartbeat=0,reportedError='';
@@ -10,6 +10,15 @@
   var libraries=[],localLibraries=[],browseSerial=0,plexTrail=[],alphabetItems=[],browsePrefs={},sourceChosen=false;
   var filters={genre:'',year:'',collection:'',sort:'titleSort:asc'},filterLabels={},availableFilters=[],availableSorts=[];
   var moviePrefs=null,returnFromAlphabet=null;
+  var launcherURL='';
+  try{
+    var suppliedLauncher=new URLSearchParams(location.hash.slice(1)).get('launcher');
+    launcherURL=suppliedLauncher||localStorage.getItem('kevflix-launcher-url')||'';
+    var launcherLocation=new URL(launcherURL);
+    if(!/^(https?:|file:)$/.test(launcherLocation.protocol)||launcherLocation.username||launcherLocation.password||!/\/bootstrap\/index\.html$/.test(launcherLocation.pathname))launcherURL='';
+    if(launcherURL){localStorage.setItem('kevflix-launcher-url',launcherURL);$('change-worker').hidden=false;$('change-worker').onclick=function(){window.location.assign(launcherURL.split('#')[0]+'#configure');};}
+    if(suppliedLauncher)history.replaceState(null,'',location.pathname+location.search);
+  }catch(ignore){}
   try{browsePrefs=JSON.parse(localStorage.getItem('kevflix-browse')||'{}');sourceChosen=!!browsePrefs.source;sourceMode=browsePrefs.source==='folders'?'folders':'plex';}catch(ignore){}
   var defaults={quality:2160,upscale:false,hdr_mode:'auto',dub:false,watch:false,commentary:'balanced',encoder:'default',threads:2,subtitles:'off',progress_sync:true},resumeMap={};
   try{Object.assign(defaults,JSON.parse(localStorage.getItem('kevflix-defaults')||'{}'));resumeMap=JSON.parse(localStorage.getItem('kevflix-resume')||'{}');}catch(ignore){}
@@ -128,7 +137,7 @@
     if(page==='movies')$('heading').textContent=label;
     $('browse-summary').textContent=result.total===null||result.total===undefined?rows.length+' titles':result.total+' titles'+(jump?' · jumped to selected letter':'');
     availableFilters=result.filters||[];availableSorts=result.sorts||[];renderBrowseControls();renderLibraryNav();saveBrowse();
-    if(!append)void loadAlphabet(number);
+    if(!append){void loadAlphabet(number);if(page==='home'&&sourceMode==='plex')void loadContinuing(number);}
     void loadPosters();
     var cards=$('library').querySelectorAll('button'),first=cards[oldCount]||cards[0];
     if($('choice-panel').hidden&&page!=='settings'&&first)first.focus();
@@ -140,6 +149,12 @@
     $('plex-section').replaceChildren.apply($('plex-section'),items.map(function(item){var option=document.createElement('option');option.value=item.id;option.textContent=item.title;return option;}));
     if(items.some(function(item){return item.id===selected;}))$('plex-section').value=selected;
     if(!items.length)throw Error('No Plex libraries are available for this account. Check the selected server in KevFLIX PC.');
+  }
+  async function loadContinuing(number){
+    try{var items=await api('plex/continue?section='+encodeURIComponent($('plex-section').value));
+      if(number!==browseSerial||page!=='home')return;
+      $('continue-section').hidden=!items.length;$('continue-row').replaceChildren.apply($('continue-row'),items.slice(0,5).map(button));void loadPosters();
+    }catch(ignore){}
   }
   function renderLibraryNav(){
     var items=sourceMode==='plex'?libraries:localLibraries;

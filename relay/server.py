@@ -236,6 +236,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(self.app.tv.plex_sections())
                 if path == "/tv-api/plex/metadata":
                     return self.json_response(self.app.tv.catalog.metadata(query["key"]))
+                if path == "/tv-api/plex/continue":
+                    return self.json_response(self.app.tv.catalog.continuing(query["section"]))
                 if path == "/tv-api/plex/library":
                     return self.json_response(self.app.tv.plex_library(**{k: v for k, v in query.items()
                         if k in ("section", "query", "offset", "genre", "year", "collection", "sort", "parent")}))
