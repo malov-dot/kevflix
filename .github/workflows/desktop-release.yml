@@ -42,6 +42,7 @@ jobs:
         shell: pwsh
         run: |
           $paths = @('package.json','tv/bootstrap/index.html','tv/bootstrap/bootstrap.js','tv/bootstrap/style.css')
+          $paths += @(Get-ChildItem -LiteralPath 'tv/launchers' -Filter 'index.html' -Recurse | ForEach-Object { 'tv/launchers/' + $_.Directory.Name + '/index.html' })
           foreach ($path in $paths) {
             $purge = Invoke-RestMethod -Uri "https://purge.jsdelivr.net/gh/malov-dot/kevflix/$path"
             if ($purge.status -notin @('finished','pending')) { throw "Cache refresh failed for $path" }

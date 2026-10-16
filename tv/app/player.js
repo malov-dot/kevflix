@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  var VERSION='0.4.5', $=function(id){return document.getElementById(id);};
+  var VERSION='0.4.6', $=function(id){return document.getElementById(id);};
   var token=localStorage.getItem('sem-tv-token')||'', device=localStorage.getItem('sem-tv-device')||'';
   var folder=null,parent=null,offset=0,rows=[],session=null,loadedGeneration=0,wantedPlay=false;
   var operation=0,polling=false,loading=false,pollTimer=null,hideTimer=null,lastHeartbeat=0,reportedError='';
@@ -16,6 +16,7 @@
     launcherURL=suppliedLauncher||localStorage.getItem('kevflix-launcher-url')||'';
     var launcherLocation=new URL(launcherURL);
     if(!/^(https?:|file:)$/.test(launcherLocation.protocol)||launcherLocation.username||launcherLocation.password||!/(?:\/bootstrap|\/launchers\/\d+\.\d+\.\d+)\/index\.html$/.test(launcherLocation.pathname))launcherURL='';
+    if(launcherURL){launcherLocation.pathname=launcherLocation.pathname.replace(/\/launchers\/\d+\.\d+\.\d+\/index\.html$/,'/bootstrap/index.html');launcherLocation.hash='';launcherURL=launcherLocation.href;}
     if(launcherURL){localStorage.setItem('kevflix-launcher-url',launcherURL);$('change-worker').hidden=false;$('change-worker').onclick=function(){window.location.assign(launcherURL.split('#')[0]+'#configure');};}
     if(suppliedLauncher)history.replaceState(null,'',location.pathname+location.search);
   }catch(ignore){}
