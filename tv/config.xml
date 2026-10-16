@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <widget xmlns="http://www.w3.org/ns/widgets" xmlns:tizen="http://tizen.org/ns/widgets"
         id="https://github.com/malov-dot/kevflix"
-        version="0.4.4" viewmodes="maximized">
+        version="0.4.5" viewmodes="maximized">
   <tizen:application id="kevflix001.KevFLIX" package="kevflix001" required_version="6.5"/>
   <name>KevFLIX</name>
   <content src="bootstrap/index.html"/>

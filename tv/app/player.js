@@ -1,6 +1,6 @@
 (function () {
   'use strict';
-  var VERSION='0.4.4', $=function(id){return document.getElementById(id);};
+  var VERSION='0.4.5', $=function(id){return document.getElementById(id);};
   var token=localStorage.getItem('sem-tv-token')||'', device=localStorage.getItem('sem-tv-device')||'';
   var folder=null,parent=null,offset=0,rows=[],session=null,loadedGeneration=0,wantedPlay=false;
   var operation=0,polling=false,loading=false,pollTimer=null,hideTimer=null,lastHeartbeat=0,reportedError='';
@@ -88,9 +88,10 @@
     else{var symbol=document.createElement('span');symbol.className='poster-symbol';symbol.textContent=item.folder?'▤':'▷';poster.appendChild(symbol);}
     b.appendChild(poster);b.appendChild(title);
     if(!item.folder){
-      var badge=document.createElement('span');badge.className='watch-badge'+(item.watched?' watched':'');
-      badge.textContent=item.watched?'✓':item.container&&item.unwatched_count?item.unwatched_count:'●';
-      badge.setAttribute('aria-label',item.watched?'Watched':'Unwatched');poster.appendChild(badge);
+      if(item.watched){
+        var badge=document.createElement('span');badge.className='watch-badge watched';
+        badge.textContent='✓';badge.setAttribute('aria-label','Watched');poster.appendChild(badge);
+      }
       if(item.resume>0&&item.duration>0){var progress=document.createElement('span');progress.className='resume-bar';progress.style.width=Math.min(100,item.resume/item.duration*100)+'%';poster.appendChild(progress);}
     }
     b.setAttribute('aria-label',item.title+(item.watched?' · watched':item.resume>0?' · in progress':''));
