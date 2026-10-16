@@ -1,13 +1,20 @@
 (function () {
   'use strict';
   var input=document.getElementById('address'),message=document.getElementById('message');
-  var button=document.getElementById('open-player'),busy=false,currentRequest=null,attempt=0;
+  var button=document.getElementById('open-player'),edit=document.getElementById('edit-address'),busy=false,currentRequest=null,attempt=0,editing=false;
   var form=document.getElementById('connect'),instructions=document.getElementById('instructions'),change=document.getElementById('change-address');
   try{input.value=localStorage.getItem('kevflix-worker-address')||localStorage.getItem('sem-worker-address')||'';}catch(ignore){}
   function editAddress(text){
     attempt++;if(currentRequest){currentRequest.abort();currentRequest=null;}
     busy=false;button.disabled=false;form.hidden=false;instructions.hidden=false;change.hidden=true;
-    message.textContent=text||'';input.focus();
+    editing=false;input.readOnly=true;input.blur();message.textContent=text||'';
+    (input.value?button:edit).focus();
+  }
+  function startEditing(){
+    editing=true;input.readOnly=false;input.focus();input.click();
+  }
+  function finishEditing(){
+    editing=false;input.readOnly=true;input.blur();button.focus();
   }
   function connect(event){
     if(event)event.preventDefault();
@@ -27,7 +34,8 @@
       origin=url.origin;
       input.value=origin;
     }catch(error){editAddress(error.message);return;}
-    busy=true;button.disabled=true;message.textContent='Opening KevFLIX…';change.hidden=false;
+    finishEditing();busy=true;button.disabled=true;form.hidden=true;instructions.hidden=true;
+    message.textContent='Opening KevFLIX…';change.hidden=false;change.focus();
     var number=++attempt,xhr=new XMLHttpRequest();currentRequest=xhr;
     xhr.open('GET',origin+'/tv-api/version',true);xhr.timeout=8000;
     function fail(text){if(number!==attempt)return;currentRequest=null;editAddress(text);}
@@ -47,15 +55,37 @@
   }
   document.getElementById('connect').onsubmit=connect;
   button.onclick=connect;
+  edit.onclick=startEditing;
   change.onclick=function(){editAddress();};
+  input.addEventListener('blur',function(){if(editing)setTimeout(finishEditing,0);});
+  function consume(event){event.preventDefault();event.stopPropagation();}
   window.addEventListener('keydown',function(event){
-    if(event.keyCode===13&&document.activeElement===change){event.preventDefault();editAddress();return;}
-    if(event.keyCode===13&&document.activeElement===button){connect(event);return;}
-    if(busy&&(event.keyCode===10009||event.keyCode===27)){event.preventDefault();editAddress();return;}
-    if(busy&&[37,38,39,40].indexOf(event.keyCode)>=0){event.preventDefault();change.focus();return;}
-    if(event.keyCode===40){event.preventDefault();button.focus();}
-    if(event.keyCode===38){event.preventDefault();input.focus();}
-    if(event.keyCode===10009){event.preventDefault();try{tizen.application.getCurrentApplication().exit();}catch(ignore){}}
-  });
+    var key=event.keyCode||event.which||({ArrowLeft:37,ArrowUp:38,ArrowRight:39,ArrowDown:40,Enter:13,Escape:27,Return:10009}[event.key]);
+    if(event.isComposing)return;
+    if(editing){
+      // Only an explicit Edit opens the native keyboard; let it own its arrow keys.
+      if([13,65376,65385,10009,27].indexOf(key)>=0){consume(event);finishEditing();}
+      return;
+    }
+    if([37,38,39,40].indexOf(key)>=0){
+      consume(event);
+      if(busy){change.focus();return;}
+      var buttons=[button,edit].filter(function(b){return !b.disabled&&b.getClientRects().length;});
+      var index=buttons.indexOf(document.activeElement),step=(key===37||key===38)?-1:1;
+      if(buttons.length)buttons[index<0?0:(index+step+buttons.length)%buttons.length].focus();
+      return;
+    }
+    if(key===13){
+      consume(event);if(event.repeat)return;
+      var focused=document.activeElement;
+      if(focused===button||focused===edit||focused===change){if(!focused.disabled)focused.click();}
+      else (busy?change:input.value?button:edit).focus();
+      return;
+    }
+    if(key===10009||key===27){
+      consume(event);if(busy){editAddress();return;}
+      try{tizen.application.getCurrentApplication().exit();}catch(ignore){history.back();}
+    }
+  },true);
   if(input.value&&location.hash!=='#configure')connect();else editAddress();
 }());

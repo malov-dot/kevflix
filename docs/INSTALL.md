@@ -6,7 +6,7 @@ The source and packages are development artifacts. No runtime tests, model infer
 
 ## Windows installer
 
-Download KevFLIX-Setup-0.4.2.exe from Releases. It installs under %LOCALAPPDATA%/Programs/KevFLIX with a private Python runtime. Startup with Windows is checked by default. The desktop shortcut opens the PC control panel already authenticated, with a large six-digit pairing code and a New pairing code button.
+Download KevFLIX-Setup-0.4.3.exe from Releases. It installs under %LOCALAPPDATA%/Programs/KevFLIX with a private Python runtime. Startup with Windows is checked by default. The desktop shortcut opens the PC control panel already authenticated, with a large six-digit pairing code and a New pairing code button.
 
 Connect Plex, select a local server, and add movie folders. Show Plex library paths gives the NAS paths to map to their corresponding PC-accessible folders. Verify the worker URL is the PC address reachable by the TV, particularly if there are multiple network adapters. No router forwarding is needed.
 
@@ -48,12 +48,12 @@ When an activation/testing window has been authorized, start Start-KevFLIX.cmd. 
 
 ## TV installation
 
-Version 0.4.2 remembers a successful PC address and opens directly into KevFLIX on future launches. The address form appears on first use, when the PC is unreachable, or from Settings > Change PC address. A paired TV keeps its pairing and starts on Home. Update the TizenBrew module or standalone WGT to receive bootstrap/launcher changes; worker-only interface updates do not replace the TV launcher.
+Version 0.4.3 remembers a successful PC address and opens directly into KevFLIX on future launches. The address form appears on first use, when the PC is unreachable, or from Settings > Change PC address. A paired TV keeps its pairing and starts on Home. Update the TizenBrew module or standalone WGT to receive bootstrap/launcher changes; worker-only interface updates do not replace the TV launcher.
 
 Target API baseline: Tizen 6.5 or newer. TizenBrew integration was written against its documented application-module format and the v2.0.5 release; installation has not been exercised.
 
 - TizenBrew GitHub module: add malov-dot/kevflix. This launch route fetches public module assets over the internet.
-- Offline-capable launcher: install dist/KevFLIX-0.3.0-unsigned.wgt after signing/resigning through the supported TV installation workflow. TizenBrew Installer supports local WGT installation workflows; certificate requirements depend on the TV and installation method.
+- Offline-capable launcher: install the unsigned WGT from the latest GitHub release after signing/resigning through the supported TV installation workflow. TizenBrew Installer supports local WGT installation workflows; certificate requirements depend on the TV and installation method.
 
 The standalone launcher subsequently loads its player interface from the local PC. It does not fetch media, translation or speech generation from a cloud service. It requires the PC worker to be running.
 

@@ -12,6 +12,10 @@ Source checkouts are not automatically replaced. Setup-only mode disables update
 
 The included GitHub Actions workflow packages Windows and TV downloads on main-branch source pushes without executing the installer, application or tests. It publishes a development release tied to the commit. Increase the visible version for user-visible changes. Release assets contain generic source/runtime only. No private account, network, media, config or model files belong in a release.
 
+TizenBrew's unversioned GitHub module URL resolves through jsDelivr and can retain an older release even after main changes. Release publication now invalidates the module metadata and legacy launcher cache paths. The module points to a versioned launcher document containing its own script and style, so old cached JavaScript cannot be paired with newer HTML. Generate that document with scripts/build_launcher.py after increasing tv/package.json and the visible product version. Previously published launcher paths are immutable.
+
+If TizenBrew still displays an old module version, add the same GitHub module name again in its module manager. Its module loader deduplicates the existing entry and reloads metadata. This leaves the saved PC address and PC-side pairing intact. Bootstrap changes require launching the refreshed module; a worker-only UI update cannot replace a TV page already open in memory.
+
 For a public repository, no GitHub token is needed. Private repositories require a read-only token in the configured PC environment variable; it is never sent to the TV. The normal TizenBrew GitHub module loader cannot fetch a private repository.
 
 Push UI changes to the tracked branch and update the visible version. Compatible player UI changes are picked up at a later idle check/launch. A broken UI update can still break KevFLIX itself; checksum verification proves file identity, not correctness.

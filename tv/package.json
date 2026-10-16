@@ -1,10 +1,10 @@
 {
   "name": "kevflix",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "KevFLIX: local movies with PC-assisted English dubbing and upscaling. Unvalidated development build.",
   "packageType": "app",
   "appName": "KevFLIX",
-  "appPath": "bootstrap/index.html",
+  "appPath": "launchers/0.4.3/index.html",
   "keys": ["MediaPlay", "MediaPause", "MediaPlayPause", "MediaStop", "MediaRewind", "MediaFastForward", "Info", "ColorF0Red"],
   "license": "UNLICENSED",
   "private": true,
