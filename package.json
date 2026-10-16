@@ -1,6 +1,6 @@
 {
   "name": "kevflix",
-  "version": "0.3.2",
+  "version": "0.4.1",
   "description": "KevFLIX: local movies with PC-assisted English dubbing and upscaling. Unvalidated development build.",
   "packageType": "app",
   "appName": "KevFLIX",
@@ -18,7 +18,8 @@
   "license": "UNLICENSED",
   "private": true,
   "semPlayer": {
-    "apiVersion": 1,
+    "apiVersion": 2,
+    "minimumWorker": "0.4.1",
     "minimumTizen": "6.5",
     "targetTizenBrew": "2.0.5",
     "validation": "not-tested",

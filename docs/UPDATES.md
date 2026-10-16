@@ -6,7 +6,11 @@ The updater resolves an immutable commit, downloads the three allowlisted TV-int
 
 An update becomes active only when there are no TV playback sessions. Each player page uses a version-specific asset URL, so a viewing session keeps one set of files. An offline or failed check retains the current interface. A rollback endpoint on the authenticated PC API restores the previous interface and blocks that rejected revision from immediate reinstallation.
 
-The existing updater covers **the TV interface**. Worker engine/dependency changes and the standalone launcher require a separate update/install step. This avoids silently replacing running inference code or device signatures. No automatic updates are currently activated on a TV by source publication alone.
+The separate desktop updater checks GitHub releases hourly for an installer described by desktop-release.json. It verifies size and SHA-256, then installs on the next KevFLIX start. It never interrupts active playback or stops Sem/Plex. Installation requires the product ownership marker and an idle worker lock. Private configuration/state/models are retained, replaced source is backed up, and failed installation restores replaced files. Changed Python dependencies are installed into a new virtual environment while retaining the old one for rollback. Models and their terms remain an explicit setup step. Backups use disk space until removed by the owner.
+
+Source checkouts are not automatically replaced. Setup-only mode disables updater threads and pending desktop installation. Disable automatic updates in PC settings to stop both downloads and pending installation. The unsigned installer has not been exercised; a successful build or checksum is not runtime acceptance.
+
+The included GitHub Actions workflow packages Windows and TV downloads on main-branch source pushes without executing the installer, application or tests. It publishes a development release tied to the commit. Increase the visible version for user-visible changes. Release assets contain generic source/runtime only. No private account, network, media, config or model files belong in a release.
 
 For a public repository, no GitHub token is needed. Private repositories require a read-only token in the configured PC environment variable; it is never sent to the TV. The normal TizenBrew GitHub module loader cannot fetch a private repository.
 

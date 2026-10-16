@@ -1,11 +1,15 @@
 [CmdletBinding()]
-param([string]$PythonLauncher = 'py', [switch]$DownloadModels, [switch]$AcceptModelTerms)
+param([string]$PythonLauncher = 'py', [string]$PythonExecutable = '', [switch]$DownloadModels, [switch]$AcceptModelTerms)
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $env:PYTHONUTF8 = '1'
 $venvPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
 if (-not (Test-Path -LiteralPath $venvPython)) {
-    & $PythonLauncher -3.11 -m venv (Join-Path $PSScriptRoot '.venv')
+    if (-not $PythonExecutable -and (Test-Path -LiteralPath (Join-Path $PSScriptRoot 'runtime\python\python.exe'))) {
+        $PythonExecutable = Join-Path $PSScriptRoot 'runtime\python\python.exe'
+    }
+    if ($PythonExecutable) { & $PythonExecutable -m venv (Join-Path $PSScriptRoot '.venv') }
+    else { & $PythonLauncher -3.11 -m venv (Join-Path $PSScriptRoot '.venv') }
     if ($LASTEXITCODE -ne 0) { throw 'Python 3.11 x64 is required; no global Python changes were made.' }
 }
 $env:PIP_REQUIRE_VIRTUALENV = 'true'

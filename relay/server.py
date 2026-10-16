@@ -8,6 +8,8 @@ import mimetypes
 import os
 import re
 import signal
+import secrets
+import hashlib
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -24,6 +26,8 @@ from .streaming import VirtualAudio, byte_range, valid_ticket
 from .watch import WatchContext
 from .tv import TVService
 from .updates import PlayerUpdates
+from .settings import PCSettings
+from .desktop_updates import DesktopUpdates
 
 ROOT = Path(__file__).resolve().parent.parent
 IDENT = re.compile(r"^[a-f0-9]{32}$")
@@ -43,6 +47,9 @@ class Application:
         self.publications = set()
         self.publication_threads = set()
         self.lock = threading.Lock()
+        self.pc_launch_codes = {}
+        self.settings = PCSettings(self)
+        self.desktop_updates = DesktopUpdates(config)
 
     def start(self):
         if self.config["setup_only"]:
@@ -51,10 +58,12 @@ class Application:
         self.plex.start()
         self.tv.start()
         self.updates.start()
+        self.desktop_updates.start()
 
     def close(self):
         self.tv.close()
         self.updates.close()
+        self.desktop_updates.close()
         self.plex.close()
         self.jobs.close()
         for thread in list(self.publication_threads):
@@ -68,6 +77,22 @@ class Application:
         result["speakers"] = {key: {k: v for k, v in value.items() if k != "embedding"}
                               for key, value in self.store.speakers(job["id"]).items()}
         return result
+
+    def create_pc_launch(self):
+        value = secrets.token_urlsafe(32)
+        digest = hashlib.sha256(value.encode()).hexdigest()
+        with self.lock:
+            self.pc_launch_codes = {k: v for k, v in self.pc_launch_codes.items() if v > time.time()}
+            self.pc_launch_codes[digest] = time.time() + 60
+        return {"url": self.config["public_url"].rstrip("/") + "/#launch=" + value}
+
+    def redeem_pc_launch(self, value):
+        digest = hashlib.sha256(str(value).encode()).hexdigest()
+        with self.lock:
+            expires = self.pc_launch_codes.pop(digest, 0)
+        if expires < time.time():
+            raise ValueError("This desktop login link expired. Open the KevFLIX PC shortcut again.")
+        return {"api_token": self.config["api_token"], "setup_only": self.config["setup_only"]}
 
     def publish(self, job_id):
         with self.lock:
@@ -197,7 +222,7 @@ class Handler(BaseHTTPRequestHandler):
             if ui_asset:
                 return self.file(self.app.updates.file(ui_asset[1], ui_asset[2]), tv_asset=True)
             if path == "/tv-api/version":
-                return self.json_response({"version": __version__, "validation": "untested",
+                return self.json_response({"product": "KevFLIX", "version": __version__, "validation": "untested",
                                            "player_release": self.app.updates.active,
                                            "setup_only": self.app.config["setup_only"]})
             if path.startswith("/tv-api/"):
@@ -209,8 +234,16 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(self.app.tv.status(query["id"], device))
                 if path == "/tv-api/plex/sections":
                     return self.json_response(self.app.tv.plex_sections())
+                if path == "/tv-api/plex/metadata":
+                    return self.json_response(self.app.tv.catalog.metadata(query["key"]))
                 if path == "/tv-api/plex/library":
-                    return self.json_response(self.app.tv.plex_library(query["section"], query.get("query", ""), query.get("offset", 0)))
+                    return self.json_response(self.app.tv.plex_library(**{k: v for k, v in query.items()
+                        if k in ("section", "query", "offset", "genre", "year", "collection", "sort", "parent")}))
+                if path == "/tv-api/plex/options":
+                    return self.json_response(self.app.tv.catalog.options(query["section"], query["field"]))
+                if path == "/tv-api/plex/alphabet":
+                    return self.json_response(self.app.tv.catalog.alphabet(**{k: v for k, v in query.items()
+                        if k in ("section", "query", "genre", "year", "collection")}))
                 if path == "/tv-api/plex/poster":
                     content, kind = self.app.tv.plex_poster(query["key"])
                     return self.bytes_response(content, kind)
@@ -255,8 +288,18 @@ class Handler(BaseHTTPRequestHandler):
                     "watch_enabled": self.app.plex.watch_enabled, "validation": "Unvalidated build; owner deferred testing"})
             if path == "/api/tv/devices":
                 return self.json_response(self.app.tv.devices())
+            if path == "/api/settings":
+                return self.json_response(self.app.settings.view())
+            if path == "/api/settings/plex/servers":
+                return self.json_response(self.app.settings.resources())
+            if path == "/api/settings/plex/folders":
+                return self.json_response(self.app.settings.plex_folders())
+            if path == "/api/settings/plex/link-status":
+                return self.json_response(self.app.settings.link_status(query["id"]))
             if path == "/api/player-updates":
                 return self.json_response(self.app.updates.status())
+            if path == "/api/desktop-updates":
+                return self.json_response(self.app.desktop_updates.status())
             if path == "/api/events":
                 return self.json_response(self.app.store.events(int(query.get("after", 0))))
             if path == "/api/plex/sections":
@@ -300,10 +343,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         path = urlparse(self.path).path
         try:
-            if self.app.config["setup_only"] and path not in (
-                    "/tv-api/pair", "/api/tv/pair-code", "/api/tv/revoke"):
+            if self.app.config["setup_only"] and not path.startswith("/api/settings") and path not in (
+                    "/tv-api/pair", "/api/tv/pair-code", "/api/tv/revoke",
+                    "/api/pc-launch", "/pc-api/redeem"):
                 self.close_connection = True
                 return self.json_response({"error": "Setup-only mode: only TV pairing is enabled; playback and model processing are disabled"}, 423)
+            if path == "/pc-api/redeem":
+                data = self.body()
+                return self.json_response(self.app.redeem_pc_launch(data.get("code", "")))
             if path == "/tv-api/pair":
                 if not self.app.config["tv"]["enabled"]:
                     raise ValueError("TV player is disabled")
@@ -312,6 +359,8 @@ class Handler(BaseHTTPRequestHandler):
                     data.get("name", "Samsung TV"), self.client_address[0]))
             if path.startswith("/tv-api/"):
                 device, data = self.tv_device(), self.body()
+                if path == "/tv-api/plex/watched":
+                    return self.json_response(self.app.tv.catalog.watched(data["key"], data.get("enabled", False)))
                 if path == "/tv-api/open":
                     if data.get("plex_key"):
                         return self.json_response(self.app.tv.open_plex(device, data["plex_key"], data.get("resume", True)))
@@ -320,7 +369,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(self.app.tv.control(data["id"], device, data["action"],
                         data.get("position"), data.get("enabled"), data.get("audio_index"),
                         data.get("quality"), data.get("upscale"), data.get("hdr_mode"),
-                        data.get("subtitles"), data.get("watch_mode")))
+                        data.get("subtitles"), data.get("watch_mode"), data.get("encoder"), data.get("encoder_threads")))
                 if path == "/tv-api/heartbeat":
                     return self.json_response(self.app.tv.heartbeat(data["id"], device, data["position"],
                         data["state"], data["generation"]))
@@ -341,6 +390,25 @@ class Handler(BaseHTTPRequestHandler):
             if not self.authorized():
                 return self.json_response({"error": "Authentication required"}, 401)
             data = self.body()
+            if path == "/api/settings":
+                return self.json_response(self.app.settings.save(data))
+            if path == "/api/settings/install":
+                return self.json_response(self.app.settings.install_tools(str(data.get("component", "")), data.get("accept_terms", False)))
+            if path == "/api/settings/stop":
+                self.app.settings.idle_required()
+                if self.app.jobs.active_job or self.app.publication_threads or (self.app.settings.setup_process and self.app.settings.setup_process.poll() is None):
+                    raise ValueError("Wait for current KevFLIX work to finish before closing it")
+                self.json_response({"stopped": True})
+                threading.Thread(target=self.server.shutdown, daemon=True).start()
+                return
+            if path == "/api/settings/plex/link":
+                return self.json_response(self.app.settings.link_start())
+            if path == "/api/settings/plex/select":
+                return self.json_response(self.app.settings.select_server(str(data["id"])))
+            if path == "/api/settings/plex/disconnect":
+                return self.json_response(self.app.settings.disconnect())
+            if path == "/api/pc-launch":
+                return self.json_response(self.app.create_pc_launch())
             if path == "/api/tv/pair-code":
                 return self.json_response(self.app.tv.pair_code())
             if path == "/api/tv/revoke":
@@ -501,8 +569,23 @@ def main():
                         help="Serve the interface and pairing without starting media, model or update workers")
     args = parser.parse_args()
     config = Config(args.config)
+    config.state.mkdir(parents=True, exist_ok=True)
+    worker_lock = (config.state / "worker.lock").open("a+b")
+    if os.name == "nt":
+        import msvcrt
+        worker_lock.seek(0)
+        if not worker_lock.read(1):
+            worker_lock.write(b"0")
+            worker_lock.flush()
+        worker_lock.seek(0)
+        try:
+            msvcrt.locking(worker_lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            worker_lock.close()
+            raise SystemExit("KevFLIX is already running or its installer is active")
     if args.setup_only:
         config.data["setup_only"] = True
+        config.data["setup_locked"] = True
     application = Application(config)
     server = ThreadingHTTPServer((config["bind"], int(config["port"])), Handler)
     server.daemon_threads = True
@@ -520,6 +603,7 @@ def main():
     finally:
         application.close()
         server.server_close()
+        worker_lock.close()
 
 
 if __name__ == "__main__":

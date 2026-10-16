@@ -10,7 +10,6 @@ __pycache__/
 *.zip
 setup-records/
 tools/
-
 .env
 .env.*
 *.sqlite3
@@ -21,3 +20,12 @@ tools/
 *.mp3
 *.pem
 *.key
+runtime/
+setup-backups/
+kevflix-install.txt
+desktop-build.json
+
+runtime/
+setup-backups/
+kevflix-install.txt
+desktop-build.json

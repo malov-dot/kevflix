@@ -117,7 +117,7 @@ class PlayerUpdates:
         if revision == self.active or revision == self.pending or revision in self.blocked:
             return
         metadata = json.loads(self.contents(repository, prefix + "/package.json", revision))
-        if metadata.get("semPlayer", {}).get("apiVersion") != 1:
+        if metadata.get("semPlayer", {}).get("apiVersion") != 2:
             raise ValueError("This player update needs a newer worker; existing player retained")
         files = {name: self.contents(repository, prefix + "/app/" + name, revision) for name in FILES}
         existing = self.directory / "releases"

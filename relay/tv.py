@@ -18,6 +18,7 @@ from urllib.parse import urlencode
 
 from .media import probe, fingerprint, file_hash, subtitle_cues
 from .process import ProcessOwner, Cancelled
+from .plex_browse import PlexBrowse
 
 MEDIA_EXTENSIONS = {".mp4", ".mkv", ".m4v", ".avi", ".mov", ".ts", ".m2ts", ".webm", ".mpg", ".mpeg"}
 
@@ -35,6 +36,7 @@ class TVService:
         self.stop_event, self.wake = threading.Event(), threading.Event()
         self.thread = None
         self.plex = plex
+        self.catalog = PlexBrowse(plex)
 
     def start(self):
         if self.config["tv"]["enabled"]:
@@ -165,6 +167,7 @@ class TVService:
                 "dub": False, "compatibility": bool(self.config["tv"]["pc_process_all"]),
                 "quality": int(self.config["tv"]["max_height"]), "upscale": bool(self.config["tv"]["upscale"]),
                 "hdr_mode": self.config["tv"]["hdr_mode"], "subtitles": "off", "watch_mode": "balanced",
+                "encoder": self.config["tv"]["video_encoder"], "encoder_threads": self.config["tv"]["encoder_threads"],
                 "plex_key": None, "sync_progress": bool(self.config["tv"]["sync_plex_progress"]),
                 "job_id": None, "job_revision": None, "watch": False, "state": "paused", "resource_wait": None,
                 "touched": time.time(), "segments": {}, "error": None}
@@ -184,7 +187,8 @@ class TVService:
             return value
 
     def control(self, ident, device, action, position=None, enabled=None, audio_index=None,
-                quality=None, upscale=None, hdr_mode=None, subtitles=None, watch_mode=None):
+                quality=None, upscale=None, hdr_mode=None, subtitles=None, watch_mode=None,
+                encoder=None, encoder_threads=None):
         value = self.session(ident, device)
         if action == "stop":
             self.stop(ident)
@@ -206,8 +210,12 @@ class TVService:
             value["subtitles"] = selection
         elif action == "progress_sync":
             value["sync_progress"] = bool(enabled)
-        elif action in ("seek", "dub", "audio", "compatibility", "quality"):
+        elif action in ("seek", "dub", "audio", "compatibility", "quality", "processing"):
             old_job = value["job_id"]
+            if action == "processing":
+                if encoder not in ("auto", "nvenc", "software") or int(encoder_threads or 0) not in (1, 2, 4, 8):
+                    raise ValueError("Choose automatic, NVIDIA or software encoding and 1, 2, 4 or 8 CPU threads")
+                value.update(encoder=encoder, encoder_threads=int(encoder_threads), compatibility=True)
             if action == "audio":
                 audio_index = int(audio_index)
                 if not any(s.get("codec_type") == "audio" and s["index"] == audio_index for s in value["streams"]):
@@ -244,6 +252,8 @@ class TVService:
                     value["dub"] = bool(enabled) if action == "dub" else value["dub"]
                     value["job_id"] = job["id"] if job else None
                     value["job_revision"] = job["payload"].get("revision", 1) if job else None
+                    if not value["dub"] and value["subtitles"] == "dub":
+                        value["subtitles"] = "off"
             if self.active_session == ident and self.active_owner:
                 self.active_owner.cancel()
             if value["job_id"]:
@@ -274,13 +284,16 @@ class TVService:
             "state": value["state"], "position": value["position"], "duration": value["duration"],
             "observed": time.time(), "epoch": value["epoch"], "job_id": value["job_id"],
             "dub": value["dub"], "watch": value["watch"], "watch_mode": value["watch_mode"]})
-        if value["sync_progress"] and value["plex_key"] and time.time() - value.get("progress_at", 0) >= 15:
+        if value["sync_progress"] and value["plex_key"] and (state == "ended" or time.time() - value.get("progress_at", 0) >= 15):
             value["progress_at"] = time.time()
             try:
                 self.plex.call("/:/timeline", {"ratingKey": value["plex_key"],
                     "key": "/library/metadata/" + value["plex_key"],
                     "state": "stopped" if value["state"] == "ended" else value["state"],
                     "time": round(value["position"] * 1000), "duration": round(value["duration"] * 1000)})
+                if state == "ended" and value["position"] >= value["duration"] - 5 and not value.get("scrobbled"):
+                    self.catalog.watched(value["plex_key"], True)
+                    value["scrobbled"] = True
             except Exception:
                 value["progress_warning"] = "Plex progress could not be saved"
         self.wake.set()
@@ -289,6 +302,13 @@ class TVService:
     def stop(self, ident):
         with self.lock:
             value = self.sessions.pop(ident, None)
+        if value and value["sync_progress"] and value["plex_key"]:
+            try:
+                self.plex.call("/:/timeline", {"ratingKey": value["plex_key"],
+                    "key": "/library/metadata/" + value["plex_key"], "state": "stopped",
+                    "time": round(value["position"] * 1000), "duration": round(value["duration"] * 1000)})
+            except Exception:
+                pass
         self.store.expire_record("sessions", "tv-" + ident)
         if self.active_session == ident and self.active_owner:
             self.active_owner.cancel()
@@ -318,6 +338,7 @@ class TVService:
                 "state": value["state"], "generation": value["generation"], "epoch": value["epoch"],
                 "dub": value["dub"], "compatibility": value["compatibility"], "watch": value["watch"], "job_id": value["job_id"],
                 "quality": value["quality"], "upscale": value["upscale"], "hdr_mode": value["hdr_mode"],
+                "encoder": value["encoder"], "encoder_threads": value["encoder_threads"],
                 "subtitles": value["subtitles"], "watch_mode": value["watch_mode"], "sync_progress": value["sync_progress"],
                 "resource_wait": value["resource_wait"], "progress_warning": value.get("progress_warning"),
                 "caption_url": self.media_url(value, "captions.vtt") if value["subtitles"] != "off" else None,
@@ -464,7 +485,7 @@ class TVService:
             audio_hash = file_hash(audio)
         identity = json.dumps([value["fingerprint"], value["audio_index"], index, audio_hash,
                                value["quality"], value["upscale"], value["hdr_mode"],
-                               self.config["tv"]["video_encoder"], "tv-mux-v2"])
+                               value["encoder"], value["encoder_threads"], "tv-mux-v3"])
         key = hashlib.sha256(identity.encode()).hexdigest()
         directory = self.config.cache / "tv-media"
         directory.mkdir(parents=True, exist_ok=True)
@@ -490,7 +511,7 @@ class TVService:
         preserve_hdr = hdr and value["hdr_mode"] == "auto"
         if hdr and not preserve_hdr:
             scale = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv," + scale
-        use_gpu = self.config["tv"]["video_encoder"] != "software"
+        use_gpu = value["encoder"] != "software"
         if use_gpu:
             flags = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {}
             try:
@@ -498,21 +519,24 @@ class TVService:
                     capture_output=True, timeout=5, check=True, **flags)
                 free = int(inventory.stdout.decode().splitlines()[0].strip())
             except (OSError, ValueError, subprocess.SubprocessError):
-                raise ResourceBusy("PC NVIDIA encoder is unavailable. Choose software encoding on the PC or restore GPU availability.")
-            if free < int(self.config["tv"]["nvenc_min_free_mib"]):
+                if value["encoder"] == "auto":
+                    use_gpu = False
+                else:
+                    raise ResourceBusy("PC NVIDIA encoder is unavailable. Choose CPU software encoding in playback settings.")
+            if use_gpu and free < int(self.config["tv"]["nvenc_min_free_mib"]):
                 raise ResourceBusy("Waiting for PC GPU memory; no other application or model will be unloaded.")
         codec = ("hevc_nvenc" if preserve_hdr else "h264_nvenc") if use_gpu else ("libx265" if preserve_hdr else "libx264")
         codec_options = ["-preset", "p4", "-rc", "vbr", "-cq", "21", "-b:v", "0"] if use_gpu else ["-preset", "veryfast", "-crf", "22"]
         if use_gpu and preserve_hdr:
             codec_options += ["-profile:v", "main10"]
         if not use_gpu and preserve_hdr:
-            codec_options += ["-x265-params", "pools=2:frame-threads=2:log-level=error"]
+            codec_options += ["-x265-params", "pools=%s:frame-threads=1:log-level=error" % value["encoder_threads"]]
         rate = "30M" if height == 2160 else "8M"
         color = (["-color_primaries", "bt2020", "-color_trc", video["color_transfer"],
                   "-colorspace", "bt2020nc"] if preserve_hdr else [])
         args += ["-map", "0:" + str(video["index"]), "-map", "1:a:0" if audio else "0:" + str(value["audio_index"]),
                  "-t", "%.6f" % duration, "-vf", scale, "-c:v", codec, *codec_options,
-                 "-threads", str(self.config["tv"]["encoder_threads"]), "-filter_threads", "2",
+                 "-threads", str(value["encoder_threads"]), "-filter_threads", str(min(2, value["encoder_threads"])),
                  "-pix_fmt", "p010le" if preserve_hdr and use_gpu else "yuv420p10le" if preserve_hdr else "yuv420p",
                  "-maxrate", rate, "-bufsize", "60M" if height == 2160 else "16M", *color,
                  "-force_key_frames", "expr:gte(t,n_forced*2)",
@@ -563,15 +587,10 @@ class TVService:
         return "\n".join(rows).encode("utf-8")
 
     def plex_sections(self):
-        return [{"id": str(s["key"]), "title": s["title"]} for s in self.plex.sections() if s.get("type") == "movie"]
+        return self.catalog.sections()
 
-    def plex_library(self, section, query="", offset=0):
-        items = self.plex.library(section, query, int(offset))
-        return {"items": [{"id": str(item["ratingKey"]), "title": item.get("title", ""),
-            "year": item.get("year"), "summary": item.get("summary", ""),
-            "resume": float(item.get("viewOffset", 0)) / 1000, "folder": False,
-            "plex": True, "poster": bool(item.get("thumb"))} for item in items if item.get("type") == "movie"],
-            "more": len(items) == 100, "offset": int(offset)}
+    def plex_library(self, **values):
+        return self.catalog.page(**values)
 
     def open_plex(self, device, key, resume=True):
         from .plex import selected_part

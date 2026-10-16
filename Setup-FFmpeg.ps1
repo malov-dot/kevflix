@@ -7,7 +7,6 @@ $url = 'https://www.gyan.dev/ffmpeg/builds/packages/ffmpeg-9.0.2-full_build-shar
 $downloads = Join-Path $PSScriptRoot 'setup-records\downloads'
 $destination = Join-Path $PSScriptRoot 'tools'
 $archive = Join-Path $downloads 'ffmpeg-9.0.2-full_build-shared.7z'
-if (-not (Test-Path -LiteralPath $SevenZip)) { throw 'Specify the installed 7-Zip executable with -SevenZip.' }
 New-Item -ItemType Directory -Path $downloads,$destination -Force | Out-Null
 if (-not (Test-Path -LiteralPath $archive)) {
     Invoke-WebRequest -Uri $url -OutFile $archive
@@ -16,7 +15,16 @@ $digest = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInv
 if ($digest -ne $expected) { throw 'Downloaded archive differs from the pinned publisher checksum; nothing extracted.' }
 $installed = Join-Path $destination 'ffmpeg-9.0.2-full_build-shared'
 if (-not (Test-Path -LiteralPath $installed)) {
-    & $SevenZip x $archive ('-o'+$destination) -y
+    if (Test-Path -LiteralPath $SevenZip) { & $SevenZip x $archive ('-o'+$destination) -y }
+    else {
+        $extractPython = Join-Path $PSScriptRoot '.venv\Scripts\python.exe'
+        if (-not (Test-Path -LiteralPath $extractPython)) { $extractPython = Join-Path $PSScriptRoot 'runtime\python\python.exe' }
+        if (-not (Test-Path -LiteralPath $extractPython)) { throw 'Install KevFLIX PC or prepare its virtual environment first.' }
+        $extractLibraries = Join-Path $downloads 'extractor-libraries'
+        & $extractPython -m pip install --target $extractLibraries 'py7zr==1.0.0'
+        if ($LASTEXITCODE -ne 0) { throw 'Could not install the isolated archive extractor.' }
+        & $extractPython -c 'import sys; sys.path.insert(0,sys.argv[1]); import py7zr; a=py7zr.SevenZipFile(sys.argv[2]); a.extractall(sys.argv[3]); a.close()' $extractLibraries $archive $destination
+    }
     if ($LASTEXITCODE -ne 0) { throw 'FFmpeg extraction failed.' }
 }
 [ordered]@{

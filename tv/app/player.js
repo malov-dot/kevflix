@@ -1,13 +1,17 @@
 (function () {
   'use strict';
-  var VERSION='0.3.2', $=function(id){return document.getElementById(id);};
+  var VERSION='0.4.1', $=function(id){return document.getElementById(id);};
   var token=localStorage.getItem('sem-tv-token')||'', device=localStorage.getItem('sem-tv-device')||'';
   var folder=null,parent=null,offset=0,rows=[],session=null,loadedGeneration=0,wantedPlay=false;
   var operation=0,polling=false,loading=false,pollTimer=null,hideTimer=null,lastHeartbeat=0,reportedError='';
   var video=$('video'),desiredPosition=0,mediaStart=0,loadAbort=null,loadSerial=0;
   var sourceMode='folders',posterUrls=[],posterEpoch=0,captionKey='',setupOnly=false;
   var page='home',selectedItem=null,selectedCard=null,choiceReturn=null,noticeTimer=null,editingSearch=false;
-  var defaults={quality:2160,upscale:false,hdr_mode:'auto',dub:false,watch:false,commentary:'balanced'},resumeMap={};
+  var libraries=[],localLibraries=[],browseSerial=0,plexTrail=[],alphabetItems=[],browsePrefs={},sourceChosen=false;
+  var filters={genre:'',year:'',collection:'',sort:'titleSort:asc'},filterLabels={},availableFilters=[],availableSorts=[];
+  var moviePrefs=null,returnFromAlphabet=null;
+  try{browsePrefs=JSON.parse(localStorage.getItem('kevflix-browse')||'{}');sourceChosen=!!browsePrefs.source;sourceMode=browsePrefs.source==='folders'?'folders':'plex';}catch(ignore){}
+  var defaults={quality:2160,upscale:false,hdr_mode:'auto',dub:false,watch:false,commentary:'balanced',encoder:'default',threads:2,subtitles:'off',progress_sync:true},resumeMap={};
   try{Object.assign(defaults,JSON.parse(localStorage.getItem('kevflix-defaults')||'{}'));resumeMap=JSON.parse(localStorage.getItem('kevflix-resume')||'{}');}catch(ignore){}
   $('worker-address').textContent='Worker: '+location.origin;
   function message(text){
@@ -50,7 +54,7 @@
       var result=await api('pair',{code:code,name:'KevFLIX TV'},true);
       token=result.token;device=result.device_id;
       localStorage.setItem('sem-tv-token',token);localStorage.setItem('sem-tv-device',device);
-      $('pair-code').value='';pairPanel(false);message('TV paired.');await browse(null);
+      $('pair-code').value='';pairPanel(false);message('TV paired.');await initializeLibrary();
     }catch(error){message(error.message);$('pin-first').focus();}
     finally{pairing=false;$('pair-submit').disabled=false;}
   }
@@ -71,37 +75,122 @@
     var b=document.createElement('button');b.className='movie'+(item.folder?' folder':'');
     var poster=document.createElement('div');poster.className='poster';
     var title=document.createElement('strong');title.textContent=item.title;
-    var hint=document.createElement('span');hint.className='subtitle';hint.textContent=item.folder?'Folder':item.year||'Movie';
     if(item.plex&&item.poster){var image=document.createElement('img');image.alt='';image.dataset.key=item.id;poster.appendChild(image);}
     else{var symbol=document.createElement('span');symbol.className='poster-symbol';symbol.textContent=item.folder?'▤':'▷';poster.appendChild(symbol);}
-    b.appendChild(poster);b.appendChild(title);b.appendChild(hint);
-    if(item.resume)hint.textContent='Resume at '+clock(item.resume);
-    b.onclick=function(){if(item.folder)browse(item.id).catch(function(e){message(e.message);});else showDetails(item,b);};
+    b.appendChild(poster);b.appendChild(title);
+    if(!item.folder){
+      var badge=document.createElement('span');badge.className='watch-badge'+(item.watched?' watched':'');
+      badge.textContent=item.watched?'✓':item.container&&item.unwatched_count?item.unwatched_count:'●';
+      badge.setAttribute('aria-label',item.watched?'Watched':'Unwatched');poster.appendChild(badge);
+      if(item.resume>0&&item.duration>0){var progress=document.createElement('span');progress.className='resume-bar';progress.style.width=Math.min(100,item.resume/item.duration*100)+'%';poster.appendChild(progress);}
+    }
+    b.setAttribute('aria-label',item.title+(item.watched?' · watched':item.resume>0?' · in progress':''));
+    b.dataset.itemId=item.id;
+    b.onclick=function(){
+      if(item.container){plexTrail.push({id:item.id,title:item.title});browse(null).catch(function(e){message(e.message);});}
+      else if(item.folder)browse(item.id).catch(function(e){message(e.message);});
+      else showDetails(item,b);
+    };
     return b;
   }
-  async function browse(id,append){
+  function currentLibrary(){return libraries.find(function(l){return l.id===$('plex-section').value;});}
+  function browseQuery(){return {section:$('plex-section').value,query:$('search').value.trim(),genre:filters.genre,year:filters.year,collection:filters.collection};}
+  function saveBrowse(){
+    browsePrefs.source=sourceMode;browsePrefs.section=$('plex-section').value;browsePrefs.folder=folder;
+    browsePrefs.libraries=browsePrefs.libraries||{};
+    if(sourceMode==='plex')browsePrefs.libraries[browsePrefs.section]={filters:filters,labels:filterLabels};
+    try{localStorage.setItem('kevflix-browse',JSON.stringify(browsePrefs));}catch(ignore){}
+  }
+  function restoreFilters(){
+    var saved=(browsePrefs.libraries||{})[$('plex-section').value]||{};
+    filters=Object.assign({genre:'',year:'',collection:'',sort:'titleSort:asc'},saved.filters||{});filterLabels=saved.labels||{};
+  }
+  async function browse(id,append,jump){
+    var number=++browseSerial,oldCount=append?rows.length:0,activeId=document.activeElement&&document.activeElement.id;
     message('Loading library…');
     var result;
     if(sourceMode==='plex'){
       if(!$('plex-section').value)await loadPlexSections();
-      result=await api('plex/library?'+new URLSearchParams({section:$('plex-section').value,offset:append?offset:0,query:$('search').value.trim()}));
+      result=await api('plex/library?'+new URLSearchParams(Object.assign(browseQuery(),{offset:append?offset:jump||0,sort:filters.sort,parent:plexTrail.length?plexTrail[plexTrail.length-1].id:''})));
     }else result=await api('library?'+new URLSearchParams({folder:id||'',offset:append?offset:0,query:$('search').value.trim()}));
-    folder=id;parent=result.parent;rows=append?rows.concat(result.items):result.items;offset=rows.length;
+    if(number!==browseSerial)return;
+    folder=id;parent=result.parent;rows=append?rows.concat(result.items):result.items;offset=result.next_offset===undefined?rows.length:result.next_offset;
     if(!id&&sourceMode==='folders'&&rows.length===1&&rows[0].folder)return browse(rows[0].id);
     rows.forEach(function(item){if(!item.plex&&resumeMap[item.id])item.resume=resumeMap[item.id].position;});
     $('library').replaceChildren.apply($('library'),rows.map(button));
     $('more').hidden=!result.more;$('empty').hidden=rows.length!==0;
-    $('back-folder').disabled=!folder||sourceMode==='plex';$('back-folder').hidden=!folder||sourceMode==='plex';message('');
+    $('back-folder').hidden=sourceMode==='plex'?!plexTrail.length:!folder;$('back-folder').disabled=false;message('');
     var continuing=page==='home'?rows.filter(function(item){return !item.folder&&item.resume>10;}).slice(0,5):[];
     $('continue-section').hidden=!continuing.length;$('continue-row').replaceChildren.apply($('continue-row'),continuing.map(button));
-    $('library-heading').textContent=page==='search'?'Search results':sourceMode==='plex'?'Your Plex movies':'Your movie folders';
+    var library=currentLibrary(),label=sourceMode==='plex'?(library?library.title:'Plex'):'Movie folders';
+    $('library-heading').textContent=plexTrail.length?plexTrail[plexTrail.length-1].title:page==='search'?'Search results · '+label:label;
+    $('source-button').textContent=label;$('source-label').textContent=sourceMode==='plex'?'Plex':'Local movie folders';
+    if(page==='movies')$('heading').textContent=label;
+    $('browse-summary').textContent=result.total===null||result.total===undefined?rows.length+' titles':result.total+' titles'+(jump?' · jumped to selected letter':'');
+    availableFilters=result.filters||[];availableSorts=result.sorts||[];renderBrowseControls();renderLibraryNav();saveBrowse();
+    if(!append)void loadAlphabet(number);
     void loadPosters();
-    var first=$('library').querySelector('button');if(first)first.focus();
+    var cards=$('library').querySelectorAll('button'),first=cards[oldCount]||cards[0];
+    if($('choice-panel').hidden&&page!=='settings'&&first)first.focus();
+    else if(!first&&activeId&&$(activeId)&&!$(activeId).hidden)$(activeId).focus();
   }
   async function loadPlexSections(){
     var items=await api('plex/sections');
+    var selected=$('plex-section').value||browsePrefs.section;libraries=items;
     $('plex-section').replaceChildren.apply($('plex-section'),items.map(function(item){var option=document.createElement('option');option.value=item.id;option.textContent=item.title;return option;}));
-    if(!items.length)throw Error('No Plex movie library is available. Pair Plex on the PC, or use Movie folders.');
+    if(items.some(function(item){return item.id===selected;}))$('plex-section').value=selected;
+    if(!items.length)throw Error('No Plex libraries are available for this account. Check the selected server in KevFLIX PC.');
+  }
+  function renderLibraryNav(){
+    var items=sourceMode==='plex'?libraries:localLibraries;
+    $('library-nav').replaceChildren.apply($('library-nav'),items.map(function(item){
+      var b=document.createElement('button');b.className='nav library-nav-item';b.textContent=item.title;b.title=item.title;b.dataset.libraryId=item.id;
+      b.classList.toggle('active',page!=='settings'&&page!=='search'&&page!=='home'&&(sourceMode==='plex'?item.id===$('plex-section').value:item.id===folder));
+      b.onclick=function(){selectLibrary(item.id).catch(function(e){message(e.message);});};return b;
+    }));
+  }
+  async function selectLibrary(id){
+    saveBrowse();plexTrail=[];folder=null;parent=null;$('search').value='';
+    if(sourceMode==='plex'){$('plex-section').value=id;restoreFilters();}
+    navigate('movies',false);await browse(sourceMode==='folders'?id:null);
+  }
+  function renderBrowseControls(){
+    var enabled=sourceMode==='plex'&&!plexTrail.length;
+    ['genre','year','collection'].forEach(function(field){var b=$('filter-'+field);b.hidden=!enabled||availableFilters.indexOf(field)<0;b.textContent=field[0].toUpperCase()+field.slice(1)+': '+(filterLabels[field]||'All');});
+    $('sort-button').hidden=!enabled;$('sort-button').textContent=(sortChoices().find(function(s){return s.value===filters.sort;})||sortChoices()[0]).label;
+    $('clear-filters').hidden=!enabled||!(filters.genre||filters.year||filters.collection||$('search').value);
+    if(!enabled)$('alphabet').hidden=true;
+  }
+  function sortChoices(){return [{value:'titleSort:asc',label:'Title A–Z'},{value:'titleSort:desc',label:'Title Z–A'},
+    {value:'year:desc',label:'Year · newest first'},{value:'year:asc',label:'Year · oldest first'},
+    {value:'addedAt:desc',label:'Recently added'},{value:'addedAt:asc',label:'Added · oldest first'},
+    {value:'rating:desc',label:'Highest rated'},{value:'duration:desc',label:'Longest first'}];}
+  ['genre','year','collection'].forEach(function(field){$('filter-'+field).onclick=async function(){
+    try{var selected=$('plex-section').value,options=await api('plex/options?'+new URLSearchParams({section:selected,field:field}));
+      if(selected!==$('plex-section').value)return;
+      choose('Select '+field,[{value:'',label:'All'}].concat(options),filters[field],async function(value){
+        filters[field]=value;filterLabels[field]=value?(options.find(function(o){return o.value===value;})||{}).label:'';await browse(null);
+      });
+    }catch(e){message(e.message);}
+  };});
+  $('sort-button').onclick=function(){choose('Sort library',sortChoices().filter(function(s){return !availableSorts.length||availableSorts.indexOf(s.value.split(':')[0])>=0;}),filters.sort,async function(v){filters.sort=v;await browse(null);});};
+  $('clear-filters').onclick=function(){filters.genre='';filters.year='';filters.collection='';filterLabels={};$('search').value='';browse(null).catch(function(e){message(e.message);});};
+  async function loadAlphabet(number){
+    $('alphabet').hidden=true;
+    if(sourceMode!=='plex'||plexTrail.length||filters.sort!=='titleSort:asc')return;
+    try{var letters=await api('plex/alphabet?'+new URLSearchParams(browseQuery()));if(number!==browseSerial)return;alphabetItems=letters;
+      $('alphabet').replaceChildren.apply($('alphabet'),letters.map(function(item){var b=document.createElement('button');b.textContent=item.label;b.setAttribute('aria-label','Jump to '+item.label);b.className='letter';
+        b.onclick=function(){browse(null,false,item.offset).catch(function(e){message(e.message);});};return b;}));
+      $('alphabet').hidden=!letters.length;
+    }catch(e){if(number===browseSerial)message('The letter index is unavailable. Title sorting and search are still available.');}
+  }
+  async function initializeLibrary(){
+    var value=await api('settings');
+    if(value.plex_url){$('plex-admin').hidden=false;$('plex-admin').onclick=function(){window.open(value.plex_url.replace(/\/$/,'')+'/web/','_blank');};}
+    if(!sourceChosen)sourceMode=value.plex_configured?'plex':'folders';
+    if(sourceMode==='plex'){await loadPlexSections();restoreFilters();}
+    else localLibraries=(await api('library')).items.filter(function(item){return item.folder;});
+    renderLibraryNav();await browse(sourceMode==='folders'?browsePrefs.folder||null:null);
   }
   async function loadPosters(){
     var epoch=++posterEpoch,images=Array.prototype.slice.call($('main').querySelectorAll('img[data-key]'));
@@ -124,8 +213,8 @@
     try{if(sourceMode==='plex')await loadPlexSections();await browse(null);}catch(error){message(error.message);}
   };
   $('plex-section').onchange=function(){browse(null).catch(function(e){message(e.message);});};
-  $('back-folder').onclick=function(){browse(parent).catch(function(e){message(e.message);});};
-  $('reload').onclick=function(){browse(folder).catch(function(e){message(e.message);});};
+  $('back-folder').onclick=function(){if(sourceMode==='plex')plexTrail.pop();browse(sourceMode==='plex'?null:parent).catch(function(e){message(e.message);});};
+  $('reload').onclick=function(){initializeLibrary().catch(function(e){message(e.message);});};
   $('more').onclick=function(){browse(folder,true).catch(function(e){message(e.message);});};
   function finishSearch(){ $('search').readOnly=true;$('search').blur();$('find-movies').focus(); }
   $('search-form').onsubmit=function(event){event.preventDefault();finishSearch();browse(folder).catch(function(e){message(e.message);});};
@@ -158,17 +247,22 @@
     updateCaptions(false);
   }
   async function openMovie(item,restart){
+    if(item.plex&&item.playable===false){message('This library item is available to browse. KevFLIX currently plays videos.');return;}
     if(setupOnly){message('Setup-only mode: TV pairing is available; playback and dubbing remain disabled.');return;}
+    var prefs=moviePrefs||defaults;
     await leave();
     var number=++operation;
     message('Opening movie…');
     var value=await api('open',item.plex?{plex_key:item.id,resume:!restart}:{node:item.id});
     if(!item.plex&&!restart&&item.resume>10)value=await api('control',{id:value.id,action:'seek',position:item.resume});
-    if(defaults.quality!==value.quality||defaults.upscale!==value.upscale||defaults.hdr_mode!==value.hdr_mode)
-      value=await api('control',{id:value.id,action:'quality',quality:defaults.quality,upscale:defaults.upscale,hdr_mode:defaults.hdr_mode,position:value.position});
-    if(defaults.dub)value=await api('control',{id:value.id,action:'dub',enabled:true,position:value.position});
-    if(defaults.watch)value=await api('control',{id:value.id,action:'watch',enabled:true});
-    value=await api('control',{id:value.id,action:'watch_mode',watch_mode:defaults.commentary});
+    if(prefs.quality!==value.quality||prefs.upscale!==value.upscale||prefs.hdr_mode!==value.hdr_mode)
+      value=await api('control',{id:value.id,action:'quality',quality:prefs.quality,upscale:prefs.upscale,hdr_mode:prefs.hdr_mode,position:value.position});
+    if(prefs.encoder!=='default')value=await api('control',{id:value.id,action:'processing',encoder:prefs.encoder,encoder_threads:prefs.threads||2,position:value.position});
+    if(prefs.dub)value=await api('control',{id:value.id,action:'dub',enabled:true,position:value.position});
+    if(prefs.watch)value=await api('control',{id:value.id,action:'watch',enabled:true});
+    value=await api('control',{id:value.id,action:'watch_mode',watch_mode:prefs.commentary});
+    value=await api('control',{id:value.id,action:'progress_sync',enabled:item.plex&&prefs.progress_sync!==false});
+    if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';
     $('details').hidden=true;$('player').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;message('');
@@ -254,7 +348,9 @@
       var saved=position();resumeMap[selectedItem.id]={position:saved>session.duration-30?0:saved};
       try{localStorage.setItem('kevflix-resume',JSON.stringify(resumeMap));}catch(ignore){}
       selectedItem.resume=resumeMap[selectedItem.id].position;
+      if(video.ended)selectedItem.watched=true;
     }
+    if(session){try{await api('heartbeat',{id:session.id,position:position(),state:video.ended?'ended':'paused',generation:session.generation});}catch(ignore){}}
     operation++;clearInterval(pollTimer);clearTimeout(hideTimer);
     if(loadAbort)loadAbort.abort();loading=false;loadSerial++;
     var old=session;session=null;wantedPlay=false;loadedGeneration=0;
@@ -311,9 +407,22 @@
     if(session)fetch('/tv-api/control',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({id:session.id,action:'stop'}),keepalive:true}).catch(function(){});
   });
   function focusMove(direction){
-    var scope=!$('choice-panel').hidden?$('choice-panel'):!$('pair-panel').hidden?$('pair-panel'):session?($('playback-panel').hidden?$('player-controls'):$('playback-panel')):!$('details').hidden?$('details'):document;
-    var targets=Array.prototype.filter.call(scope.querySelectorAll('button,input,select,a[href]'),function(e){return !e.disabled&&e.tabIndex>=0&&e.getClientRects().length;});
+    var scope=!$('choice-panel').hidden?$('choice-panel'):!$('info-panel').hidden?$('info-panel'):!$('movie-options').hidden?$('movie-options'):!$('pair-panel').hidden?$('pair-panel'):session?($('playback-panel').hidden?$('player-controls'):$('playback-panel')):!$('details').hidden?$('details'):document;
+    var targets=Array.prototype.filter.call(scope.querySelectorAll('button,input,select,a[href],[tabindex="0"]'),function(e){return !e.disabled&&e.tabIndex>=0&&e.getClientRects().length;});
     var active=document.activeElement,rect=active.getBoundingClientRect(),cx=rect.left+rect.width/2,cy=rect.top+rect.height/2;
+    if(scope===document&&$('alphabet').contains(active)){
+      if(direction===37){var back=returnFromAlphabet&&document.contains(returnFromAlphabet)?returnFromAlphabet:$('library').querySelector('button');if(back){back.focus();back.scrollIntoView({block:'nearest'});}return;}
+      if(direction===38||direction===40){var next=direction===38?active.previousElementSibling:active.nextElementSibling;if(next){next.focus();next.scrollIntoView({block:'nearest'});}return;}
+      if(direction===39)return;
+    }
+    if(scope===document&&$('library-nav').contains(active)&&(direction===38||direction===40)){
+      var sibling=direction===38?active.previousElementSibling:active.nextElementSibling;
+      (sibling||(direction===38?$('nav-movies'):$('nav-search'))).focus();if(sibling)sibling.scrollIntoView({block:'nearest'});return;
+    }
+    if(scope===document&&$('library').contains(active)&&direction===39&&!$('alphabet').hidden){
+      var neighbor=active.nextElementSibling;
+      if(!neighbor||Math.abs(neighbor.getBoundingClientRect().top-rect.top)>20){returnFromAlphabet=active;$('alphabet').querySelector('button').focus();return;}
+    }
     if(targets.indexOf(active)<0){if(targets[0])targets[0].focus();return;}
     var best=null,score=Infinity;
     targets.forEach(function(e){
@@ -353,11 +462,14 @@
     if(key===10009||key===27){
       event.preventDefault();
       if(!$('choice-panel').hidden)closeChoice();
+      else if(!$('info-panel').hidden)$('info-back').click();
+      else if(!$('movie-options').hidden)$('movie-options-back').click();
       else if(session&&!$('playback-panel').hidden)$('close-playback-settings').click();
       else if(session&&!$('player-controls').classList.contains('controls-hidden')){$('player-controls').classList.add('controls-hidden');}
       else if(session)void leave();
       else if(!$('details').hidden)closeDetails();
       else if(!$('pair-panel').hidden)$('pair-back').click();
+      else if(sourceMode==='plex'&&plexTrail.length)$('back-folder').click();
       else if(folder&&sourceMode==='folders'&&parent)void browse(parent);
       else $('nav-'+page).focus();
       return;
@@ -372,6 +484,10 @@
     }
     if(key>=37&&key<=40){
       event.preventDefault();
+      if(active===$('info-content')&&(key===38||key===40)){
+        var scroll=active.scrollTop;active.scrollTop+=key===38?-180:180;
+        if(scroll!==active.scrollTop)return;
+      }
       if(session&&active===$('timeline')&&(key===37||key===39)){void change('seek',{position:Math.max(0,Math.min(session.duration-.1,position()+(key===39?10:-10)))});return;}
       if(active&&active.tagName==='SELECT'&&(key===37||key===39)){
         active.selectedIndex=(active.selectedIndex+(key===39?1:-1)+active.options.length)%active.options.length;
@@ -389,10 +505,11 @@
     if(setupOnly)message('Setup-only mode: pairing is available. Playback and dubbing are disabled.');
   }).catch(function(){});
   function navigate(next,load){
-    page=next;$('heading').textContent={home:'Home',movies:'Movies',search:'Search',settings:'Settings'}[next];
+    page=next;$('heading').textContent={home:'Home',movies:'Libraries',search:'Search',settings:'Settings'}[next];
     $('settings-page').hidden=next!=='settings';$('library-panel').hidden=next==='settings';$('search-bar').hidden=next!=='search';
     Array.prototype.forEach.call(document.querySelectorAll('[data-page]'),function(b){b.classList.toggle('active',b.dataset.page===next);});
-    if(next==='settings'){renderDefaults();if(load!==false)$('settings-source').focus();return;}
+    renderLibraryNav();
+    if(next==='settings'){renderDefaults();$('alphabet').hidden=true;if(load!==false)$('settings-source').focus();return;}
     if(next!=='search')$('search').value='';
     if(next==='search'){if(load!==false)$('search').focus();return;}
     if(load!==false)browse(folder).catch(function(e){message(e.message);});
@@ -409,6 +526,8 @@
   function closeChoice(){
     $('choice-panel').hidden=true;
     if(choiceReturn&&document.contains(choiceReturn))choiceReturn.focus();
+    else if(!$('movie-options').hidden){var option=$('movie-options-list').querySelector('button');if(option)option.focus();}
+    else if(!$('library-panel').hidden){var first=$('library').querySelector('button');if(first)first.focus();}
   }
   function choose(title,options,current,onSelect){
     choiceReturn=document.activeElement;$('choice-title').textContent=title;$('choice-panel').hidden=false;
@@ -432,46 +551,103 @@
   $('connection-button').onclick=function(){pairPanel(true);};
   $('pair-back').onclick=function(){if(token)pairPanel(false);else{try{tizen.application.getCurrentApplication().exit();}catch(ignore){history.back();}}};
   async function chooseLibrary(){
-    var options=[{value:'folders',label:'Movie folders'}];
     try{
-      if(!$('plex-section').options.length)await loadPlexSections();
-      Array.prototype.forEach.call($('plex-section').options,function(o){options.push({value:'plex:'+o.value,label:'Plex · '+o.textContent});});
-    }catch(ignore){}
-    choose('Movie library',options,sourceMode==='plex'?'plex:'+$('plex-section').value:'folders',async function(value){
-      if(value==='folders')sourceMode='folders';
-      else{sourceMode='plex';$('plex-section').value=value.slice(5);}
-      $('library-source').value=sourceMode;folder=null;parent=null;
-      var label=sourceMode==='folders'?'Movie folders':$('plex-section').selectedOptions[0].textContent;
-      $('source-button').textContent=label;$('source-label').textContent=label;
-      await browse(null);
-    });
+      if(sourceMode==='plex')await loadPlexSections();else localLibraries=(await api('library')).items.filter(function(i){return i.folder;});
+      var items=sourceMode==='plex'?libraries:localLibraries;renderLibraryNav();
+      choose('Select library',items.map(function(item){return {value:item.id,label:item.title};}),sourceMode==='plex'?$('plex-section').value:folder,selectLibrary);
+    }catch(e){message(e.message);}
   }
-  $('source-button').onclick=function(){void chooseLibrary();};$('settings-source').onclick=function(){void chooseLibrary();};
+  $('source-button').onclick=function(){void chooseLibrary();};
+  $('settings-source').onclick=function(){choose('Connect with',[{value:'plex',label:'Plex · your linked account libraries'},{value:'folders',label:'Local movie folders · configured on your PC'}],sourceMode,async function(value){
+    if(value==='plex')await loadPlexSections();else localLibraries=(await api('library')).items.filter(function(i){return i.folder;});
+    saveBrowse();sourceMode=value;sourceChosen=true;folder=null;parent=null;plexTrail=[];browsePrefs.folder=null;
+    if(value==='plex')restoreFilters();$('library-source').value=value;saveBrowse();renderLibraryNav();$('source-label').textContent=value==='plex'?'Plex':'Local movie folders';
+  });};
   function showDetails(item,card){
+    if(!selectedItem||selectedItem.id!==item.id||selectedItem.plex!==item.plex)moviePrefs=Object.assign({encoder:'default',threads:2,subtitles:'off'},defaults);
     selectedItem=item;selectedCard=card;$('details').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;
-    $('detail-title').textContent=item.title;$('detail-meta').textContent=item.year?String(item.year):'Local movie';
-    $('detail-summary').textContent=item.summary||'';
+    renderDetails(item);
     $('detail-play').textContent=item.resume>10?'Resume at '+clock(item.resume):'Play';
     $('detail-restart').hidden=!(item.resume>10);
-    $('detail-dub').textContent='English dubbing: '+(defaults.dub?'on':'off');$('detail-watch').textContent='Watch with Sem: '+(defaults.watch?'on':'off');
+    $('detail-dub').textContent='English dubbing: '+(moviePrefs.dub?'on':'off');$('detail-watch').textContent='Watch with Sem: '+(moviePrefs.watch?'on':'off');
+    $('detail-play').disabled=item.plex&&item.playable===false;
     $('detail-poster').replaceChildren();
     var existing=card&&card.querySelector('img');
     if(existing&&existing.src){var img=document.createElement('img');img.src=existing.src;img.alt='';$('detail-poster').appendChild(img);}
     else $('detail-poster').textContent='▷';
     $('detail-play').focus();
+    if(item.plex)api('plex/metadata?key='+encodeURIComponent(item.id)).then(function(value){
+      if(selectedItem!==item||$('details').hidden)return;
+      Object.assign(item,value);renderDetails(item);
+    }).catch(function(e){message('Movie information: '+e.message);});
   }
+  function renderDetails(item){
+    $('detail-title').textContent=item.title;
+    $('detail-meta').textContent=[item.year,item.contentRating,item.duration?Math.round(item.duration/60)+' min':null,item.rating?'Rating '+item.rating+'/10':null,item.audienceRating?'Audience '+item.audienceRating+'/10':null,item.watched?'✓ Watched':null].filter(Boolean).join(' · ');
+    $('detail-summary').textContent=item.summary||'';$('detail-genres').textContent=(item.genres||[]).join(' · ');
+    $('detail-cast-preview').textContent=(item.cast||[]).slice(0,5).map(function(c){return c.name;}).join(' · ');
+    $('detail-media').textContent=(item.media||[]).map(function(m){return [m.height>=2160?'4K':m.videoResolution,m.videoCodec,m.audioCodec,m.audioChannels?m.audioChannels+' channels':null].filter(Boolean).join(' · ');}).join(' / ');
+    $('detail-play').textContent=item.resume>10?'Resume at '+clock(item.resume):'Play';$('detail-restart').hidden=!(item.resume>10);
+    $('detail-watched').hidden=!item.plex;$('detail-watched').textContent=item.watched?'✓ Watched · mark unwatched':'Mark watched';
+    $('detail-cast').disabled=!item.cast||!item.cast.length;
+  }
+  var infoReturn=null;
+  function showInfo(title,lines){
+    infoReturn=document.activeElement;$('info-title').textContent=title;$('info-content').replaceChildren.apply($('info-content'),lines.filter(Boolean).map(function(line){var p=document.createElement('p');p.textContent=line;return p;}));
+    $('info-panel').hidden=false;$('info-content').scrollTop=0;$('info-content').focus();
+  }
+  $('detail-cast').onclick=function(){if(!selectedItem)return;showInfo('Cast and crew',[
+    (selectedItem.directors||[]).length?'Directed by '+selectedItem.directors.join(', '):'',
+    (selectedItem.writers||[]).length?'Written by '+selectedItem.writers.join(', '):''
+  ].concat((selectedItem.cast||[]).map(function(c){return c.name+(c.role?' as '+c.role:'');})));};
+  $('detail-info').onclick=function(){if(!selectedItem)return;var item=selectedItem;showInfo(item.title,[item.tagline,item.summary,
+    item.originalTitle?'Original title: '+item.originalTitle:'',item.originallyAvailableAt?'Released: '+item.originallyAvailableAt:'',
+    item.studio?'Studio: '+item.studio:'',item.editionTitle?'Edition: '+item.editionTitle:'',
+    $('detail-meta').textContent,$('detail-genres').textContent,$('detail-media').textContent]);};
+  $('info-back').onclick=function(){$('info-panel').hidden=true;if(infoReturn)infoReturn.focus();};
+  $('detail-watched').onclick=async function(){
+    if(!selectedItem||!selectedItem.plex)return;
+    if(setupOnly){message('Plex library changes are disabled while setup-only mode is active.');return;}
+    try{var item=selectedItem;await api('plex/watched',{key:item.id,enabled:!item.watched});item.watched=!item.watched;if(!item.watched)item.resume=0;renderDetails(item);}
+    catch(e){message(e.message);}
+  };
   function closeDetails(){
     $('details').hidden=true;$('main').hidden=false;$('sidebar').hidden=false;
+    if(selectedCard&&selectedItem&&document.contains(selectedCard)){var updated=button(selectedItem);selectedCard.replaceWith(updated);selectedCard=updated;void loadPosters();}
     if(selectedCard&&document.contains(selectedCard))selectedCard.focus();else $('nav-'+page).focus();
   }
   $('details-back').onclick=closeDetails;
   $('detail-play').onclick=function(){if(selectedItem)openMovie(selectedItem,false).catch(function(e){message(e.message);});};
   $('detail-restart').onclick=function(){if(selectedItem)openMovie(selectedItem,true).catch(function(e){message(e.message);});};
-  $('detail-dub').onclick=function(){defaults.dub=!defaults.dub;saveDefaults();$('detail-dub').textContent='English dubbing: '+(defaults.dub?'on':'off');};
-  $('detail-watch').onclick=function(){defaults.watch=!defaults.watch;saveDefaults();$('detail-watch').textContent='Watch with Sem: '+(defaults.watch?'on':'off');};
+  $('detail-dub').onclick=function(){moviePrefs.dub=!moviePrefs.dub;if(!moviePrefs.dub&&moviePrefs.subtitles==='dub')moviePrefs.subtitles='off';$('detail-dub').textContent='English dubbing: '+(moviePrefs.dub?'on':'off');};
+  $('detail-watch').onclick=function(){moviePrefs.watch=!moviePrefs.watch;$('detail-watch').textContent='Watch with Sem: '+(moviePrefs.watch?'on':'off');};
+  var encoders=[{value:'auto',label:'Automatic · NVIDIA when available'},{value:'nvenc',label:'NVIDIA GPU encoding'},{value:'software',label:'CPU software encoding'}];
+  var threadChoices=[1,2,4,8].map(function(n){return {value:n,label:n+' CPU threads for video encoding'};});
+  function encoderLabel(value){return (encoders.find(function(e){return e.value===value;})||{label:'Use PC default'}).label;}
+  function renderMovieOptions(){
+    var opts=[['PC processing',encoderLabel(moviePrefs.encoder),function(){choose('PC processing',[{value:'default',label:'Use PC default'}].concat(encoders),moviePrefs.encoder,function(v){moviePrefs.encoder=v;renderMovieOptions();});}],
+      ['Video CPU thread limit',moviePrefs.threads,function(){choose('Video CPU threads',threadChoices,moviePrefs.threads,function(v){moviePrefs.threads=Number(v);if(moviePrefs.encoder==='default')moviePrefs.encoder='auto';renderMovieOptions();});}],
+      ['Movie quality',moviePrefs.quality===2160?'4K':moviePrefs.quality+'p',function(){choose('Movie quality',qualities,moviePrefs.quality,function(v){moviePrefs.quality=Number(v);renderMovieOptions();});}],
+      ['Upscaling',moviePrefs.upscale?'On':'Off',function(){moviePrefs.upscale=!moviePrefs.upscale;renderMovieOptions();}],
+      ['HDR',moviePrefs.hdr_mode==='auto'?'Automatic':'SDR',function(){moviePrefs.hdr_mode=moviePrefs.hdr_mode==='auto'?'sdr':'auto';renderMovieOptions();}],
+      ['English dubbing',moviePrefs.dub?'On':'Off',function(){$('detail-dub').click();renderMovieOptions();}],
+      ['Watch with Sem',moviePrefs.watch?'On':'Off',function(){$('detail-watch').click();renderMovieOptions();}],
+      ['Sem commentary',moviePrefs.commentary,function(){choose('Sem commentary',modes,moviePrefs.commentary,function(v){moviePrefs.commentary=v;renderMovieOptions();});}],
+      ['Subtitles',moviePrefs.subtitles,function(){choose('Subtitles',[{value:'off',label:'Off'},{value:'auto',label:'External subtitle file · embedded tracks available during playback'}].concat(moviePrefs.dub?[{value:'dub',label:'English dubbing text'}]:[]),moviePrefs.subtitles,function(v){moviePrefs.subtitles=v;renderMovieOptions();});}],
+      ['Save progress to Plex',moviePrefs.progress_sync?'On':'Off',function(){moviePrefs.progress_sync=!moviePrefs.progress_sync;renderMovieOptions();}]];
+    var index=document.activeElement&&document.activeElement.dataset.movieOption;
+    $('movie-options-list').replaceChildren.apply($('movie-options-list'),opts.map(function(row,n){var b=document.createElement('button');b.className='setting-row';b.dataset.movieOption=n;var label=document.createElement('span'),value=document.createElement('span');label.textContent=row[0];value.textContent=row[1];b.appendChild(label);b.appendChild(value);b.onclick=row[2];return b;}));
+    if($('choice-panel').hidden)$('movie-options-list').children[Number(index)||0].focus();
+  }
+  $('detail-settings').onclick=function(){$('movie-options').hidden=false;renderMovieOptions();};
+  $('movie-options-back').onclick=function(){$('movie-options').hidden=true;$('detail-settings').focus();};
   function renderPlaybackSettings(index){
     if(!session)return;
     var rows=[
+      ['PC processing',encoderLabel(session.encoder),function(){choose('PC processing',encoders,session.encoder,function(v){return change('processing',{encoder:v,encoder_threads:session.encoder_threads});});}],
+      ['Video CPU threads',session.encoder_threads,function(){choose('Video CPU threads',threadChoices,session.encoder_threads,function(v){return change('processing',{encoder:session.encoder,encoder_threads:Number(v)});});}],
+      ['English dubbing',session.dub?'On':'Off',function(){return change('dub',{enabled:!session.dub});}],
+      ['Watch with Sem',session.watch?'On':'Off',function(){return setting('watch',{enabled:!session.watch});}],
       ['Output limit',session.quality===2160?'4K':session.quality+'p',function(){choose('Output limit',qualities,session.quality,function(v){return change('quality',{quality:Number(v),upscale:session.upscale,hdr_mode:session.hdr_mode});});}],
       ['Upscaling',session.upscale?'Lanczos':'Off',function(){choose('Upscaling',[{value:'off',label:'Off'},{value:'on',label:'Lanczos on the PC'}],session.upscale?'on':'off',function(v){return change('quality',{quality:session.quality,upscale:v==='on',hdr_mode:session.hdr_mode});});}],
       ['HDR',session.hdr_mode==='auto'?'Automatic':'SDR',function(){choose('HDR',[{value:'auto',label:'Preserve HDR signal'},{value:'sdr',label:'Convert to SDR'}],session.hdr_mode,function(v){return change('quality',{quality:session.quality,upscale:session.upscale,hdr_mode:v});});}],
@@ -491,10 +667,6 @@
   renderDefaults();
   if(token){
     pairPanel(false);
-    api('settings').then(async function(value){
-      if(value.plex_url){$('plex-admin').hidden=false;$('plex-admin').onclick=function(){window.open(value.plex_url.replace(/\/$/,'')+'/web/','_blank');};}
-      if(value.plex_configured){try{await loadPlexSections();sourceMode='plex';$('source-button').textContent='Plex movies';$('source-label').textContent='Plex movies';}catch(ignore){}}
-      await browse(null);
-    }).catch(function(e){message(e.message);pairPanel(true);});
+    initializeLibrary().catch(function(e){message(e.message);});
   }else pairPanel(true);
 }());

@@ -65,5 +65,11 @@
     "path": "tv",
     "interval_seconds": 3600,
     "token_env": "MOVIEDUB_GITHUB_TOKEN"
+  },
+  "setup_only": true,
+  "start_with_windows": true,
+  "desktop_updates": {
+    "enabled": true,
+    "preview": true
   }
 }

@@ -10,6 +10,7 @@ from urllib import error, parse, request
 
 from .language import iso
 from .streaming import ticket
+from . import __version__
 
 
 class NoCrossOriginRedirect(request.HTTPRedirectHandler):
@@ -29,7 +30,7 @@ class Plex:
         self.headers = {
             "Accept": "application/json", "X-Plex-Token": config["plex"]["token"],
             "X-Plex-Client-Identifier": "kevflix",
-            "X-Plex-Product": "KevFLIX", "X-Plex-Version": "0.3.1",
+            "X-Plex-Product": "KevFLIX", "X-Plex-Version": __version__,
             "X-Plex-Platform": "Windows",
         }
 

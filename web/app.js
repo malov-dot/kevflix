@@ -1,6 +1,7 @@
 'use strict';
 const $=id=>document.getElementById(id);
 let token=sessionStorage.getItem('movie-dub-token')||'',timer=null,eventSeq=0,selectedReview=null,blobUrl=null,refreshing=false;
+let pairingUntil=0,pairingTimer=null;
 $('token').value=token;
 function notice(text,error=false){$('notice').textContent=text;$('notice').classList.toggle('error',error);}
 async function api(path,data){
@@ -12,21 +13,85 @@ function action(text,fn){const b=element('button',text);b.onclick=async()=>{b.di
 function time(seconds){return new Date(Math.max(0,seconds)*1000).toISOString().slice(11,19);}
 async function connect(){
  token=$('token').value.trim();sessionStorage.setItem('movie-dub-token',token);await refresh();
- try{const sections=await api('/api/plex/sections');$('sections').replaceChildren(...sections.map(s=>{const o=element('option',s.title);o.value=s.key;return o;}));}catch(e){notice(e.message,true);}
+ $('connection').hidden=true;
+ const settings=await loadSettings();
+ if(settings.plex.configured){try{await loadSections();}catch(e){notice(e.message,true);}}
  clearInterval(timer);timer=setInterval(()=>refresh().catch(e=>notice(e.message,true)),2000);
 }
 $('connect').onsubmit=e=>{e.preventDefault();connect().catch(e=>notice(e.message,true));};
+$('stop-worker').onclick=async()=>{try{await api('/api/settings/stop',{});clearInterval(timer);$('settings-result').textContent='KevFLIX closed. Open the KevFLIX PC desktop shortcut to start it again.';}catch(e){notice(e.message,true);}};
 $('logout').onclick=()=>{clearInterval(timer);token='';sessionStorage.removeItem('movie-dub-token');$('token').value='';notice('Disconnected.');};
-$('pair-tv').onclick=async()=>{try{
+async function makePairCode(){try{
  const result=await api('/api/tv/pair-code',{});
- $('pair-code').textContent='TV code: '+result.code+' · valid for 5 minutes · '+result.worker_url;
+ $('pair-code').textContent=result.code;pairingUntil=Date.now()+result.expires_in*1000;
+ clearInterval(pairingTimer);const tick=()=>{const seconds=Math.max(0,Math.ceil((pairingUntil-Date.now())/1000));$('pair-expiry').textContent=seconds?'Valid for '+Math.floor(seconds/60)+':'+String(seconds%60).padStart(2,'0')+' · use once':'Code expired. Click New pairing code.';};tick();pairingTimer=setInterval(tick,1000);
  const devices=await api('/api/tv/devices');
  $('tv-devices').replaceChildren(...devices.filter(d=>!d.revoked).map(d=>action('Revoke '+d.name,async()=>{await api('/api/tv/revoke',{id:d.id});notice('TV access revoked.');})));
-}catch(e){notice(e.message,true);}};
+}catch(e){notice(e.message,true);}}
+$('pair-tv').onclick=makePairCode;
+async function loadSections(){
+ const sections=await api('/api/plex/sections');$('sections').replaceChildren(...sections.map(s=>{const o=element('option',s.title);o.value=s.key;return o;}));
+}
+async function loadSettings(){
+ const value=await api('/api/settings');
+ $('setting-startup').checked=value.start_with_windows;$('setting-updates').checked=value.updates_enabled;
+ $('setting-playback').checked=!value.setup_only;$('setting-playback').disabled=value.setup_locked;
+ $('setup-lock-note').textContent=value.setup_locked?'Playback is locked off for the current setup session.':'Changing playback mode takes effect after closing and reopening KevFLIX.';
+ $('setting-roots').value=value.media_roots.join('\n');$('setting-mappings').value=JSON.stringify(value.path_mappings,null,2);
+ $('setting-quality').value=value.tv.max_height;$('setting-encoder').value=value.tv.video_encoder;
+ $('setting-upscale').value=value.tv.upscale?'on':'off';$('setting-hdr').value=value.tv.hdr_mode;
+ $('setting-device').value=value.device;$('setting-threads').value=value.cpu_threads;$('setting-buffer').value=value.tv.buffer_segments;
+ $('setting-bind').value=value.bind;$('setting-port').value=value.port;$('setting-url').value=value.public_url;
+ $('plex-account-status').textContent=value.plex.configured?'Connected to '+(value.plex.server_name||'your local Plex server'):value.plex.linked?'Account connected. Choose your local server.':'Plex account not connected.';
+ $('model-status').textContent=Object.entries(value.assets).map(([name,exists])=>name+': '+(exists?'files present':'needs installation')).join(' · ')+' · Model loading and playback validation remain separate.';
+ const updates=await api('/api/desktop-updates');$('desktop-update-status').textContent=updates.managed?(updates.pending?'Desktop '+updates.pending+' downloaded. Installs next time KevFLIX starts.':updates.error||updates.policy):'Desktop automatic installation is available in the installer-managed version. This source checkout is left in place.';
+ return value;
+}
+$('settings-form').onsubmit=async event=>{
+ event.preventDefault();
+ try{
+  const result=await api('/api/settings',{start_with_windows:$('setting-startup').checked,updates_enabled:$('setting-updates').checked,
+   setup_only:!$('setting-playback').checked,
+   media_roots:$('setting-roots').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),path_mappings:JSON.parse($('setting-mappings').value||'[]'),
+   bind:$('setting-bind').value,port:Number($('setting-port').value),public_url:$('setting-url').value,
+   device:$('setting-device').value,cpu_threads:Number($('setting-threads').value),
+   tv:{max_height:Number($('setting-quality').value),video_encoder:$('setting-encoder').value,upscale:$('setting-upscale').value==='on',hdr_mode:$('setting-hdr').value,buffer_segments:Number($('setting-buffer').value)}});
+  $('settings-result').textContent=result.restart_required?'Saved. Close and reopen only KevFLIX to apply the network or playback-mode change.':'Settings saved on this PC.';
+ }catch(error){$('settings-result').textContent=error.message;}
+};
+for(const [id,component] of [['install-video','ffmpeg'],['install-dependencies','dependencies'],['install-models','models']]){
+ $(id).onclick=async()=>{try{const result=await api('/api/settings/install',{component,accept_terms:$('accept-model-terms').checked});$('install-status').textContent=result.message;}catch(e){$('install-status').textContent=e.message;}};
+}
+async function listServers(){
+ const values=await api('/api/settings/plex/servers');
+ $('plex-server').replaceChildren(...values.map(value=>{const option=element('option',value.name+' · '+value.url);option.value=value.id;return option;}));
+ if(!values.length)$('plex-link-status').textContent='No local Plex server was returned. Confirm the PC and server are on the same LAN.';
+}
+let plexPoll=null;
+$('plex-connect').onclick=async()=>{
+ const popup=window.open('about:blank','kevflix-plex-auth');
+ try{
+  const pin=await api('/api/settings/plex/link',{});
+  if(popup)popup.location.href=pin.url;
+  else{const a=element('a','Open Plex sign-in');a.href=pin.url;a.target='_blank';a.rel='noreferrer';$('plex-link-status').replaceChildren(a);}
+  $('plex-link-status').append(document.createTextNode(' Complete Plex sign-in in that window.'));
+  clearInterval(plexPoll);let attempts=0,busy=false;
+  plexPoll=setInterval(async()=>{if(busy)return;busy=true;try{
+   const value=await api('/api/settings/plex/link-status?id='+encodeURIComponent(pin.id));
+   if(value.linked){clearInterval(plexPoll);$('plex-link-status').textContent='Plex account connected.';await loadSettings();await listServers();}
+   if(++attempts>180)clearInterval(plexPoll);
+  }catch(error){clearInterval(plexPoll);$('plex-link-status').textContent=error.message;}finally{busy=false;}},3000);
+ }catch(error){if(popup)popup.close();$('plex-link-status').textContent=error.message;}
+};
+$('plex-refresh-servers').onclick=()=>listServers().catch(e=>{$('plex-link-status').textContent=e.message;});
+$('plex-use-server').onclick=async()=>{try{await api('/api/settings/plex/select',{id:$('plex-server').value});await loadSettings();await loadSections();}catch(e){$('plex-link-status').textContent=e.message;}};
+$('plex-disconnect').onclick=async()=>{try{await api('/api/settings/plex/disconnect',{});await loadSettings();}catch(e){$('plex-link-status').textContent=e.message;}};
+$('plex-folders').onclick=async()=>{try{$('plex-folder-list').textContent=JSON.stringify(await api('/api/settings/plex/folders'),null,2);}catch(e){$('plex-folder-list').textContent=e.message;}};
 async function refresh(){
  if(!token||refreshing)return;
  refreshing=true;try{
  const status=await api('/api/status');$('version').textContent=status.version+' · awaiting validation';
+ $('pc-mode').textContent=status.setup_only?'Worker running · setup only · playback and AI disabled':'Worker running';
  const session=status.sessions[0]?.payload;
  $('session').textContent=session?session.title+' · '+session.state+' · '+time(session.position):'No playback session on the selected TV.';
  $('worker').textContent='Worker: '+status.config.device+' · English speech: '+status.config.speech_engine+' · '+(status.watch_enabled?'Watch context enabled':'Watch context off');
@@ -107,4 +172,14 @@ $('save-corrections').onclick=async()=>{try{
 $('approve').onclick=async()=>{try{
  await api('/api/jobs/'+selectedReview.job.id+'/review',{chunk:selectedReview.chunk.idx,approve_hash:selectedReview.chunk.payload.sha256});notice('Approval saved for this exact audio.');$('review').hidden=true;await refresh();
 }catch(e){notice(e.message,true);}};
-if(token)connect().catch(e=>notice(e.message,true));
+async function boot(){
+ const fragment=new URLSearchParams(location.hash.slice(1)),launch=fragment.get('launch');
+ if(launch){
+  history.replaceState(null,'',location.pathname+location.search);
+  const response=await fetch('/pc-api/redeem',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({code:launch})});
+  const value=await response.json();if(!response.ok)throw Error(value.error||'Desktop login failed.');
+  token=value.api_token;$('token').value=token;sessionStorage.setItem('movie-dub-token',token);
+ }
+ if(token){await connect();await makePairCode();}
+}
+boot().catch(e=>notice(e.message,true));

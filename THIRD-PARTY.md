@@ -24,3 +24,9 @@ KevFLIX uses the following upstream components. Their names and licenses remain 
 
 Piper's current runtime is GPL, unlike the earlier MIT implementation. This package does not claim an all-MIT dependency stack. Preserve runtime and individual model notices before publication.
 
+
+## Portable Python installer runtime
+
+The Windows installer contains CPython 3.11.17 from Astral python-build-standalone release 20261013, x86_64-pc-windows-msvc install_only_stripped. Its upstream license and component notices are preserved under runtime/python. SHA-256: 54a38c5e7cc1a5fd2b0182b495f29606dc1455d18ebfd3b5bf0a3c09253b5031. Source/release: https://github.com/astral-sh/python-build-standalone/releases/tag/20261013. Python source and license: https://www.python.org/downloads/source/.
+
+FFmpeg and model binaries are downloaded separately from their publishers. If 7-Zip is not installed, video-tool setup downloads py7zr 1.0.0 (LGPL-2.1-or-later) and its dependencies into a private extractor directory: https://pypi.org/project/py7zr/1.0.0/.

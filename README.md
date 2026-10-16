@@ -2,7 +2,7 @@
 
 A separate TV player for local movies, with PC-assisted English dubbing and optional upscaling.
 
-**Development version 0.3.2 — playback and model processing remain unvalidated.**
+**Development version 0.4.1 — playback, installer and update acceptance remain untested.**
 
 KevFLIX keeps the original files intact and uses the PC for source decoding, audio processing, scaling and encoding. A NAS can supply the source files. The TV receives a local-network HLS stream and decodes that final stream for display. The standard Plex installation is not modified.
 
@@ -10,15 +10,21 @@ KevFLIX keeps the original files intact and uses the PC for source decoding, aud
 
 - TizenBrew application module and an unsigned standalone Tizen launcher.
 - LAN-only media delivery, one-use TV pairing codes and revocable device tokens.
-- Folder browsing and optional Plex movie-library browsing with posters, search and existing resume positions.
+- Plex libraries in the TV's left sidebar, source selection for Plex or local folders, genre/year/collection filters, sorting, and a right-side letter index.
+- Title-only poster labels, watched/progress overlays, movie information, cast/crew and Plex resume positions. Video playback is the current scope; other library types can be browsed.
 - Original audio selection, text subtitles, optional Plex progress synchronization and playback controls.
 - On-demand source-language detection, translation to English, speaker assignments, speech separation and local speech generation.
 - A single combined audio/video stream for dubbing. Playback buffers while the next segment is processed; instantaneous or sustained real-time performance is **not established**.
 - Output ceiling up to **3840×2160**, optional Lanczos upscaling, NVIDIA encoding, software-encoding option, and HDR/SDR controls.
 - Optional Sem watch-along context and a staged integration recipe, without replacing Sem's existing voice.
-- Automatic updates for the TV interface from this repository, applied between viewing sessions. Worker/dependency and launcher updates remain separate installation steps.
+- A Windows installer, PC control panel, visible TV pairing codes, Plex sign-in, private settings and startup with Windows enabled by default.
+- Automatic desktop downloads from GitHub releases, installed on the next KevFLIX start; TV-interface updates applied between viewing sessions. Existing configuration and models are preserved.
 
 ## Installation paths
+
+### Windows PC
+
+Download **KevFLIX-Setup-0.4.1.exe** from [Releases](https://github.com/malov-dot/kevflix/releases). This unsigned development installer supplies the control panel and a private Python runtime. It starts in setup-only mode. Use PC settings to connect Plex, add folders, install video/dubbing components and generate the TV pairing code. Tools and models download separately; setup does not play media or run inference. See [installation](docs/INSTALL.md).
 
 ### TizenBrew GitHub module
 
@@ -42,12 +48,4 @@ This repository contains reusable source and generic installation files only. It
 
 ## Dependencies and licensing
 
-See [THIRD-PARTY.md](THIRD-PARTY.md) for model/runtime provenance. Upstream names and licenses remain unchanged. No third-party model weights or runtime binaries are included. A license for new KevFLIX source has not been selected; package metadata uses UNLICENSED.
-
-## Connection setup
-
-Start-KevFLIX-Setup.cmd enables pairing without playback or inference. See [connection setup](docs/CONNECTION-SETUP.md). The launcher now shows connection progress and errors, and accepts a PC address without requiring the HTTP prefix or default port to be typed.
-
-## TV navigation
-
-The simplified sidebar, poster grid, movie details and on-screen pairing keypad use arrows, OK and Back. No numeric remote is required. See [remote controls](docs/REMOTE-CONTROLS.md).
+See [THIRD-PARTY.md](THIRD-PARTY.md) for model/runtime provenance. Upstream names and licenses remain unchanged. Models download separately. The Windows installer bundles a pinned Python runtime and its notices. A license for new KevFLIX source has not been selected; package metadata uses UNLICENSED.

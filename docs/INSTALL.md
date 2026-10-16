@@ -4,7 +4,19 @@
 
 The source and packages are development artifacts. No runtime tests, model inference, encoder runs, TV installation or playback acceptance have been performed. Do not assume a packaged file has been validated on hardware.
 
-## PC setup
+## Windows installer
+
+Download KevFLIX-Setup-0.4.1.exe from Releases. It installs under %LOCALAPPDATA%/Programs/KevFLIX with a private Python runtime. Startup with Windows is checked by default. The desktop shortcut opens the PC control panel already authenticated, with a large six-digit pairing code and a New pairing code button.
+
+Connect Plex, select a local server, and add movie folders. Show Plex library paths gives the NAS paths to map to their corresponding PC-accessible folders. Verify the worker URL is the PC address reachable by the TV, particularly if there are multiple network adapters. No router forwarding is needed.
+
+In Install processing components, install video tools for playback; install dependencies and download models for dubbing after reviewing upstream terms. Gated models need your accepted Hugging Face access and HF_TOKEN in the PC environment. Downloads do not run inference. Progress is recorded in state/component-install.log.
+
+Playback starts disabled. When ready to use it, enable Allow movie playback and processing after setup, save, select Close KevFLIX worker, and reopen the desktop shortcut. Opening the panel or downloading models does not authorize an automatic playback test.
+
+Windows removal unregisters startup and shortcuts while retaining app/config/model files for recovery. The original media, Plex and Sem are separate.
+
+## PC setup from source
 
 Use Windows x64, Python 3.11 and a recent NVIDIA driver for hardware encoding.
 
@@ -44,6 +56,10 @@ Target API baseline: Tizen 6.5 or newer. TizenBrew integration was written again
 The standalone launcher subsequently loads its player interface from the local PC. It does not fetch media, translation or speech generation from a cloud service. It requires the PC worker to be running.
 
 ## Playback
+
+TV Settings has Connect with: Plex or Local movie folders. Libraries from the selected local Plex server appear directly on the left. Choose a library, filter by genre/year/collection, sort, search or use the right-hand letter index when sorted A-Z. This reads Plex metadata; it does not copy the Plex client's pinned ordering or online streaming services. Non-video libraries can be browsed; video playback is the current scope.
+
+Poster tiles show titles only underneath with watched/progress overlays. Movie details include synopsis, year, runtime, ratings, genres, cast/crew and media formats. Resume and Play from beginning are on that page. Per-movie PC processing controls are available before and during playback. Embedded text subtitle tracks are selected after opening playback; image subtitle formats are not currently rendered.
 
 Browse Movie folders, or choose Plex library after configuring Plex access and path mappings. KevFLIX asks the PC to encode the source; it does not request Plex transcoding. Enable English dubbing in the player. The picture and English soundtrack are muxed together on the PC, and playback waits for complete segments.
 

@@ -5,14 +5,43 @@
   <title>KevFLIX Worker</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header><div><small>LOCAL ENGLISH DUBBING · TIZENBREW</small><h1>KevFLIX Worker</h1></div><span id="version">0.3.1 · awaiting validation</span></header>
+<header><div><small>LOCAL ENGLISH DUBBING · TIZENBREW</small><h1>KevFLIX Worker</h1></div><span id="version">0.4.1 · awaiting validation</span></header>
 <main>
   <section id="connection"><h2>Connect to your worker</h2><p>The access key stays in this browser session.</p>
     <form id="connect"><input id="token" type="password" autocomplete="off" placeholder="Worker access key" required><button>Connect</button><button type="button" id="logout">Disconnect</button></form>
   </section>
   <p id="notice" role="status"></p>
   <section><h2>Your TV player</h2><p>Video, dubbing and upscaling run on this PC. Your NAS supplies the source files.</p>
-    <button id="pair-tv">Pair a TV</button><p id="pair-code"></p><div id="tv-devices"></div>
+    <p id="pc-mode"></p><p class="pair-label">Enter this code on the TV</p><div id="pair-code" aria-live="polite">— — — — — —</div>
+    <p id="pair-expiry"></p><button id="pair-tv">New pairing code</button><div id="tv-devices"></div>
+  </section>
+  <section id="pc-settings"><h2>PC settings</h2>
+    <h3>Plex account</h3><p id="plex-account-status">Not connected</p>
+    <div class="actions"><button id="plex-connect" type="button">Connect Plex account</button><button id="plex-disconnect" type="button">Disconnect</button><button id="plex-refresh-servers" type="button">Refresh servers</button></div>
+    <div class="actions"><select id="plex-server" aria-label="Plex server"></select><button id="plex-use-server" type="button">Use this server</button></div>
+    <p id="plex-link-status"></p><button id="plex-folders" type="button">Show Plex library paths</button><pre id="plex-folder-list"></pre>
+    <form id="settings-form">
+      <label class="check"><input id="setting-startup" type="checkbox">Start KevFLIX with Windows</label>
+      <label class="check"><input id="setting-updates" type="checkbox">Automatically update PC and TV software from GitHub</label>
+      <p class="muted" id="desktop-update-status">Desktop updates install on the next KevFLIX start.</p>
+      <label class="check"><input id="setting-playback" type="checkbox">Allow movie playback and processing after setup</label><p id="setup-lock-note"></p>
+      <label>Movie folders, one per line<textarea id="setting-roots" required></textarea></label>
+      <label>Plex NAS-to-PC path mappings (JSON)<textarea id="setting-mappings" placeholder='[{"nas":"/path/on/nas","pc":"path accessible to this PC"}]'></textarea></label>
+      <label>Output limit<select id="setting-quality"><option value="2160">4K</option><option value="1080">1080p</option><option value="720">720p</option><option value="480">480p</option></select></label>
+      <label>Video encoding<select id="setting-encoder"><option value="auto">Automatic · NVIDIA when available</option><option value="nvenc">NVIDIA hardware encoding</option><option value="software">CPU software encoding</option></select></label>
+      <label>Upscaling<select id="setting-upscale"><option value="off">Off</option><option value="on">Lanczos upscaling</option></select></label>
+      <label>HDR<select id="setting-hdr"><option value="auto">Automatic / preserve HDR</option><option value="sdr">Convert to SDR</option></select></label>
+      <label>Dubbing processor<select id="setting-device"><option value="cpu">CPU</option><option value="cooperative-cuda">GPU when resources are available</option></select></label>
+      <label>CPU threads<input id="setting-threads" type="number" min="1" max="16"></label>
+      <label>Buffered segments<input id="setting-buffer" type="number" min="1" max="6"></label>
+      <details><summary>Network settings</summary><label>Listen address<input id="setting-bind"></label><label>Port<input id="setting-port" type="number" min="1024" max="65535"></label><label>Worker URL for the TV<input id="setting-url" type="url"></label></details>
+      <button>Save settings</button>
+    </form><p id="settings-result"></p><button id="stop-worker" type="button">Close KevFLIX worker</button><p class="muted">Use the KevFLIX PC desktop shortcut to open it again after saving a change that requires reopening.</p><p id="model-status"></p>
+    <details><summary>Install processing components</summary><p>One-time internet downloads. These buttons install files without playing a video or loading a model. Close and reopen KevFLIX after installation before enabling playback.</p>
+      <button id="install-video" type="button">Install video tools</button><button id="install-dependencies" type="button">Install dubbing dependencies</button>
+      <p>Read <a href="https://github.com/malov-dot/kevflix/blob/main/THIRD-PARTY.md" target="_blank" rel="noreferrer">model terms and access requirements</a>. Gated models require your own accepted Hugging Face access and HF_TOKEN in the PC environment.</p>
+      <label class="check"><input id="accept-model-terms" type="checkbox">I have read and accept the upstream model terms</label><button id="install-models" type="button">Download dubbing models</button><p id="install-status"></p>
+    </details>
   </section>
   <section><h2>Your Plex session</h2><p id="session">No session information yet.</p>
     <div class="actions"><button data-control="pause">Pause TV</button><button data-control="play">Resume TV</button><button id="watch">Enable watch context</button><button id="watch-stop">Stop watch context</button></div>
