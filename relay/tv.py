@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import math
 import os
 import re
@@ -22,6 +23,32 @@ from .plex_browse import PlexBrowse
 from .buffer_policy import buffer_metrics, next_request, note_heartbeat
 from . import producer_policy as _producer
 from . import embedded_subtitles as _subs
+
+
+DIAGNOSTIC_KEYS = ("stage", "engine", "code", "message", "ready_state", "network_state", "native_hls", "hls_js", "ua",
+                   "session", "error", "hls", "codecs")
+_URL = re.compile(r"https?://\S+", re.I)
+
+
+def diagnostic_record(data):
+    """What the TV's player reports about a failure (its console cannot be read): whitelisted fields, short values, any URL (they
+    carry signatures) replaced. One line of the server log; nothing is stored."""
+    def clean(value):
+        if isinstance(value, str):
+            return _URL.sub("[url]", value)[:160]
+        if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
+            return value
+        return None
+    data = data if isinstance(data, dict) else {}
+    record = {}
+    for key in DIAGNOSTIC_KEYS:
+        value = data.get(key)
+        if isinstance(value, dict):
+            value = {str(k)[:24]: clean(v) for k, v in list(value.items())[:6]}
+        else:
+            value = clean(value)
+        record[key] = value
+    return record
 
 
 def _actor_beta_on(config):
@@ -359,6 +386,10 @@ class TVService:
             raise ValueError("Unsupported TV action")
         self.wake.set()
         return self.status(ident, device)
+
+    def diagnostic(self, device, data):
+        logging.info("tv_diagnostic %s", json.dumps(diagnostic_record(data), ensure_ascii=False))
+        return {"ok": True}
 
     def heartbeat(self, ident, device, position, state, generation):
         value = self.session(ident, device)

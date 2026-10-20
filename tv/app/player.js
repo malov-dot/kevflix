@@ -13,25 +13,29 @@ var SemProofDecoder=(function(){
     try{return /\.m3u8$/i.test(new URL(url,location.href).pathname);}catch(ignore){return false;}
   }
   function create(video,Hls){
-    var hls=null;
+    var hls=null,failure=null;
     function detach(){if(hls){var old=hls;hls=null;old.destroy();}}
-    function attach(url){
-      detach();
+    function canFallback(){return !!Hls&&Hls.isSupported();}
+    // preferOwn: use hls.js (MSE) even where the browser claims native HLS (a TV whose own HLS player refuses the stream).
+    function attach(url,preferOwn){
+      detach();failure=null;
       var native=!!video.canPlayType('application/vnd.apple.mpegurl');
-      if(!isHls(url)||native||!Hls||!Hls.isSupported()){
+      if(!isHls(url)||!canFallback()||(native&&preferOwn!==true)){
         video.src=url;video.load();
         return !isHls(url)?'native-file':native?'native-hls':'native-unsupported';
       }
+      if(video.getAttribute('src')){video.removeAttribute('src');video.load();}
       var own=hls=new Hls({enableWorker:false,startPosition:0});
       own.on(Hls.Events.ERROR,function(event,data){
         if(own!==hls||!data||!data.fatal)return;
+        failure={type:data.type,details:data.details,status:data.response&&data.response.code};
         detach();
         video.dispatchEvent(new Event('error'));
       });
       own.loadSource(url);own.attachMedia(video);
       return 'hls.js';
     }
-    return {attach:attach,detach:detach,engine:function(){return hls?'hls.js':'native';}};
+    return {attach:attach,detach:detach,canFallback:canFallback,lastError:function(){return failure;},engine:function(){return hls?'hls.js':'native';}};
   }
   return {create:create,isHls:isHls};
 }());
@@ -449,6 +453,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     $('subtitle-track').value=value.subtitles;$('watch-mode').value=value.watch_mode;$('progress-sync').value=value.sync_progress?'on':'off';
     updateStatus(value);showControls();$('play-pause').focus();
     clearInterval(pollTimer);pollTimer=setInterval(poll,2000);
+    reportFailure('capabilities');
   }
   function waitFor(event,number,timeout,signal){
     return new Promise(function(resolve,reject){
@@ -462,14 +467,35 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       if(signal)signal.addEventListener('abort',cancelled,{once:true});
     });
   }
-  async function loadStream(){
+  // The TV's console cannot be read from the PC: one short report per failure lands in the PC's server log.
+  function reportFailure(stage,extra){
+    try{
+      var e=video.error;
+      api('diagnostic',Object.assign({stage:stage,engine:proofDecoder.engine(),code:e?e.code:null,message:e&&e.message?String(e.message):'',
+        ready_state:video.readyState,network_state:video.networkState,native_hls:video.canPlayType('application/vnd.apple.mpegurl')||'',
+        hls_js:proofDecoder.canFallback(),ua:navigator.userAgent||'',session:session?session.id:'',codecs:codecSupport()},extra||{})).catch(function(){});
+    }catch(ignore){}
+  }
+  // What this TV can decode through MSE (the hls.js path) and through the video tag: part of every failure report.
+  function codecSupport(){
+    var kinds={h264:'avc1.640028',hevc:'hvc1.1.6.L120.90',av1:'av01.0.08M.08'},out={};
+    Object.keys(kinds).forEach(function(name){
+      var type='video/mp4; codecs="'+kinds[name]+'"';
+      try{out[name]=(typeof MediaSource!=='undefined'&&MediaSource.isTypeSupported(type)?'mse ':'')+(video.canPlayType(type)||'no');}catch(ignore){out[name]='?';}
+    });
+    return out;
+  }
+  function prefersOwnDecoder(){try{return localStorage.getItem('kevflix-engine')==='hlsjs';}catch(ignore){return false;}}
+  function rememberOwnDecoder(){try{localStorage.setItem('kevflix-engine','hlsjs');}catch(ignore){}}
+  async function loadStream(forceOwn){
     if(!session)return;loading=true;
-    var number=operation,generation=session.generation,id=session.id,target=desiredPosition-session.base,serial=++loadSerial;
+    var number=operation,generation=session.generation,id=session.id,target=desiredPosition-session.base,serial=++loadSerial,retryOwn=false;
+    var own=forceOwn===true||prefersOwnDecoder();
     loadAbort=new AbortController();var signal=loadAbort.signal;
     try{
       video.pause();$('buffering').hidden=false;
-      var ready=waitFor('loadedmetadata',number,30000,signal);
-      proofDecoder.attach(session.url);await ready;
+      var ready=waitFor('loadedmetadata',number,own?30000:15000,signal);
+      proofDecoder.attach(session.url,own);await ready;
       if(!session||id!==session.id||generation!==session.generation)return;
       loadedGeneration=generation;
       mediaStart=(session.dub||session.compatibility)&&video.seekable.length?video.seekable.start(0):0;
@@ -480,12 +506,18 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       }
       if(number!==operation||!session||generation!==session.generation)return;
       $('buffering').hidden=true;reportedError='';playerMessage('');
+      if(own&&forceOwn===true)rememberOwnDecoder();     // the TV's own HLS player failed and hls.js worked: start with it from now on
       if(SemBufferGate.canResume(bufferGate,session,wantedPlay))await playVideo();
       else if(wantedPlay)$('buffering').hidden=false;
       showControls();
     }catch(error){
-      if(number===operation&&serial===loadSerial){reportedError=error.message;playerMessage(error.message);showControls();}
+      if(number===operation&&serial===loadSerial){
+        reportFailure(own?'hls.js-failed':'native-failed',{error:error.message,hls:proofDecoder.lastError()});
+        if(!own&&proofDecoder.canFallback())retryOwn=true;        // one automatic retry with the player's own decoder
+        else{reportedError=error.message;playerMessage(error.message);showControls();}
+      }
     }finally{if(serial===loadSerial)loading=false;}
+    if(retryOwn)return loadStream(true);
   }
   async function poll(){
     if(!session||polling)return;polling=true;
@@ -583,7 +615,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   video.addEventListener('pause',function(){if(!wantedPlay)$('buffering').hidden=true;});
   video.addEventListener('timeupdate',function(){if(session){$('time').textContent=clock(position())+' / '+clock(session.duration);$('progress-fill').style.width=100*position()/session.duration+'%';}});
   video.addEventListener('ended',function(){wantedPlay=false;setPlayState();showControls();void poll();});
-  video.addEventListener('error',function(){if(session){playerMessage('Playback could not continue. Lower the output limit, select SDR conversion, or turn dubbing off.');showControls();}});
+  video.addEventListener('error',function(){if(session&&!loading){reportFailure('playback-error');playerMessage('Playback could not continue. Lower the output limit, select SDR conversion, or turn dubbing off.');showControls();}});
   document.addEventListener('visibilitychange',function(){if(document.hidden&&session){wantedPlay=false;video.pause();void poll();}});
   window.addEventListener('pagehide',function(){
     if(session)fetch('/tv-api/control',{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify({id:session.id,action:'stop'}),keepalive:true}).catch(function(){});

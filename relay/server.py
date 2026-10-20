@@ -380,6 +380,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/tv-api/heartbeat":
                     return self.json_response(self.app.tv.heartbeat(data["id"], device, data["position"],
                         data["state"], data["generation"]))
+                if path == "/tv-api/diagnostic":
+                    return self.json_response(self.app.tv.diagnostic(device, data))
                 return self.json_response({"error": "Unknown TV endpoint"}, 404)
             if path.startswith("/hooks/plex/"):
                 secret = path.removeprefix("/hooks/plex/")
