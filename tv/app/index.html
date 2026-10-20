@@ -13,7 +13,7 @@
     <button id="nav-search" class="nav" data-page="search"><span class="symbol">⌕</span>Search</button>
     <button id="nav-settings" class="nav" data-page="settings"><span class="symbol">⚙</span>Settings</button>
   </nav>
-  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.4.40</small></div>
+  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.4.41</small></div>
 </aside>
 <main id="main">
   <header id="header"><div><small id="eyebrow">YOUR COLLECTION</small><h1 id="heading">Home</h1></div><span id="worker-mode"></span></header>
@@ -57,11 +57,14 @@
 </section>
 <section id="player" hidden>
   <video id="video" playsinline preload="auto"></video>
-  <div id="buffering" hidden><div class="spinner"></div><h2 id="buffer-title">Preparing playback</h2><p id="buffer-detail"></p></div>
-  <div id="player-controls"><div class="play-title"><div><h2 id="movie-title"></h2><p id="profile"></p></div><span id="time"></span></div>
-    <button id="timeline" class="timeline" aria-label="Seek position"><span id="progress-fill"></span></button>
-    <div class="controls"><button id="leave-player">‹ Movie</button><button id="rewind">−10 sec</button><button id="play-pause" class="primary">Pause</button><button id="sound">Sound: on</button><button id="forward">+10 sec</button><button id="dub">Dubbing: off</button><button id="watch">Sem: off</button><button id="playback-settings">Settings</button></div>
-    <p id="player-message" role="status"></p>
+  <div id="buffering" hidden><div class="spinner"></div><h2 id="buffer-title">Preparing playback</h2><div id="buffer-bar" hidden><span id="buffer-fill"></span></div><p id="buffer-detail"></p></div>
+  <div id="player-controls">
+    <div class="pc-top"><button id="leave-player" class="pc-back" aria-label="Back to movie"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M30 10 16 24l14 14" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="play-title"><h2 id="movie-title"></h2><p id="profile"></p></div></div>
+    <div class="pc-bottom">
+      <p id="player-message" role="status"></p>
+      <div class="pc-timeline"><button id="timeline" class="timeline" aria-label="Seek position"><span id="progress-ready"></span><span id="progress-fill"></span></button><span id="time"></span></div>
+      <div class="controls"><div class="pc-transport"><button id="rewind" class="pc-icon" aria-label="Back 10 seconds"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 9a15 15 0 1 1-13.2 8" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round"/><path d="M24 3 15 9l9 6z" fill="currentColor"/><text x="24" y="31" text-anchor="middle" font-size="14" font-weight="700" fill="currentColor" font-family="Arial,Helvetica,sans-serif">10</text></svg></button><button id="play-pause" class="primary pc-main" data-state="play" aria-label="Play"><svg class="ic-play" viewBox="0 0 48 48" aria-hidden="true"><path d="M15 8v32l27-16z" fill="currentColor"/></svg><svg class="ic-pause" viewBox="0 0 48 48" aria-hidden="true"><path d="M13 8h8v32h-8zM27 8h8v32h-8z" fill="currentColor"/></svg></button><button id="forward" class="pc-icon" aria-label="Forward 10 seconds"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 9a15 15 0 1 0 13.2 8" fill="none" stroke="currentColor" stroke-width="3.6" stroke-linecap="round"/><path d="M24 3l9 6-9 6z" fill="currentColor"/><text x="24" y="31" text-anchor="middle" font-size="14" font-weight="700" fill="currentColor" font-family="Arial,Helvetica,sans-serif">10</text></svg></button></div><div class="pc-options"><button id="dub" class="chip">Dubbing: off</button><button id="sound" class="chip">Sound: on</button><button id="watch" class="chip">Sem: off</button><button id="playback-settings" class="chip">Settings</button></div></div>
+    </div>
   </div>
   <aside id="playback-panel" hidden><h2>Playback settings</h2><div id="playback-options"></div><button id="close-playback-settings" class="primary">Done</button></aside>
 </section>

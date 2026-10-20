@@ -354,7 +354,30 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   function showControls(){
     $('player-controls').classList.remove('controls-hidden');clearTimeout(hideTimer);
     if(session&&wantedPlay&&!video.paused&&!reportedError)
-      hideTimer=setTimeout(function(){$('player-controls').classList.add('controls-hidden');},7000);
+      hideTimer=setTimeout(function(){$('player-controls').classList.add('controls-hidden');},5000);
+  }
+  // Play button: its icon follows data-state (CSS), never its text.
+  function setPlayState(){var b=$('play-pause');b.dataset.state=wantedPlay?'pause':'play';b.setAttribute('aria-label',wantedPlay?'Pause':'Play');}
+  // What the TV is doing with the picture, in plain words: the output limit is not upscaling.
+  function profileLabel(s){
+    var parts=[s.dub?'English dubbing':'Original audio'];
+    if(s.profile==='Original file')parts.push('Original file');
+    else if(s.upscale)parts.push('Upscaling to '+(s.quality===2160?'4K':s.quality+'p'));
+    else if(s.quality&&s.quality<2160)parts.push('Output limited to '+s.quality+'p');
+    else parts.push('Original resolution');
+    return parts.join(' · ');
+  }
+  // One buffering card: title, optional progress bar (fraction 0..1) and one line of detail.
+  function bufferView(title,detail,fraction){
+    $('buffering').hidden=false;$('buffer-title').textContent=title;$('buffer-detail').textContent=detail||'';
+    $('buffer-bar').hidden=fraction===null||fraction===undefined;
+    if(!$('buffer-bar').hidden)$('buffer-fill').style.width=Math.round(100*Math.max(0,Math.min(1,fraction)))+'%';
+  }
+  function bufferDetail(verdict,value){
+    var parts=[];
+    if(verdict.lead!==null&&verdict.need!==null)parts.push(clock(verdict.lead)+' of '+clock(verdict.need)+' buffered');
+    parts.push(wantedPlay&&value.paused_intent!==true?'Playback starts automatically':'Press Play to start');
+    return parts.join(' · ');
   }
   function updateStatus(value){
     if(!session||session.id!==value.id)return;
@@ -362,19 +385,20 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     var changed=session.generation!==value.generation;
     session=value;
     $('movie-title').textContent=session.title;
-    $('profile').textContent=session.profile+' · '+(session.dub?'English dubbing':'Original audio');
+    $('profile').textContent=profileLabel(session);
     $('dub').textContent='English dubbing: '+(session.dub?'on':'off');
     $('watch').textContent='Watch with Sem: '+(session.watch?'on':'off');
-    $('play-pause').textContent=wantedPlay?'Pause':'Play';
+    setPlayState();
     $('time').textContent=clock(position())+' / '+clock(session.duration);
     $('progress-fill').style.width=(100*position()/Math.max(1,session.duration))+'%';
+    if(typeof value.ready_through==='number')$('progress-ready').style.width=Math.max(0,Math.min(100,100*value.ready_through/Math.max(1,session.duration)))+'%';
     if(value.error){reportedError=value.error;playerMessage(value.error);video.pause();showControls();}
     else if(value.resource_wait)playerMessage(value.resource_wait);
     if(changed){proofDecoder.detach();loadedGeneration=0;desiredPosition=value.position;video.pause();if(loadAbort)loadAbort.abort();loading=false;loadSerial++;}
     var verdict=SemBufferGate.evaluate(bufferGate,value);
     if(SemBufferGate.loadable(bufferGate,value)&&loadedGeneration!==value.generation&&!loading&&!value.error)void loadStream();
-    if(!value.ready){$('buffering').hidden=false;$('buffer-title').textContent=session.dub?'Preparing English audio':'Preparing compatible video';$('buffer-detail').textContent='Playback waits for real audio and video. You can turn dubbing off to return to the original. '+SemBufferGate.describe(verdict,value,wantedPlay);}
-    else if(!verdict.open&&loadedGeneration!==value.generation){$('buffering').hidden=false;$('buffer-title').textContent='Buffering';$('buffer-detail').textContent=SemBufferGate.describe(verdict,value,wantedPlay);}
+    if(!value.ready){bufferView(session.dub?'Preparing English dub':'Preparing video',wantedPlay?'Playback starts automatically when it is ready.':'Press Play when you want to start.',null);}
+    else if(!verdict.open&&(loadedGeneration!==value.generation||(wantedPlay&&video.paused&&!video.ended))){bufferView('Buffering',bufferDetail(verdict,value),verdict.need?(verdict.lead||0)/verdict.need:null);}
     if(SemBufferGate.autoResume(bufferGate,value,{loaded:loadedGeneration===value.generation&&!loading,paused:video.paused,ended:video.ended,busy:resuming,error:!!reportedError,wantedPlay:wantedPlay})){resuming=true;$('buffering').hidden=true;video.play().catch(function(e){playerMessage(e.message);}).then(function(){resuming=false;});}
     updateCaptions(false);
   }
@@ -397,7 +421,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     bufferGate=SemBufferGate.create();
-    session=value;desiredPosition=value.position;wantedPlay=false;loadedGeneration=0;reportedError='';
+    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';
     $('details').hidden=true;$('player').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;message('');
     $('audio-track').replaceChildren.apply($('audio-track'),value.audio_tracks.map(function(track){
       var option=document.createElement('option');option.value=track.index;
@@ -483,7 +507,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     wantedPlay=!wantedPlay;
     if(wantedPlay&&loadedGeneration===session.generation&&SemBufferGate.canResume(bufferGate,session,wantedPlay)){try{await video.play();}catch(e){playerMessage(e.message);}}
     else video.pause();
-    $('play-pause').textContent=wantedPlay?'Pause':'Play';showControls();
+    setPlayState();showControls();
     var intentId=session.id;api('control',{id:intentId,action:wantedPlay?'play':'pause'}).catch(function(e){playerMessage(e.message);}).then(function(){if(session&&session.id===intentId)void poll();});
   }
   async function leave(){
@@ -540,10 +564,11 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     try{updateStatus(await api('control',{id:session.id,action:'watch',enabled:!session.watch}));playerMessage('Ask Sem to watch with you in an existing voice call.');}
     catch(error){playerMessage(error.message);}
   };
-  video.addEventListener('waiting',function(){if(session){$('buffering').hidden=false;$('buffer-title').textContent='Buffering';$('buffer-detail').textContent='Waiting for the next complete segment…';}});
+  video.addEventListener('waiting',function(){if(session)bufferView('Buffering','Waiting for the next part of the movie…',null);});
   video.addEventListener('playing',function(){$('buffering').hidden=true;showControls();});
+  video.addEventListener('pause',function(){if(!wantedPlay)$('buffering').hidden=true;});
   video.addEventListener('timeupdate',function(){if(session){$('time').textContent=clock(position())+' / '+clock(session.duration);$('progress-fill').style.width=100*position()/session.duration+'%';}});
-  video.addEventListener('ended',function(){wantedPlay=false;$('play-pause').textContent='Play';showControls();void poll();});
+  video.addEventListener('ended',function(){wantedPlay=false;setPlayState();showControls();void poll();});
   video.addEventListener('error',function(){if(session){playerMessage('Playback could not continue. Lower the output limit, select SDR conversion, or turn dubbing off.');showControls();}});
   document.addEventListener('visibilitychange',function(){if(document.hidden&&session){wantedPlay=false;video.pause();void poll();}});
   window.addEventListener('pagehide',function(){
@@ -553,6 +578,13 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     var scope=!$('choice-panel').hidden?$('choice-panel'):!$('info-panel').hidden?$('info-panel'):!$('movie-options').hidden?$('movie-options'):!$('pair-panel').hidden?$('pair-panel'):session?($('playback-panel').hidden?$('player-controls'):$('playback-panel')):!$('details').hidden?$('details'):document;
     var targets=Array.prototype.filter.call(scope.querySelectorAll('button,input,select,a[href],[tabindex="0"]'),function(e){return !e.disabled&&e.tabIndex>=0&&e.getClientRects().length;});
     var active=document.activeElement,rect=active.getBoundingClientRect(),cx=rect.left+rect.width/2,cy=rect.top+rect.height/2;
+    // Playback controls: Up/Down follow the layout (Back, seek bar, then the button rows) instead of the nearest-centre guess.
+    if(session&&$('playback-panel').hidden&&$('player-controls').contains(active)){
+      var vertical=null;
+      if(direction===38)vertical=active===$('timeline')?$('leave-player'):active===$('leave-player')?null:$('timeline');
+      else if(direction===40)vertical=active===$('leave-player')?$('timeline'):active===$('timeline')?$('play-pause'):null;
+      if(vertical){vertical.focus();return;}
+    }
     if(scope===document&&$('alphabet').contains(active)){
       if(direction===37){var back=returnFromAlphabet&&document.contains(returnFromAlphabet)?returnFromAlphabet:$('library').querySelector('button');if(back){back.focus();back.scrollIntoView({block:'nearest'});}return;}
       if(direction===38||direction===40){var next=direction===38?active.previousElementSibling:active.nextElementSibling;if(next){next.focus();next.scrollIntoView({block:'nearest'});}return;}
@@ -579,6 +611,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       if(value<score){best=e;score=value;}
     });
     if(inRow)best=inRow;
+    else if(session&&$('playback-panel').hidden&&$('player-controls').contains(active)&&(direction===37||direction===39))best=null;   // end of a controls row: stay
     if(best){best.focus();best.scrollIntoView({block:'nearest',inline:'nearest'});}
   }
   window.addEventListener('keydown',function(event){
