@@ -227,11 +227,15 @@ var SemTvProbe=(function(){
     if(suppliedLauncher)history.replaceState(null,'',location.pathname+location.search);
   }catch(ignore){}
   try{browsePrefs=JSON.parse(localStorage.getItem('kevflix-browse')||'{}');sourceChosen=!!browsePrefs.source;sourceMode=browsePrefs.source==='folders'?'folders':'plex';}catch(ignore){}
-  var defaults={quality:2160,upscale:false,hdr_mode:'auto',surround:'auto',dub:false,watch:false,commentary:'balanced',encoder:'default',threads:2,subtitles:'off',progress_sync:true},resumeMap={};
+  var defaults={quality:2160,upscale:false,hdr_mode:'auto',surround:'auto',dub:true,watch:false,commentary:'balanced',encoder:'default',threads:2,subtitles:'off',progress_sync:true},resumeMap={};
   try{Object.assign(defaults,JSON.parse(localStorage.getItem('kevflix-defaults')||'{}'));resumeMap=JSON.parse(localStorage.getItem('kevflix-resume')||'{}');}catch(ignore){}
   // One-time clean-up: upscaling is on only when the viewer turns it on. A saved 'Lanczos upscaling' default (from an earlier build or a
   // stray key press) is switched off once; a choice made after this point is kept.
   try{if(localStorage.getItem('kevflix-upscale-reset')!=='1'){if(defaults.upscale===true){defaults.upscale=false;localStorage.setItem('kevflix-defaults',JSON.stringify(defaults));}localStorage.setItem('kevflix-upscale-reset','1');}}catch(ignore){}
+  // One-time: English dubbing is what KevFLIX is for, so it starts ON. The old built-in default was Off and a copy of it was saved with any
+  // other default change (a Resume without dubbing played the film's own audio and failed on the owner's TV); that Off is switched on once.
+  // A choice made after this point is kept (the dubbing button on the movie screen now saves it).
+  try{if(localStorage.getItem('kevflix-dub-default-on')!=='1'){if(defaults.dub!==true){defaults.dub=true;localStorage.setItem('kevflix-defaults',JSON.stringify(defaults));}localStorage.setItem('kevflix-dub-default-on','1');}}catch(ignore){}
   $('worker-address').textContent='Worker: '+location.origin;
   function message(text){
     $('notice').textContent=text||'';$('notice').hidden=!text;clearTimeout(noticeTimer);
@@ -1024,11 +1028,13 @@ var SemTvProbe=(function(){
     saveBrowse();sourceMode=value;sourceChosen=true;folder=null;parent=null;plexTrail=[];browsePrefs.folder=null;
     if(value==='plex')restoreFilters();$('library-source').value=value;saveBrowse();renderLibraryNav();$('source-label').textContent=value==='plex'?'Plex':'Local movie folders';
   });};
+  // What the main button will do, including the sound: 'Resume at 6:30 · English dubbing' or '... · original audio'.
+  function playLabel(){return (selectedItem&&selectedItem.resume>10?'Resume at '+clock(selectedItem.resume):'Play')+(moviePrefs&&moviePrefs.dub?' · English dubbing':' · original audio');}
   function showDetails(item,card){
     if(!selectedItem||selectedItem.id!==item.id||selectedItem.plex!==item.plex)moviePrefs=Object.assign({encoder:'default',threads:2,subtitles:'off'},defaults);
     selectedItem=item;selectedCard=card;$('details').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;
     renderDetails(item);
-    $('detail-play').textContent=item.resume>10?'Resume at '+clock(item.resume):'Play';
+    $('detail-play').textContent=playLabel();
     $('detail-restart').hidden=!(item.resume>10);
     $('detail-dub').textContent='English dubbing: '+(moviePrefs.dub?'on':'off');$('detail-watch').textContent='Watch with Sem: '+(moviePrefs.watch?'on':'off');
     $('detail-play').disabled=item.plex&&item.playable===false;
@@ -1080,7 +1086,7 @@ var SemTvProbe=(function(){
   $('details-back').onclick=closeDetails;
   $('detail-play').onclick=function(){if(selectedItem)openMovie(selectedItem,false).catch(function(e){message(e.message);});};
   $('detail-restart').onclick=function(){if(selectedItem)openMovie(selectedItem,true).catch(function(e){message(e.message);});};
-  $('detail-dub').onclick=function(){moviePrefs.dub=!moviePrefs.dub;if(!moviePrefs.dub&&moviePrefs.subtitles==='dub')moviePrefs.subtitles='off';$('detail-dub').textContent='English dubbing: '+(moviePrefs.dub?'on':'off');};
+  $('detail-dub').onclick=function(){moviePrefs.dub=!moviePrefs.dub;if(!moviePrefs.dub&&moviePrefs.subtitles==='dub')moviePrefs.subtitles='off';$('detail-dub').textContent='English dubbing: '+(moviePrefs.dub?'on':'off');$('detail-play').textContent=playLabel();defaults.dub=moviePrefs.dub;saveDefaults();};   // the choice is remembered for the next movie and the next start
   $('detail-watch').onclick=function(){moviePrefs.watch=!moviePrefs.watch;$('detail-watch').textContent='Watch with Sem: '+(moviePrefs.watch?'on':'off');};
   var surroundChoices=[{value:'auto',label:'5.1 surround when the film has it'},{value:'stereo',label:'Stereo'}];
   var encoders=[{value:'software',label:'CPU software encoding'}];

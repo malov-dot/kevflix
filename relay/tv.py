@@ -30,6 +30,11 @@ from . import embedded_subtitles as _subs
 # by 1+sqrt(2)); the surround mixes and the film's own 5.1 are on the native scale. +5.8 dB (measured with ebur128 on front/center
 # material, where the center is added on top of FL/FR) keeps a fallback chunk at the loudness of its neighbours.
 SURROUND_UPMIX = "volume=5.8dB,pan=5.1|FL=FL|FR=FR|FC=0.5*FL+0.5*FR|LFE=0*FL|BL=0*FL|BR=0*FL"
+# The two rear (surround) channels silenced, every other channel passed through (channels by index, so 5.1 and 5.1(side) both work).
+# Owner request 2026-10-20: the rear channels of the film still carry the reverb/echo of the ORIGINAL language speech (they follow its
+# loudness pattern at 0.95 in the published mix), which is heard as a Russian echo behind the English voice. tv.surround_rear = "on"
+# brings them back.
+SURROUND_REAR_OFF = "pan=5.1|FL=c0|FR=c1|FC=c2|LFE=c3|BL=0*c0|BR=0*c0"
 def passthrough_mode(mode):
     """True for a chunk whose english.wav is just the original soundtrack: no-dialogue, original-unverified, original-trial-fallback,
     original-English... (every producer mode that starts with "original")."""
@@ -1550,6 +1555,10 @@ class TVService:
             else:
                 audio_input = None
                 identity_parts.append(["surround", "original"])
+            if str(self.config["tv"].get("surround_rear", "off")).lower() != "on":
+                identity_parts.append(["surround", "rear-off"])                  # a different audio chain is a different cached segment
+                if not audio_prefix.startswith(SURROUND_UPMIX):                  # the stereo upmix already leaves the rear channels empty
+                    audio_prefix = SURROUND_REAR_OFF + "," + audio_prefix
         identity = json.dumps(identity_parts)
         if value.get("speech_engine") == "xtranslator":
             identity = json.dumps(["xtranslator", identity])
