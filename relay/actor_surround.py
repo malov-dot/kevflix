@@ -8,8 +8,8 @@ The dub itself is built in stereo (the first pass works on the ITU downmix of th
    estimate the stereo mix already subtracts (the removal stem): per replaced line, per frequency bin, a small ridge regression of the
    channel on the stem's left and right. Only the part of a channel that is coherent with the speech is taken, so music, effects and
    ambience in the same channel are left alone, and the estimate can never be louder than the channel itself.
-2. The English voice goes back into the channels in proportion to the speech energy found in each of them, at the level that makes the
-   ITU downmix of the 5.1 result carry the same voice as the stereo mix.
+2. The English voice goes into the CENTER channel only (film dialogue lives there; copies in FL/FR/surrounds sounded like an echo), at the
+   level that makes the ITU downmix of the 5.1 result carry the same voice as the stereo mix.
 3. Both steps go through the same ``protect_dialogue_mix`` as the stereo mix (same envelope, same protected original spans, same
    headroom limiting), so everything outside the replaced lines is the original 5.1 bit for bit and the LFE is never touched.
 
@@ -182,8 +182,9 @@ def _rms(x):
 
 
 def voice_channels(speech, generated, envelope, rate):
-    """(n, 6) English voice for the surround mix: the stereo mix's voice spread over the channels in proportion to the speech
-    energy found in each (per replaced run), at the level that makes the ITU downmix of the result equal the stereo voice."""
+    """(n, 6) English voice for the surround mix: the stereo mix's voice in the CENTER channel only, at the level that makes the ITU
+    downmix of the result carry the same voice as the stereo mix. (Not spread over FL/FR/surrounds: that played the same voice from
+    several speakers at once and sounded like a heavy echo.)"""
     import numpy as np
     n = len(generated)
     voice = np.zeros((n, 6), dtype=np.float32)
@@ -198,11 +199,11 @@ def voice_channels(speech, generated, envelope, rate):
             a = max(a, (groups[index - 1][1] + first) // 2)
         if index + 1 < len(groups):
             b = min(b, (last + groups[index + 1][0]) // 2)
-        active = np.asarray(envelope[first:last]) > 0.5
-        weights = np.array([_rms(speech[first:last, c][active]) for c in FULL_RANGE])
-        if weights.max() <= 0:
-            weights = np.array([0.0, 0.0, 1.0, 0.0, 0.0])              # nothing found: the center, where film dialogue lives
-        weights = np.where(weights >= CHANNEL_GATE * weights.max(), weights, 0.0)
+        # The English voice goes to the CENTER channel only, where film dialogue lives. It used to be copied into every channel that held
+        # at least half as much speech as the loudest one (FL, FR, the surrounds), so one dry voice played from several speakers at the
+        # same instant; on a soundbar or receiver whose channels do not arrive together that is heard as a strong echo. `speech` still
+        # decides which channels have the ORIGINAL speech removed (speech_components), not where the English voice is put.
+        weights = np.array([0.0, 0.0, 1.0, 0.0, 0.0])
         have = np.abs(mono[a:b]) > 0
         u = _rms(mono[a:b][have])
         if u <= 0:
