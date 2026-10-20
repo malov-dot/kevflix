@@ -1,0 +1,291 @@
+diff --git a/linux_supervisor.py b/linux_supervisor.py
+index da6f1ed..6b4a4c7 100644
+--- a/linux_supervisor.py
++++ b/linux_supervisor.py
+@@ -91,6 +91,51 @@ def gpu_status(nvidia_smi, owned):
+             'owned_mib': sum(sizes) if all(value is not None for value in sizes) else None}
+ 
+ 
++class MTGGUFUnsupported(RuntimeError):
++    def __init__(self, detail):
++        super().__init__(detail)
++        self.fault = {'code': 'xt_mt_gguf_unsupported', 'detail': str(detail),
++                      'fatal': True, 'recoverable': False, 'stage': 'mt_gguf_load'}
++
++
++def log_tail(path):
++    try:
++        with open(path, 'rb') as handle:
++            handle.seek(0, 2)
++            handle.seek(max(0, handle.tell() - 16384))
++            return handle.read().decode('utf-8', errors='replace')
++    except OSError as error:
++        return str(error)
++
++
++def verify_gguf_header(manifest, check, known):
++    """Owned CPU-only helper; poll lease/floor while it maps metadata, before model launch."""
++    output = Path(manifest['status_path']).parent / 'gguf-header.json'
++    env = {**os.environ, **manifest['environment'], 'CUDA_VISIBLE_DEVICES': '',
++           'KEVFLIX_XT_RUN_TOKEN': manifest['token']}
++    with output.open('wb') as handle:
++        child = subprocess.Popen(manifest['gguf_header_argv'], env=env, stdin=subprocess.DEVNULL,
++                                 stdout=handle, stderr=handle, start_new_session=True)
++        row = process_table().get(child.pid)
++        if row:
++            known[child.pid] = row['start_ticks']
++        deadline = time.monotonic() + min(120, float(manifest['start_timeout_seconds']))
++        while child.poll() is None:
++            check()
++            if time.monotonic() >= deadline:
++                raise MTGGUFUnsupported('CPU header validation deadline exceeded')
++            time.sleep(.2)
++    if child.returncode:
++        raise MTGGUFUnsupported(log_tail(output))
++    try:
++        result = json.loads(output.read_text())
++        if result.get('ok') is not True or result.get('inference') is not False:
++            raise ValueError('header result was not a metadata-only pass')
++        return result
++    except (ValueError, OSError) as error:
++        raise MTGGUFUnsupported(log_tail(output)) from error
++
++
+ class GPUBudgetInsufficient(RuntimeError):
+     def __init__(self, arithmetic):
+         self.fault = {'kind': 'fatal', 'code': 'xt_gpu_budget_insufficient',
+@@ -151,12 +196,9 @@ def verify_assets(manifest, check):
+         'xt_vocab': ('XRXRX/X-Voice', 'XVoice_Base_Stage1/vocab.txt'),
+         'xt_vocos_dir': ('charactr/vocos-mel-24khz', None),
+         'xt_campplus_model': ('iic/speech_campplus_sv_zh-cn_16k-common', None),
++        'xt_mt_model': ('mradermacher/LMT-60-8B-GGUF', 'LMT-60-8B.Q8_0.gguf'),
++        'xt_mt_tokenizer': ('NiuTrans/LMT-60-8B', None),
+     }
+-    mt = [repo for repo in ('NiuTrans/LMT-60-8B', 'NiuTrans/LMT-60-4B') if repo in by_repo
+-          and Path(by_repo[repo]['folder']).resolve() == Path(paths['xt_mt_model']).resolve()]
+-    if len(mt) != 1:
+-        raise RuntimeError('Configured LMT model is not bound to one provisioned LMT record')
+-    bindings['xt_mt_model'] = (mt[0], None)
+     for key, (repo, relative) in bindings.items():
+         record = by_repo.get(repo)
+         if record is None:
+@@ -289,8 +331,13 @@ def main():
+         state['gpu'] = gpu_status(manifest['nvidia_smi'], set(owned))
+         if not admission and state['gpu']['free_mib'] < max(3072, int(manifest['gpu_floor_mib'])):
+             raise RuntimeError('resource:3072 MiB GPU free-memory floor breached')
+-        if any(child.poll() is not None for child in children):
+-            raise RuntimeError('a service exited before requested cleanup')
++        for child in children:
++            if child.poll() is not None:
++                mt = state['services'].get('mt', {})
++                if mt.get('pid') == child.pid and mt.get('phase') == 'loading':
++                    spec = next(item for item in manifest['services'] if item['name'] == 'mt')
++                    raise MTGGUFUnsupported('vLLM GGUF load exited: ' + log_tail(spec['log']))
++                raise RuntimeError('a service exited before requested cleanup')
+         for service in state['services'].values():
+             if service['phase'] == 'ready' and not owns_listener(urllib.parse.urlparse(service['health_url']).port, owned):
+                 raise RuntimeError('owned service lost its loopback listener')
+@@ -312,6 +359,7 @@ def main():
+             reservations[port] = reserved
+         state['phase'] = 'verifying_assets'
+         state['asset_identity'] = verify_assets(manifest, check)
++        state['gguf_header'] = verify_gguf_header(manifest, check, known)
+         state['phase'] = 'starting'
+         for spec in manifest['services']:
+             check(admission=bool(spec.get('vllm_budget')))
+@@ -357,6 +405,8 @@ def main():
+                 if healthy:
+                     break
+                 if time.monotonic() >= deadline:
++                    if spec['name'] == 'mt':
++                        raise MTGGUFUnsupported('vLLM GGUF startup deadline: ' + log_tail(spec['log']))
+                     raise RuntimeError(spec['name'] + ' startup health deadline exceeded')
+                 time.sleep(.5)
+             state['services'][spec['name']]['phase'] = 'ready'
+@@ -366,7 +416,7 @@ def main():
+             time.sleep(1.0)
+     except BaseException as error:
+         reason = '%s: %s' % (type(error).__name__, error)
+-        if isinstance(error, GPUBudgetInsufficient):
++        if isinstance(error, (GPUBudgetInsufficient, MTGGUFUnsupported)):
+             state['fault'] = error.fault
+     finally:
+         confirmed, processes, gpu = cleanup(manifest, known)
+diff --git a/relay/xt_services.py b/relay/xt_services.py
+index 009bf61..da7fa24 100644
+--- a/relay/xt_services.py
++++ b/relay/xt_services.py
+@@ -8,6 +8,7 @@ from __future__ import annotations
+ 
+ import hashlib
+ import json
++import math
+ import os
+ import shutil
+ from pathlib import Path, PurePosixPath
+@@ -45,11 +46,29 @@ class XTServices:
+         self._closed = False
+         self._failure = None
+         self._last_budget = None
++        self._demucs_memory = None
+         self._last_used = time.monotonic()
+ 
+     def _value(self, key, default=None):
+         return self.settings.get(key, default)
+ 
++    def set_demucs_memory(self, memory):
++        """Accept the live resident's latest completed window, never cached stem metadata."""
++        with self._lock:
++            self._demucs_memory = None
++            if not isinstance(memory, dict) or memory.get('version') != 'demucs-window-cuda-memory-v1':
++                raise MovieConfigurationError('xt_demucs_memory_missing', 'Fresh resident Demucs window memory is required')
++            peak, current = memory.get('peak_reserved_bytes'), memory.get('current_reserved_bytes')
++            measured = memory.get('measured_at_unix')
++            if any(type(value) is not int or value < 0 for value in (peak, current)) \
++                    or not str(memory.get('device', '')).startswith('cuda') \
++                    or memory.get('reset_peak_memory_stats') is not True or memory.get('empty_cache_completed') is not True \
++                    or not isinstance(measured, (int, float)) or not math.isfinite(measured) \
++                    or not 0 <= time.time() - measured <= 900 or not isinstance(memory.get('pid'), int) \
++                    or memory['pid'] <= 0:
++                raise MovieConfigurationError('xt_demucs_memory_invalid', 'Demucs memory must identify a fresh completed CUDA window')
++            self._demucs_memory = dict(memory)
++
+     def _required_linux(self, key):
+         value = str(self._value(key, '') or '')
+         if not value.startswith('/') or '\x00' in value or '\n' in value:
+@@ -97,9 +116,13 @@ class XTServices:
+             raise MovieConfigurationError('xt_gpu_metadata_unavailable', str(error)) from error
+         total_bytes, free_bytes = total_mib * mib, free_mib * mib
+         overhead = int(self._value('xt_vllm_overhead_mib', 1024))
++        memory = self._demucs_memory
++        if memory is None or not 0 <= time.time() - memory['measured_at_unix'] <= 900:
++            raise MovieConfigurationError('xt_demucs_memory_missing', 'Fresh live Demucs peak/current measurement required before model load')
++        growth_bytes = max(0, memory['peak_reserved_bytes'] - memory['current_reserved_bytes'])
+         allowances = {'xvoice_mib': int(self._value('xt_xvoice_allowance_mib', 2048)),
+                       'campplus_mib': int(self._value('xt_campplus_allowance_mib', 256)),
+-                      'demucs_additional_growth_mib': int(self._value('xt_demucs_growth_allowance_mib', 0))}
++                      'demucs_additional_growth_mib': (growth_bytes + mib - 1) // mib}
+         if overhead < 0 or any(value < 0 for value in allowances.values()):
+             raise MovieConfigurationError('xt_gpu_budget_invalid', 'Overhead and additional allowances must be nonnegative')
+         if int(self._value('xt_vllm_max_num_seqs', 1)) != 1 or self._value('xt_vllm_enforce_eager', True) is not True:
+@@ -107,28 +130,41 @@ class XTServices:
+         engines = {}
+         for name, repo, key, kv_default, kv_min, maxlen in (
+                 ('asr', 'Qwen/Qwen3-ASR-1.7B', 'xt_asr_model', 1024, 896, 8192),
+-                ('mt', 'NiuTrans/LMT-60-8B', 'xt_mt_model', 768, 576, 4096)):
++                ('mt', 'mradermacher/LMT-60-8B-GGUF', 'xt_mt_model', 768, 576, 4096)):
++            configured = PurePosixPath(paths[key])
+             records = [row for row in models['models'] if row.get('repo') == repo
+-                       and PurePosixPath(row['folder']) == PurePosixPath(paths[key])]
++                       and PurePosixPath(row['folder']) == (configured.parent if name == 'mt' else configured)]
+             if len(records) != 1:
+                 raise MovieConfigurationError('xt_gpu_budget_invalid', name + ' is not the pinned configured model; no model substitution')
+-            weights = [row for row in records[0]['files'] if row['path'].endswith('.safetensors')
+-                       or PurePosixPath(row['path']).name == 'pytorch_model.bin']
++            if name == 'mt':
++                if self._value('xt_mt_format') != 'gguf-q8_0' or self._value('xt_mt_dtype') != 'half' \
++                        or configured.name != 'LMT-60-8B.Q8_0.gguf':
++                    raise MovieConfigurationError('xt_mt_gguf_unsupported', 'Only the pinned Q8_0 GGUF with half activations is authorized')
++                weights = [row for row in records[0]['files'] if row['path'] == configured.name]
++                if len(weights) != 1 or weights[0]['sha256'] != 'f7671cd4fca54b20398754d89de00e340cdf422b6ffe6976f63e4ee522150ead':
++                    raise MovieConfigurationError('xt_mt_gguf_unsupported', 'Pinned Q8_0 file identity missing')
++            else:
++                weights = [row for row in records[0]['files'] if row['path'].endswith('.safetensors')
++                           or PurePosixPath(row['path']).name == 'pytorch_model.bin']
+             weight_bytes = sum(int(row['bytes']) for row in weights)
+             kv_mib = int(self._value('xt_' + name + '_kv_cache_mib', kv_default))
+             configured_len = int(self._value('xt_' + name + '_max_model_len', maxlen))
+             if weight_bytes <= 0 or any(int(row['bytes']) <= 0 for row in weights) or kv_mib < kv_min or configured_len != maxlen:
+                 raise MovieConfigurationError('xt_gpu_budget_invalid', name + ' weight/KV/context metadata invalid')
+             kv_bytes = kv_mib * mib
+-            required = weight_bytes + kv_bytes + overhead * mib
++            engine_overhead = int(self._value('xt_mt_gguf_overhead_mib', 1536)) if name == 'mt' else overhead
++            if engine_overhead < (1536 if name == 'mt' else 1024):
++                raise MovieConfigurationError('xt_gpu_budget_invalid', 'Engine workspace allowance is below its reviewed minimum')
++            required = weight_bytes + kv_bytes + engine_overhead * mib
+             hundredths = (100 * required + total_bytes - 1) // total_bytes
+             engines[name] = {'repository': repo, 'weight_bytes': weight_bytes, 'weight_files': weights,
+-                             'kv_cache_bytes': kv_bytes, 'overhead_bytes': overhead * mib,
++                             'kv_cache_bytes': kv_bytes, 'overhead_bytes': engine_overhead * mib,
+                              'required_bytes': required, 'fraction_hundredths': hundredths,
+                              'gpu_memory_utilization': hundredths / 100.,
+                              'startup_required_bytes': (hundredths * total_bytes + 99) // 100,
+                              'max_model_len': maxlen, 'max_num_batched_tokens': maxlen,
+-                             'max_num_seqs': 1, 'enforce_eager': True, 'dtype': 'bfloat16'}
++                             'max_num_seqs': 1, 'enforce_eager': True, 'dtype': 'half' if name == 'mt' else 'bfloat16',
++                             'format': 'gguf-q8_0' if name == 'mt' else 'safetensors'}
+         fraction_sum = sum(row['fraction_hundredths'] for row in engines.values())
+         required_free = sum(row['required_bytes'] for row in engines.values()) + (sum(allowances.values()) + 3072) * mib
+         record = {'measured_unix': time.time(), 'measurement': 'fresh Windows nvidia-smi after warmed helpers',
+@@ -137,9 +173,9 @@ class XTServices:
+                   'required_free_bytes': required_free, 'fraction_sum_hundredths': fraction_sum,
+                   'formula': 'ceil_0.01((manifest weights + fixed KV + overhead) / GPU total)',
+                   'helper_accounting': {'current_residency_already_in_fresh_free': True,
+-                      'paired_current_and_peak_available': False,
++                      'paired_current_and_peak_available': True, 'demucs_window': memory,
+                       'additional_growth_mib': allowances['demucs_additional_growth_mib'],
+-                      'assumption': 'explicit additional growth only for warmed same-sized windows; not measured peak proof'},
++                      'scope': 'measured previous window peak minus current; future larger windows are not proven'},
+                   'legacy_fixed_fraction_config_ignored': True,
+                   'ok': fraction_sum <= 80 and required_free <= free_bytes}
+         self._last_budget = record
+@@ -167,7 +203,7 @@ class XTServices:
+         asr_python, mt_python, tts_python = [self._required_linux(key) for key in
+                                            ('xt_asr_python', 'xt_mt_python', 'xt_tts_python')]
+         paths = {key: self._required_linux(key) for key in (
+-            'xt_asr_model', 'xt_mt_model', 'xt_xvoice_ckpt', 'xt_rate_ckpt', 'xt_vocab',
++            'xt_asr_model', 'xt_mt_model', 'xt_mt_tokenizer', 'xt_xvoice_ckpt', 'xt_rate_ckpt', 'xt_vocab',
+             'xt_vocos_dir', 'xt_campplus_model', 'xt_espeak_library', 'xt_espeak_data')}
+         model_manifest = Path(self.config.resolve(self._value('xt_model_manifest', ''))).resolve()
+         runtime_receipt = Path(self.config.resolve(self._value('xt_runtime_receipt', ''))).resolve()
+@@ -195,7 +231,7 @@ class XTServices:
+         backend['server'] = {'host': '127.0.0.1', 'port': ports['app']}
+         backend['asr'].update(provider='qwen3', qwen3_asr_url=urls['asr'] + '/v1/recognize')
+         backend['translation'].update(provider='lmt', lmt_url=urls['mt'] + '/v1/chat/completions',
+-                                      model='lmt', source_lang='ru', target_lang='en')
++                                      model='lmt', source_lang='auto', target_lang='en')
+         backend['tts'].update(provider='xvoice', xvoice_tts_url=urls['tts'] + '/synthesize',
+                               speaker_embedding_provider='modelscope_campplus', speaker_embedding_model=paths['xt_campplus_model'])
+         backend['storage'].update(session_audio_dir=_linux_path(audio), log_dir=linux_folder + '/backend-logs')
+@@ -230,7 +266,9 @@ class XTServices:
+              linux_folder, '/healthz')
+         spec('mt', [mt_python, '-m', 'vllm.entrypoints.openai.api_server', '--host', '127.0.0.1',
+                     '--port', str(ports['mt']), '--model', paths['xt_mt_model'], '--trust-remote-code',
+-                    '--dtype', 'bfloat16', '--served-model-name', 'lmt', '--tensor-parallel-size', '1',
++                    '--quantization', 'gguf', '--load-format', 'gguf',
++                    '--tokenizer', paths['xt_mt_tokenizer'], '--hf-config-path', paths['xt_mt_tokenizer'],
++                    '--dtype', 'half', '--served-model-name', 'lmt', '--tensor-parallel-size', '1',
+                     '--gpu-memory-utilization', str(mt['gpu_memory_utilization']), '--max-model-len', '4096',
+                     '--kv-cache-memory-bytes', str(mt['kv_cache_bytes']), '--max-num-seqs', '1',
+                     '--max-num-batched-tokens', '4096', '--enforce-eager'],
+@@ -243,6 +281,8 @@ class XTServices:
+         manifest = {'version': 'kevflix-xt-supervisor-v1', 'token': token, 'services': services, 'environment': env,
+                     'model_manifest_path': _linux_path(model_manifest), 'model_manifest_sha256': model_manifest_sha,
+                     'model_paths': paths,
++                    'gguf_header_argv': [mt_python, linux_vendor + '/gguf_header.py',
++                                         '--model', paths['xt_mt_model'], '--original', paths['xt_mt_tokenizer']],
+                     'gpu_budget': budget,
+                     'heartbeat_path': linux_folder + '/heartbeat.json', 'status_path': linux_folder + '/status.json',
+                     'stop_path': linux_folder + '/stop.json', 'gpu_floor_mib': 3072,
+@@ -314,8 +354,8 @@ class XTServices:
+                     return dict(run['endpoints'])
+                 if status.get('phase') == 'stopped' or (run['popen'] and run['popen'].poll() is not None):
+                     fault = status.get('fault') or {}
+-                    if fault.get('code') == 'xt_gpu_budget_insufficient':
+-                        raise MovieConfigurationError('xt_gpu_budget_insufficient', fault['detail'])
++                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported'):
++                        raise MovieConfigurationError(fault['code'], fault['detail'])
+                     reason = status.get('reason', 'Linux supervisor exited without ready')
+                     if 'resource:' in reason:
+                         raise MovieResourceWait('xt_resource_yield', reason)
+@@ -340,8 +380,8 @@ class XTServices:
+                 if status.get('phase') == 'stopped':
+                     reason = status.get('reason', 'XT Linux services stopped')
+                     fault = status.get('fault') or {}
+-                    if fault.get('code') == 'xt_gpu_budget_insufficient':
+-                        self._failure = MovieConfigurationError('xt_gpu_budget_insufficient', fault['detail'])
++                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported'):
++                        self._failure = MovieConfigurationError(fault['code'], fault['detail'])
+                     else:
+                         self._failure = MovieResourceWait('xt_resource_yield', reason) if 'resource:' in reason \
+                             else MovieConfigurationError('xt_service_failed', reason)

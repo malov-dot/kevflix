@@ -1,0 +1,33 @@
+"""Loaded only through the XT supervisor's private PYTHONPATH. Runtime is offline."""
+import ipaddress
+import os
+import sys
+
+
+def _local(address):
+    if isinstance(address, str):
+        return address.startswith('/') or address.startswith('\0')  # Unix-domain sockets
+    if not isinstance(address, tuple) or not address:
+        return False
+    host = address[0]
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _audit(event, args):
+    if event in {'socket.connect', 'socket.bind'} and not _local(args[1]):
+        raise RuntimeError('XT offline policy refuses non-loopback socket: %r' % (args[1],))
+    if event == 'socket.getaddrinfo' and args[0] not in {None, 'localhost', '127.0.0.1', '::1'}:
+        raise RuntimeError('XT offline policy refuses external DNS')
+    if event == 'subprocess.Popen':
+        executable = os.path.basename(str(args[0])).lower()
+        if executable in {'curl', 'wget', 'pip', 'pip3', 'huggingface-cli', 'hf'}:
+            raise RuntimeError('XT runtime cannot download or install assets')
+
+
+sys.addaudithook(_audit)
+os.environ['KEVFLIX_XT_OFFLINE_GUARD'] = '1'

@@ -1,0 +1,116 @@
+diff --git a/translator/server/qwen3asr/qwen3asr_server.py b/translator/server/qwen3asr/qwen3asr_server.py
+index 1e086a4..014f8ac 100644
+--- a/translator/server/qwen3asr/qwen3asr_server.py
++++ b/translator/server/qwen3asr/qwen3asr_server.py
+@@ -12,6 +12,7 @@ from threading import Lock
+ from concurrent.futures import ThreadPoolExecutor
+ from qwen_asr import Qwen3ASRModel
+ import logging
++import time
+ 
+ logging.basicConfig(level=logging.INFO)
+ logger = logging.getLogger("Qwen3ASR")
+@@ -33,6 +34,7 @@ executor = ThreadPoolExecutor(max_workers=10)
+ MAX_SESSION_STEPS = 60
+ OVERLAP_CHUNKS = 4
+ VAD_THRESHOLD = 0.001
++ASR_REQUEST_TIMEOUT_SECONDS = 90.0  # bounded cold decode; client read deadline is 100s
+ 
+ # Native Qwen names only; an unmappable label remains unknown, never guessed.
+ NATIVE_LANGUAGE_CODES = dict(zip(
+@@ -128,6 +130,7 @@ def apply_committed_prefix(ctx: dict, committed_text: str) -> None:
+ 
+ def run_inference(request: RecognitionRequest, audio_data: np.ndarray):
+     global model, session_cache
++    inference_started = time.perf_counter()
+     
+     # 如果是纯静音包，跳过推理以防止模型“胡思乱想”产生重复字
+     is_speech = np.abs(audio_data).mean() > VAD_THRESHOLD
+@@ -218,13 +221,16 @@ def run_inference(request: RecognitionRequest, audio_data: np.ndarray):
+                 return recognition_result(state.text, state)
+                 
+         except Exception as e:
+-            logger.error(f"Inference internal error: {e}")
++            logger.exception("Inference internal error class=%s stage=run_inference elapsed_seconds=%.3f session_id=%s message=%r",
++                             type(e).__name__, time.perf_counter() - inference_started, request.session_id, str(e))
+             if request.session_id in session_cache:
+                 del session_cache[request.session_id]
+             raise e
+ 
+ @app.post("/v1/recognize")
+ async def recognize(request: RecognitionRequest):
++    started = time.perf_counter()
++    stage = 'decode_audio'
+     try:
+         if not request.audio.startswith("data:audio/wav;base64,"):
+             raise ValueError("不支持的音频格式")
+@@ -255,16 +261,27 @@ async def recognize(request: RecognitionRequest):
+             )
+         
+         loop = asyncio.get_running_loop()
+-        # 增加超时保护
++        stage = 'executor_inference_wait'
+         result = await asyncio.wait_for(
+             loop.run_in_executor(executor, run_inference, request, audio),
+-            timeout=15.0
++            timeout=ASR_REQUEST_TIMEOUT_SECONDS
+         )
++        stage = 'response'
++        logger.info("Recognition completed session_id=%s final=%s elapsed_seconds=%.3f",
++                    request.session_id, request.is_final, time.perf_counter() - started)
+         return {**result, "session_id": request.session_id, "is_final": request.is_final}
+         
+     except Exception as e:
+-        logger.error(f"Request error: {e}")
+-        raise HTTPException(status_code=400, detail=str(e))
++        detail = {'error_type': type(e).__name__, 'stage': stage,
++                  'elapsed_seconds': round(time.perf_counter() - started, 3),
++                  'timeout_seconds': ASR_REQUEST_TIMEOUT_SECONDS,
++                  'session_id': request.session_id, 'is_final': request.is_final,
++                  'message': str(e) or type(e).__name__,
++                  'executor_may_still_be_running': isinstance(e, TimeoutError) and stage == 'executor_inference_wait'}
++        logger.exception("Recognition failed: %s", detail)
++        # wait_for cancellation cannot stop an already running executor thread.
++        # The caller receives a terminal HTTP error; do not retry inference here.
++        raise HTTPException(status_code=400, detail=detail) from e
+ 
+ def main():
+     global model
+diff --git a/translator/backend/services.py b/translator/backend/services.py
+index d9c30be..c8a2f06 100644
+--- a/translator/backend/services.py
++++ b/translator/backend/services.py
+@@ -265,8 +265,19 @@ class Qwen3ASRService:
+             "committed_text": committed_text,
+         }
+         start_time = time.perf_counter()
+-        response = self.session.post(self.base_url, json=payload, timeout=30)
+-        response.raise_for_status()
++        response = None
++        try:
++            # Server's bounded cold-decode wait is90s; retain room for its error
++            # response below the controller's120s no-progress deadline.
++            response = self.session.post(self.base_url, json=payload, timeout=(5, 100))
++            if not response.ok:
++                raise requests.HTTPError('Qwen recognition HTTP %s: %s' %
++                                         (response.status_code, response.text[:4096]), response=response)
++        except requests.RequestException as error:
++            logger.exception('Qwen request failed class=%s stage=http_recognize elapsed_seconds=%.3f session_id=%s final=%s status=%s message=%r',
++                             type(error).__name__, time.perf_counter() - start_time, cache['session_id'], is_final,
++                             response.status_code if response is not None else None, str(error))
++            raise
+         elapsed_ms = (time.perf_counter() - start_time) * 1000
+         result = response.json()
+         if not isinstance(result, dict) or not isinstance(result.get('text'), str):
+diff --git a/relay/xt_services.py b/relay/xt_services.py
+index 9ac7846..67edeac 100644
+--- a/relay/xt_services.py
++++ b/relay/xt_services.py
+@@ -284,6 +284,7 @@ class XTServices:
+         env = {'PYTHONPATH': linux_vendor + '/offline:' + linux_vendor + '/translator:' + linux_vendor + '/xvoice/src',
+                'CUDA_VISIBLE_DEVICES': '0', 'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1',
+                'VLLM_HOST_IP': '127.0.0.1', 'GLOO_SOCKET_IFNAME': 'lo', 'NCCL_SOCKET_IFNAME': 'lo',
++               'VLLM_NO_USAGE_STATS': '1', 'DO_NOT_TRACK': '1',
+                'WANDB_MODE': 'disabled', 'TOKENIZERS_PARALLELISM': 'false',
+                'MODELSCOPE_OFFLINE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
+                'XTRANSLATE_CONFIG': linux_folder + '/backend-config.json',

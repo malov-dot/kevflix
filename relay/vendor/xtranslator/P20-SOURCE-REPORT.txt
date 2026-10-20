@@ -1,0 +1,14 @@
+P20 SOURCE-ONLY ADMISSION FIX
+Changed only translation_segment_pairs_for_text in relay/vendor/xtranslator/translator/backend/session.py:1728.
+Before: if cleaned and _content_token_count(cleaned) > 0:
+After:  if cleaned and any(ch.isalnum() for ch in cleaned):
+
+The predicate now admits Unicode letters/numbers, including Cyrillic and accented Spanish, without reconstructing or altering either cleaned or source_segment strings. Empty/whitespace-only content remains rejected; punctuation-only strings contain no alphanumeric characters and remain rejected. Existing filler cleanup still runs first. No manual movie text or identity labels were introduced.
+Other content-count/token helpers, Zipformer paths, Qwen commit/stability logic and controller remain unchanged in this delta.
+
+Baseline: before-P20/session.py
+Diff: P20-session.diff
+PROVENANCE.json deliberately unchanged; audio/root own rebinding after source freeze.
+No tests/imports/compilation/builds/models/app operations executed. Predicate semantics above are source inspection, not runtime acceptance.
+
+Provenance binding addendum: Implementation and original source report by /root/claude_pipeline_worker under parent assignment. /root/claude_audio_worker only copied the baseline/report, normalized patch paths and refreshed PROVENANCE.json after verifying the frozen session SHA256 eed24af3cd9330378a6055ae164285fa7f62a5787c0adaabda2604f36458e7f8. The original report's statement that provenance was unchanged describes its worker handoff; this vendored addendum binds P20 alongside P19b. No further implementation edits or tests.

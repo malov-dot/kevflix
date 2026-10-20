@@ -1,0 +1,9 @@
+{
+  "name": "torchaudio",
+  "version": "2.8.0",
+  "requires_python": null,
+  "requires_dist": [
+    "torch==2.8.0"
+  ],
+  "source_url": "https://pypi.org/pypi/torchaudio/2.8.0/json"
+}

@@ -1,0 +1,27 @@
+diff --git a/translator/backend/speaker_prompt.py b/translator/backend/speaker_prompt.py
+index 4cfd2ee..b84a450 100644
+--- a/translator/backend/speaker_prompt.py
++++ b/translator/backend/speaker_prompt.py
+@@ -86,11 +86,22 @@ class ModelScopeSpeakerEmbeddingBackend:
+                 return self._pipeline
+             from modelscope.pipelines import pipeline
+             from modelscope.utils.constant import Tasks
++            import torch
++            if not torch.cuda.is_available():
++                raise RuntimeError("CAM++ requires CUDA; spectral/CPU fallback is forbidden")
+ 
+             self._pipeline = pipeline(
+                 task=Tasks.speaker_verification,
+                 model=self.model,
++                device="cuda:0",
+             )
++            module = self._pipeline.model
++            parameters = list(module.parameters()) if hasattr(module, "parameters") else []
++            if not parameters and hasattr(module, "model") and hasattr(module.model, "parameters"):
++                parameters = list(module.model.parameters())
++            if not parameters or any(parameter.device.type != "cuda" for parameter in parameters):
++                self._pipeline = None
++                raise RuntimeError("CAM++ actual model parameters are not on CUDA")
+             logger.info("speaker embedding backend loaded model=%s", self.model)
+             return self._pipeline
+ 

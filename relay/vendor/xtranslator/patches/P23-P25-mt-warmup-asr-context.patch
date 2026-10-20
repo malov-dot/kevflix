@@ -1,0 +1,179 @@
+diff --git a/translator/server/qwen3asr/qwen3asr_server.py b/translator/server/qwen3asr/qwen3asr_server.py
+index 7565bf3..cab26c9 100644
+--- a/translator/server/qwen3asr/qwen3asr_server.py
++++ b/translator/server/qwen3asr/qwen3asr_server.py
+@@ -113,7 +113,7 @@ def rebuild_streaming_state(ctx: dict) -> None:
+     new_state = model.init_streaming_state(
+         unfixed_chunk_num=2,
+         unfixed_token_num=5,
+-        chunk_size_sec=0.6
++        chunk_size_sec=2.0
+     )
+     for chunk in ctx["history_chunks"]:
+         if chunk.size == 0:
+@@ -158,7 +158,7 @@ def run_inference(request: RecognitionRequest, audio_data: np.ndarray):
+                         "state": model.init_streaming_state(
+                             unfixed_chunk_num=2,
+                             unfixed_token_num=5,
+-                            chunk_size_sec=0.6
++                            chunk_size_sec=2.0
+                         ),
+                         "step_count": 0,
+                         "history_chunks": [], 
+@@ -348,7 +348,7 @@ def main():
+     # deadline. Never insert this state into session_cache or publish its text.
+     warmup_started = time.perf_counter()
+     try:
+-        warm_state = model.init_streaming_state(unfixed_chunk_num=2, unfixed_token_num=5, chunk_size_sec=.6)
++        warm_state = model.init_streaming_state(unfixed_chunk_num=2, unfixed_token_num=5, chunk_size_sec=2.0)
+         model.streaming_transcribe(np.zeros(2 * 16000, dtype=np.float32), warm_state)
+         model.finish_streaming_transcribe(warm_state)
+         del warm_state
+diff --git a/translator/backend/services.py b/translator/backend/services.py
+index c9fe4ea..19557e0 100644
+--- a/translator/backend/services.py
++++ b/translator/backend/services.py
+@@ -499,6 +499,9 @@ class OpenAIChatTranslateService:
+         )
+         self.max_tokens = max_tokens
+         self.session = requests.Session()
++        self.request_timeout_seconds = float(os.environ.get('XTRANSLATE_MT_REQUEST_TIMEOUT_SECONDS', '90'))
++        if not 30. <= self.request_timeout_seconds <= 90.:
++            raise ValueError('MT request timeout must be30..90 seconds')
+ 
+     def translate(self, text: str, source_lang: str, target_lang: str) -> str:
+         """执行翻译。"""
+@@ -540,7 +543,7 @@ class OpenAIChatTranslateService:
+         start_time = time.perf_counter()
+         response = None
+         try:
+-            response = self.session.post(self.api_url, json=payload, timeout=(5, 105))
++            response = self.session.post(self.api_url, json=payload, timeout=(5, self.request_timeout_seconds + 15.))
+             if not response.ok:
+                 raise requests.HTTPError('MT HTTP %s: %s' %
+                                          (response.status_code, response.text[:4096]), response=response)
+diff --git a/linux_supervisor.py b/linux_supervisor.py
+index edd9622..22ae9cf 100644
+--- a/linux_supervisor.py
++++ b/linux_supervisor.py
+@@ -232,6 +232,42 @@ class MTGGUFUnsupported(RuntimeError):
+                       'fatal': True, 'recoverable': False, 'stage': 'mt_gguf_load'}
+ 
+ 
++class MTWarmupFailed(RuntimeError):
++    def __init__(self, detail):
++        super().__init__(detail)
++        self.fault = {'code': 'xt_mt_warmup_failed', 'detail': str(detail),
++                      'fatal': True, 'recoverable': False, 'stage': 'mt_warmup'}
++
++
++def warm_mt(manifest, check, known):
++    """Retain process ownership/heartbeat while one production-client request runs."""
++    started = time.monotonic()
++    log_path = Path(manifest['status_path']).parent / 'mt-warmup.log'
++    env = {**os.environ, **manifest['environment'], **manifest['private_temp_environment'],
++           'KEVFLIX_XT_RUN_TOKEN': manifest['token']}
++    try:
++        with log_path.open('ab', buffering=0) as log:
++            child = subprocess.Popen(manifest['mt_warmup_argv'], env=env, stdin=subprocess.DEVNULL,
++                                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
++            row = process_table().get(child.pid)
++            if row:
++                known[child.pid] = row['start_ticks']
++            while child.poll() is None:
++                check()
++                if time.monotonic() - started >= 105.:
++                    raise MTWarmupFailed('MT startup warmup exceeded105s total deadline')
++                time.sleep(.2)
++        if time.monotonic() - started >= 105. or child.returncode:
++            raise MTWarmupFailed('MT startup warmup failed: ' + log_tail(log_path))
++        record = json.loads(Path(manifest['mt_warmup_receipt']).read_text())
++        if record.get('ok') is not True or record.get('movie_credit') is not False \
++                or record.get('audio_generated') is not False or record.get('output_discarded') is not True:
++            raise MTWarmupFailed('Invalid MT startup warmup receipt')
++        return record
++    except (OSError, ValueError) as error:
++        raise MTWarmupFailed(type(error).__name__ + ': ' + str(error)) from error
++
++
+ def log_tail(path):
+     try:
+         with open(path, 'rb') as handle:
+@@ -481,6 +517,8 @@ def main():
+                 if mt.get('pid') == child.pid and mt.get('phase') == 'loading':
+                     spec = next(item for item in manifest['services'] if item['name'] == 'mt')
+                     raise MTGGUFUnsupported('vLLM GGUF load exited: ' + log_tail(spec['log']))
++                if mt.get('pid') == child.pid and mt.get('phase') == 'warming':
++                    raise MTWarmupFailed('MT server exited during startup warmup')
+                 raise RuntimeError('a service exited before requested cleanup')
+         for service in state['services'].values():
+             if service['phase'] == 'ready' and not owns_listener(urllib.parse.urlparse(service['health_url']).port, owned):
+@@ -563,6 +601,9 @@ def main():
+                         raise MTGGUFUnsupported('vLLM GGUF startup deadline: ' + log_tail(spec['log']))
+                     raise RuntimeError(spec['name'] + ' startup health deadline exceeded')
+                 time.sleep(.5)
++            if spec['name'] == 'mt':
++                state['services']['mt']['phase'] = 'warming'
++                state['services']['mt']['warmup'] = warm_mt(manifest, check, known)
+             state['services'][spec['name']]['phase'] = 'ready'
+         state['phase'] = 'ready'
+         while True:
+@@ -570,7 +611,7 @@ def main():
+             time.sleep(1.0)
+     except BaseException as error:
+         reason = '%s: %s' % (type(error).__name__, error)
+-        if isinstance(error, (GPUBudgetInsufficient, MTGGUFUnsupported, IPCPathTooLong, SharedJSONWriteFailed, MonitorFailed)):
++        if isinstance(error, (GPUBudgetInsufficient, MTGGUFUnsupported, MTWarmupFailed, IPCPathTooLong, SharedJSONWriteFailed, MonitorFailed)):
+             state['fault'] = error.fault
+     finally:
+         confirmed, processes, gpu = cleanup(manifest, known)
+diff --git a/relay/xt_services.py b/relay/xt_services.py
+index 701b16b..f753861 100644
+--- a/relay/xt_services.py
++++ b/relay/xt_services.py
+@@ -292,6 +292,7 @@ class XTServices:
+                'XTRANSLATE_LOG_DIR': linux_folder + '/backend-logs',
+                'XTRANSLATE_REQUEST_TIMEOUT_SECONDS': str(float(self._value('xt_request_timeout_seconds', 900))),
+                'XTRANSLATE_ASR_REQUEST_TIMEOUT_SECONDS': str(float(self._value('xt_asr_request_timeout_seconds', 90))),
++               'XTRANSLATE_MT_REQUEST_TIMEOUT_SECONDS': str(float(self._value('xt_mt_request_timeout_seconds', 90))),
+                'XTRANSLATE_VISIT_COUNTER_PATH': linux_folder + '/visit-stats.json',
+                'XVOICE_ROOT': linux_vendor + '/xvoice', 'XVOICE_DEVICE': 'cuda', 'XVOICE_STAGE': '2',
+                'XVOICE_CKPT_FILE': paths['xt_xvoice_ckpt'], 'XVOICE_SRP_CKPT_FILE': paths['xt_rate_ckpt'],
+@@ -319,7 +320,8 @@ class XTServices:
+                     '--dtype', 'half', '--served-model-name', 'lmt', '--tensor-parallel-size', '1',
+                     '--gpu-memory-utilization', str(mt['gpu_memory_utilization']), '--max-model-len', '4096',
+                     '--kv-cache-memory-bytes', str(mt['kv_cache_bytes']), '--max-num-seqs', '1',
+-                    '--max-num-batched-tokens', '4096', '--enforce-eager'],
++                    '--max-num-batched-tokens', '4096', '--enforce-eager',
++                    '--enable-log-requests', '--max-log-len', '256'],
+              linux_folder, '/health')
+         spec('tts', [tts_python, linux_vendor + '/translator/server/xvoice/server.py', '--host', '127.0.0.1',
+                      '--port', str(ports['tts']), '--device', 'cuda', '--stage', '2'],
+@@ -332,6 +334,9 @@ class XTServices:
+                     'model_paths': paths,
+                     'gguf_header_argv': [mt_python, linux_vendor + '/gguf_header.py',
+                                          '--model', paths['xt_mt_model'], '--original', paths['xt_mt_tokenizer']],
++                    'mt_warmup_argv': [python, linux_vendor + '/mt_warmup.py',
++                                       '--receipt', linux_folder + '/mt-warmup.json'],
++                    'mt_warmup_receipt': linux_folder + '/mt-warmup.json',
+                     'gpu_budget': budget,
+                     'heartbeat_path': linux_folder + '/heartbeat.json', 'status_path': linux_folder + '/status.json',
+                     'stop_path': linux_folder + '/stop.json', 'gpu_floor_mib': 3072,
+@@ -436,7 +441,7 @@ class XTServices:
+                     return dict(run['endpoints'])
+                 if status.get('phase') == 'stopped' or (run['popen'] and run['popen'].poll() is not None):
+                     fault = status.get('fault') or {}
+-                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long', 'xt_monitor_failed'):
++                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_mt_warmup_failed', 'xt_ipc_path_too_long', 'xt_monitor_failed'):
+                         raise MovieConfigurationError(fault['code'], fault['detail'])
+                     reason = status.get('reason', 'Linux supervisor exited without ready')
+                     if 'resource:' in reason:
+@@ -468,7 +473,7 @@ class XTServices:
+                 if status.get('phase') == 'stopped':
+                     reason = status.get('reason', 'XT Linux services stopped')
+                     fault = status.get('fault') or {}
+-                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long', 'xt_monitor_failed'):
++                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_mt_warmup_failed', 'xt_ipc_path_too_long', 'xt_monitor_failed'):
+                         self._failure = MovieConfigurationError(fault['code'], fault['detail'])
+                     else:
+                         self._failure = MovieResourceWait('xt_resource_yield', reason) if 'resource:' in reason \

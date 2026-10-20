@@ -1,0 +1,15 @@
+diff --git a/translator/backend/session.py b/translator/backend/session.py
+index 769ea19..52de12a 100644
+--- a/translator/backend/session.py
++++ b/translator/backend/session.py
+@@ -1710,8 +1710,8 @@ def split_translation_segments(text: str) -> list[str]:
+     parts = re.findall(r"[^，。！？；：,.!?;:]+[，。！？；：,.!?;:]?|[^，。！？；：,.!?;:]+$", text)
+     return [
+         part.strip()
+-        for part in parts
+-        if part and part.strip() and should_emit_segment(part.strip(), 1)
++        for i, part in enumerate(parts)
++        if part and part.strip() and (should_emit_segment(part.strip(), 1) or i == len(parts) - 1)
+     ] or [text.strip()]
+ 
+ 

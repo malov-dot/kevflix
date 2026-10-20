@@ -4,6 +4,26 @@
   var button=document.getElementById('open-player'),edit=document.getElementById('edit-address'),busy=false,currentRequest=null,attempt=0,editing=false;
   var form=document.getElementById('connect'),instructions=document.getElementById('instructions'),change=document.getElementById('change-address');
   try{input.value=localStorage.getItem('kevflix-worker-address')||localStorage.getItem('sem-worker-address')||'';}catch(ignore){}
+  // Worker floor: the kevflix-minimum-worker meta mirrors semPlayer.minimumWorker in package.json/tv/package.json
+  // (the .wgt package carries no package.json, so the bootstrap reads its own page metadata).
+  var minimumWorker=((document.querySelector('meta[name="kevflix-minimum-worker"]')||{}).content||'').trim();
+  // Same order as relay/updates.py version_key: a release follows its prereleases; numeric identifiers precede text.
+  function versionKey(text){
+    var m=/^(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z]+(?:\.[0-9A-Za-z]+)*))?$/.exec(String(text==null?'':text));
+    return m?{numbers:[+m[1],+m[2],+m[3]],pre:m[4]?m[4].split('.'):[]}:null;
+  }
+  function compareVersions(a,b){
+    var i,x,y,xn,yn;
+    for(i=0;i<3;i++)if(a.numbers[i]!==b.numbers[i])return a.numbers[i]<b.numbers[i]?-1:1;
+    if(!a.pre.length||!b.pre.length)return a.pre.length===b.pre.length?0:(a.pre.length?-1:1);
+    for(i=0;i<Math.min(a.pre.length,b.pre.length);i++){
+      x=a.pre[i];y=b.pre[i];xn=/^\d+$/.test(x);yn=/^\d+$/.test(y);
+      if(xn&&yn){if(+x!==+y)return +x<+y?-1:1;}
+      else if(xn!==yn)return xn?-1:1;
+      else if(x!==y)return x<y?-1:1;
+    }
+    return a.pre.length===b.pre.length?0:(a.pre.length<b.pre.length?-1:1);
+  }
   function refreshTizenBrewEntry(){
     // TizenBrew's UI normally asks for its service's cached list. Request a fresh
     // list on the same TV instead, preserving the original module identity.
@@ -75,6 +95,14 @@
       try{result=JSON.parse(xhr.responseText);}catch(ignore){}
       if(xhr.status!==200||!result||result.product!=='KevFLIX'){fail('That address did not return a KevFLIX worker. Check the address and port.');return;}
       try{localStorage.setItem('kevflix-worker-address',origin);localStorage.setItem('sem-worker-address',origin);}catch(ignore){}
+      // Compatibility gate: never hand off to a worker below the player's declared floor (or with no readable version).
+      var floor=versionKey(minimumWorker),worker=versionKey(result.version);
+      if(!floor){fail('This KevFLIX TV app has no valid worker requirement. Reinstall KevFLIX on the TV, then reopen.');return;}
+      if(!worker||compareVersions(worker,floor)<0){
+        fail('Update KevFLIX on your PC to '+minimumWorker+' or newer, then reopen KevFLIX.'+
+             (worker?' This PC has '+String(result.version)+'.':' This PC did not report a usable version.'));
+        return;
+      }
       form.hidden=true;instructions.hidden=true;change.hidden=true;message.textContent='Opening your home screen…';
       // Once the worker answers, hand off directly. Menu metadata is optional.
       var launcher=location.href.split('#')[0];

@@ -1,0 +1,267 @@
+diff --git a/translator/backend/session.py b/translator/backend/session.py
+index 4b7930c..17f1bd9 100644
+--- a/translator/backend/session.py
++++ b/translator/backend/session.py
+@@ -1,6 +1,7 @@
+ from __future__ import annotations
+ 
+ import asyncio
++import hashlib
+ import json
+ import re
+ import time
+@@ -96,6 +97,11 @@ class TranslationSession:
+         )
+         self.sample_rate = settings.sample_rate
+         self.translation_queue: asyncio.Queue[dict | str] = asyncio.Queue()
++        self._xt_next_uid = 0
++        self._xt_open: dict[int, dict] = {}
++        self._xt_progress = asyncio.Event()
++        self._xt_wire_lock = asyncio.Lock()
++        self._xt_failure: str | None = None
+         self.audio_store = SessionAudioStore(
+             session_id=self.state.session_id,
+             output_dir=settings.session_audio_dir,
+@@ -1320,10 +1326,14 @@ class TranslationSession:
+ 
+     async def _enqueue_translation_item(self, item: dict) -> None:
+         """先向前端发送已绑定 speaker 的源文本片段，再进入翻译队列。"""
++        self._xt_next_uid += 1
++        item["seg_uid"] = self._xt_next_uid
++        self._xt_open[item["seg_uid"]] = item
+         await self._send_json(
+             {
+                 "action": "source_segment_ready",
+                 "data": {
++                    "seg_uid": item["seg_uid"],
+                     "source_text": item.get("source_text") or item.get("text", ""),
+                     "turn_id": item.get("turn_id", ""),
+                     "segment_index": item.get("segment_index", 1),
+@@ -1341,132 +1351,100 @@ class TranslationSession:
+             return 0.0
+         return self._session_audio_bytes_total / (self.sample_rate * self._asr_bytes_per_sample) * 1000
+ 
++    async def _xt_abort(self, status: str, error: Exception) -> None:
++        self._xt_failure = "%s: %s" % (status, error)
++        self._xt_progress.set()
++        await self._send_json({"action": "error", "data": {
++            "status": status, "fatal": True, "message": str(error)}})
++
++    async def _xt_terminal_error(self, item: dict, status: str, error: Exception | str) -> None:
++        sent = await self._send_json({"action": "error", "data": {
++            "seg_uid": item["seg_uid"], "source_start_ms": item.get("source_start_ms", 0),
++            "source_end_ms": item.get("source_end_ms", 0), "speaker_id": item.get("speaker_id", ""),
++            "source_text": item.get("source_text") or item.get("text", ""),
++            "status": status, "terminal": True, "message": str(error)}})
++        if not sent:
++            raise RuntimeError("terminal outcome could not be delivered")
++        self._xt_open.pop(item["seg_uid"], None)
++
+     async def _tts_loop(self) -> None:
+-        """串行执行翻译和 TTS。"""
++        """Original serial MT -> speaker prompt -> X-Voice pipeline, with terminal accounting."""
+         try:
+             while True:
+                 item = await self.translation_queue.get()
+-                if item == "":
+-                    break
+-                if not item:
+-                    continue
+-                segment = item["text"]
+-                turn_id = item.get("turn_id", "")
+-                segment_index = item.get("segment_index", 1)
+-                segment_count = item.get("segment_count", 1)
+-                asr_elapsed_ms = item.get("asr_elapsed_ms", 0)
+-                speaker_id = item.get("speaker_id", "")
+-
+-                loop = asyncio.get_running_loop()
+-                logger.info(
+-                    "translation start id=%s text=%s",
+-                    self.state.session_id,
+-                    _preview_text(segment),
+-                )
+-                translate_start = time.perf_counter()
+-                try:
+-                    translated = await loop.run_in_executor(
+-                        None,
+-                        self.mt_service.translate,
+-                        segment,
+-                        self.state.source_lang,
+-                        self.state.target_lang,
+-                    )
+-                except Exception as exc:
+-                    logger.error("translation failed: %s", exc)
+-                    await self._send_json({"action": "error", "data": {"message": str(exc)}})
+-                    continue
+-                mt_elapsed_ms = (time.perf_counter() - translate_start) * 1000
+-                logger.info(
+-                    "translation done id=%s elapsed_ms=%.1f text=%s output=%s",
+-                    self.state.session_id,
+-                    mt_elapsed_ms,
+-                    _preview_text(segment),
+-                    _preview_text(translated),
+-                )
+-
+-                clone_audio_path = item.get("clone_audio_path") or None
+-                if self.speaker_prompt_tracker is None:
+-                    clone_start = time.perf_counter()
+-                    clone_audio_path = await self.audio_store.export_recent_clone(
+-                        self.settings.clone_window_seconds
+-                    )
+-                    logger.info(
+-                        "clone export id=%s elapsed_ms=%.1f path=%s",
+-                        self.state.session_id,
+-                        (time.perf_counter() - clone_start) * 1000,
+-                        clone_audio_path,
+-                    )
+-                else:
+-                    logger.info(
+-                        "speaker prompt selected id=%s speaker=%s path=%s",
+-                        self.state.session_id,
+-                        speaker_id,
+-                        clone_audio_path,
+-                    )
+-
+-                tts_start = time.perf_counter()
+                 try:
+-                    audio_bytes = await loop.run_in_executor(
+-                        None,
+-                        self.tts_service.synthesize,
+-                        translated,
+-                        clone_audio_path,
+-                    )
++                    if item == "":
++                        break
++                    if not item:
++                        continue
++                    await self._xt_process_translation(item)
+                 except Exception as exc:
+-                    logger.error("tts failed: %s", exc)
+-                    await self._send_json({"action": "error", "data": {"message": str(exc)}})
+-                    continue
+-                tts_elapsed_ms = (time.perf_counter() - tts_start) * 1000
+-                logger.info(
+-                    "tts done id=%s elapsed_ms=%.1f audio_bytes=%s text=%s",
+-                    self.state.session_id,
+-                    tts_elapsed_ms,
+-                    len(audio_bytes),
+-                    _preview_text(translated),
+-                )
+-
+-                save_start = time.perf_counter()
+-                tts_audio_path = await self.audio_store.save_tts_audio(
+-                    audio_bytes,
+-                    self.settings.tts_sample_rate,
+-                )
+-                logger.info(
+-                    "tts saved id=%s elapsed_ms=%.1f path=%s",
+-                    self.state.session_id,
+-                    (time.perf_counter() - save_start) * 1000,
+-                    tts_audio_path,
+-                )
+-
+-                sent = await self._send_json(
+-                    {
+-                        "action": "translation_ready",
+-                        "data": {
+-                            "source_text": segment,
+-                            "translated_text": translated,
+-                            "turn_id": turn_id,
+-                            "segment_index": segment_index,
+-                            "segment_count": segment_count,
+-                            "speaker_id": speaker_id,
+-                            "clone_audio_path": clone_audio_path,
+-                            "tts_audio_path": tts_audio_path,
+-                            "metrics": build_latency_metrics(
+-                                asr_elapsed_ms=asr_elapsed_ms,
+-                                mt_elapsed_ms=mt_elapsed_ms,
+-                                tts_elapsed_ms=tts_elapsed_ms,
+-                            ),
+-                        },
+-                    }
+-                )
+-                if not sent or not audio_bytes:
+-                    continue
+-                if not await self._send_bytes(audio_bytes):
+-                    continue
+-                await self._send_json({"action": "tts_finished", "data": {"text": translated}})
++                    if isinstance(item, dict) and item.get("seg_uid") in self._xt_open:
++                        await self._xt_terminal_error(item, "tts_failed", exc)
++                    else:
++                        raise
++                finally:
++                    self.translation_queue.task_done()
++                    self._xt_progress.set()
+         except asyncio.CancelledError:
+             pass
++        except Exception as exc:
++            await self._xt_abort("terminal_worker_failed", exc)
++
++    async def _xt_process_translation(self, item: dict) -> None:
++        segment = item["text"]
++        loop = asyncio.get_running_loop()
++        started = time.perf_counter()
++        try:
++            translated = await loop.run_in_executor(None, self.mt_service.translate, segment,
++                                                    self.state.source_lang, self.state.target_lang)
++        except Exception as exc:
++            await self._xt_terminal_error(item, "translation_failed", exc)
++            return
++        mt_ms = (time.perf_counter() - started) * 1000
++        if not isinstance(translated, str) or not translated.strip():
++            await self._xt_terminal_error(item, "empty_output", "translation returned empty text")
++            return
++        clone_audio_path = item.get("clone_audio_path") or None
++        if self.speaker_prompt_tracker is None:
++            clone_audio_path = await self.audio_store.export_recent_clone(self.settings.clone_window_seconds)
++        started = time.perf_counter()
++        try:
++            audio_bytes = await loop.run_in_executor(None, self.tts_service.synthesize, translated, clone_audio_path)
++        except Exception as exc:
++            await self._xt_terminal_error(item, "tts_failed", exc)
++            return
++        tts_ms = (time.perf_counter() - started) * 1000
++        if not audio_bytes or len(audio_bytes) % 2:
++            await self._xt_terminal_error(item, "empty_output", "X-Voice returned empty or malformed PCM16")
++            return
++        if len(audio_bytes) > 128 * 1024 * 1024:
++            await self._xt_terminal_error(item, "tts_failed", "full take exceeds transport bound; not truncated")
++            return
++        tts_audio_path = await self.audio_store.save_tts_audio(audio_bytes, self.settings.tts_sample_rate)
++        data = {"seg_uid": item["seg_uid"], "source_text": item.get("source_text") or segment,
++                "translated_text": translated, "turn_id": item.get("turn_id", ""),
++                "segment_index": item.get("segment_index", 1), "segment_count": item.get("segment_count", 1),
++                "speaker_id": item.get("speaker_id", ""),
++                "source_start_ms": item.get("source_start_ms", 0), "source_end_ms": item.get("source_end_ms", 0),
++                "clone_audio_path": clone_audio_path, "tts_audio_path": tts_audio_path,
++                "tts_bytes": len(audio_bytes), "tts_sha256": hashlib.sha256(audio_bytes).hexdigest(),
++                "tts_sample_rate": self.settings.tts_sample_rate, "tts_channels": 1, "tts_sample_width": 2,
++                "status": "ok", "terminal": True,
++                "metrics": build_latency_metrics(item.get("asr_elapsed_ms", 0), mt_ms, tts_ms)}
++        async with self._xt_wire_lock:
++            if not await self._send_json_unlocked({"action": "translation_ready", "data": data}):
++                raise RuntimeError("translation-ready message could not be delivered")
++            if not await self._send_bytes_unlocked(audio_bytes):
++                raise RuntimeError("full TTS binary frame could not be delivered")
++        self._xt_open.pop(item["seg_uid"], None)
++        await self._send_json({"action": "tts_finished", "data": {"seg_uid": item["seg_uid"], "text": translated}})
+ 
+     async def _send_json(self, payload: dict) -> bool:
++        async with self._xt_wire_lock:
++            return await self._send_json_unlocked(payload)
++
++    async def _send_json_unlocked(self, payload: dict) -> bool:
+         """发送 JSON 消息。"""
+         try:
+             await self.websocket.send_text(json.dumps(payload, ensure_ascii=False))
+@@ -1486,6 +1464,10 @@ class TranslationSession:
+             raise
+ 
+     async def _send_bytes(self, payload: bytes) -> bool:
++        async with self._xt_wire_lock:
++            return await self._send_bytes_unlocked(payload)
++
++    async def _send_bytes_unlocked(self, payload: bytes) -> bool:
+         """发送二进制消息。"""
+         try:
+             await self.websocket.send_bytes(payload)

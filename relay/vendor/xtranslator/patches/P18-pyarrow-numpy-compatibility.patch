@@ -1,0 +1,26 @@
+diff --git a/runtime-requirements.txt b/runtime-requirements.txt
+index ad58c41..6bec9be 100644
+--- a/runtime-requirements.txt
++++ b/runtime-requirements.txt
+@@ -8,6 +8,8 @@ websockets>=12,<16
+ soxr>=0.3,<1
+ numpy
+ modelscope[framework]
++# Required by ModelScope's pipelines -> MsDataset -> datasets import chain.
++pyarrow
+ torch
+ torchaudio
+ soundfile>0.10
+diff --git a/runtime-constraints.txt b/runtime-constraints.txt
+index 177db50..783a2b5 100644
+--- a/runtime-constraints.txt
++++ b/runtime-constraints.txt
+@@ -9,6 +9,8 @@ huggingface-hub>=0.24,<1
+ # ModelScope 1.20 framework metadata selects this datasets family.
+ modelscope==1.20.0
+ datasets==3.0.1
++# Arrow26 requires NumPy2 in lib.pyx; Arrow17 supports this backend's NumPy1.26.
++pyarrow==17.0.0
+ setuptools==69.5.1
+ x-transformers==1.31.14
+ vocos==0.1.0

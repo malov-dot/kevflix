@@ -97,3 +97,96 @@ class Speech:
                 "sha256": file_hash(result)}
         atomic_json(receipt, meta)
         return result, meta
+
+
+class GenericSpeech:
+    """Full-length Piper PCM, instantiated only inside the lease-owned analysis child."""
+    def __init__(self, config):
+        from .movie_faults import MovieConfigurationError
+        from .media import file_hash
+        self.config, self.loaded = config, None
+        self.path = Path(config.resolve(config['generic_voice_model'])).resolve()
+        self.speaker_id = config['generic_speaker_id']
+        if config['generic_device'] != 'cuda':
+            raise MovieConfigurationError('generic_device_invalid', 'Generic Piper requires CUDA; CPU is not substituted')
+        if self.path.name != 'en_US-libritts_r-medium.onnx' or self.speaker_id != 0 \
+                or not isinstance(self.speaker_id, int) or isinstance(self.speaker_id, bool):
+            raise MovieConfigurationError('generic_voice_invalid', 'Generic baseline requires libritts_r medium speaker 0')
+        try:
+            self.metadata_path = Path(str(self.path) + '.json')
+            metadata = json.loads(self.metadata_path.read_text(encoding='utf-8'))
+            self.model_sha256 = file_hash(self.path)
+            self.metadata_sha256 = file_hash(self.metadata_path)
+            self.sample_rate = int(metadata['audio']['sample_rate'])
+            if not str(metadata['language']['code']).lower().startswith('en') or self.sample_rate <= 0 \
+                    or not 0 <= self.speaker_id < int(metadata.get('num_speakers', 1)):
+                raise ValueError('Piper metadata is not an English voice with this speaker/sample rate')
+        except (OSError, KeyError, TypeError, ValueError) as error:
+            raise MovieConfigurationError('generic_voice_assets_invalid', str(error)) from error
+
+    def identity(self):
+        return {'kind': 'generic-piper', 'path': str(self.path), 'model_sha256': self.model_sha256,
+                'metadata_sha256': self.metadata_sha256, 'speaker_id': self.speaker_id,
+                'sample_rate': self.sample_rate, 'device': 'cuda', 'loaded': self.loaded is not None,
+                'providers': self.loaded.session.get_providers() if self.loaded is not None else []}
+
+    def _providers(self):
+        from .movie_faults import MovieConfigurationError
+        providers = self.loaded.session.get_providers()
+        if not providers or providers[0] != 'CUDAExecutionProvider':
+            raise MovieConfigurationError('generic_piper_provider_failed', 'Piper actual providers: %r; CUDA required' % providers)
+        return list(providers)
+
+    def synthesize(self, text, voice, output):
+        from .language import backend_fault
+        from .media import file_hash
+        from .movie_faults import MovieConfigurationError, MovieContentFallback, MovieFault
+        if not isinstance(text, str) or not text.strip():
+            raise MovieContentFallback('generic_tts_empty_text', 'No English text to synthesize')
+        if len(text) > 50000:
+            raise MovieConfigurationError('generic_tts_text_too_large', 'One synthesis request exceeds 50000 characters')
+        if not isinstance(voice, dict) or voice.get('engine') != 'generic-piper' \
+                or voice.get('speaker_id') != self.speaker_id or not isinstance(voice.get('speaker_id'), int) \
+                or isinstance(voice.get('speaker_id'), bool) \
+                or Path(voice.get('path', self.path)).resolve() != self.path:
+            raise MovieConfigurationError('generic_tts_voice_mismatch', 'Request must use the configured fixed generic voice')
+        output = Path(output)
+        try:
+            if self.loaded is None:
+                import onnxruntime as ort
+                from piper.voice import PiperVoice
+                if 'CUDAExecutionProvider' not in ort.get_available_providers():
+                    raise MovieConfigurationError('generic_piper_cuda_unavailable', 'ONNX Runtime CUDA provider is unavailable')
+                if file_hash(self.path) != self.model_sha256 or file_hash(self.metadata_path) != self.metadata_sha256:
+                    raise MovieConfigurationError('generic_voice_changed', 'Configured Piper assets changed after identification')
+                self.loaded = PiperVoice.load(self.path, use_cuda=True, download_dir=output.parent)
+                self._providers()
+                self.loaded.session.disable_fallback()
+            from piper.config import SynthesisConfig
+            self._providers()
+            frames = 0
+            with wave.open(str(output), 'wb') as wav:
+                wav.setnchannels(1)
+                wav.setsampwidth(2)
+                wav.setframerate(self.sample_rate)
+                for chunk in self.loaded.synthesize(text, syn_config=SynthesisConfig(speaker_id=self.speaker_id)):
+                    self._providers()
+                    data = chunk.audio_int16_bytes
+                    if len(data) % 2:
+                        raise MovieContentFallback('generic_tts_invalid_pcm', 'Piper returned incomplete PCM frames')
+                    wav.writeframes(data)
+                    frames += len(data) // 2
+                    if frames * 2 > 1 << 30:
+                        raise MovieConfigurationError('generic_tts_audio_too_large', 'Full take exceeds exchange bound; not truncated')
+            if frames <= self.sample_rate * .05:
+                raise MovieContentFallback('generic_tts_empty', 'Piper returned no usable full PCM')
+            return {'audio': str(output), 'sha256': file_hash(output), 'seconds': frames / self.sample_rate,
+                    'sample_rate': self.sample_rate, 'frames': frames, 'channels': 1, 'sample_width': 2,
+                    'device': 'cuda', 'providers': self._providers(), 'voice': self.identity(),
+                    'speed': 1.0, 'truncated': False, 'pcm_scope': 'full-untruncated-take'}
+        except MovieFault:
+            output.unlink(missing_ok=True)
+            raise
+        except Exception as error:
+            output.unlink(missing_ok=True)
+            raise backend_fault('generic_piper', error, 'cuda') from error

@@ -14,6 +14,13 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Check out the previously published tree (update allowlist for installs that predate app-files.txt)
+        uses: actions/checkout@v4
+        with:
+          ref: 8fa3f72d067a26be673c20d0b73276ed0c6cf1aa
+          path: _legacy-published
+          fetch-depth: 1
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -25,7 +32,7 @@ jobs:
         shell: pwsh
         run: |
           python scripts/build_launcher.py
-          python scripts/build_installer.py --source . --runtime "$env:RUNNER_TEMP/python-runtime.tar.gz" --output "$env:RUNNER_TEMP/kevflix-build" --revision "$env:GITHUB_SHA"
+          python scripts/build_installer.py --source . --runtime "$env:RUNNER_TEMP/python-runtime.tar.gz" --output "$env:RUNNER_TEMP/kevflix-build" --base-revision "$env:GITHUB_SHA" --legacy-tree "_legacy-published"
           python scripts/package_tv.py --output "$env:RUNNER_TEMP/kevflix-build"
       - name: Publish development download
         env:

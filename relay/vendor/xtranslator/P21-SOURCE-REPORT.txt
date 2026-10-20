@@ -1,0 +1,7 @@
+P21 exact r79 tail-retention correction, 2026-10-18.
+
+Directed/reviewed predicate: Claude r79. Implementation/provenance: /root/claude_audio_worker. In translator/backend/session.py split_translation_segments, enumerate the existing parts and admit the final nonempty part even without terminal punctuation: should_emit_segment(part.strip(),1) or i==len(parts)-1. The existing multiline comprehension needs two physical line replacements to express this single predicate change. Regex, stripping, whole-text fallback, filler cleanup and P20 Unicode admission are unchanged.
+
+This prevents the unpunctuated tail of an already committed text from being silently omitted after an earlier punctuated part. It does not change ASR commit policy or create text. No other implementation edits.
+
+Saved baseline patches/baselines/P21-session.py.txt and exact P21-committed-tail-retention.patch. Prior prepared build T194848Z must be superseded by root's fresh build. Source/diff/hash evidence only; no tests, imports, builds, apps or models run by worker. Runtime translation/coverage remains unverified.

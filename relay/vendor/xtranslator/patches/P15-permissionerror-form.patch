@@ -1,0 +1,43 @@
+diff --git a/relay/xt_services.py b/relay/xt_services.py
+index 6c32a56..02f3841 100644
+--- a/relay/xt_services.py
++++ b/relay/xt_services.py
+@@ -7,6 +7,7 @@ cleanup. A lease is never released merely because wsl.exe exited.
+ from __future__ import annotations
+ 
+ import hashlib
++import errno
+ import json
+ import math
+ import os
+@@ -30,6 +31,12 @@ def _linux_path(path):
+     return '/mnt/' + value[0].lower() + value[2:]
+ 
+ 
++def _sharing_error(error):
++    winerror = getattr(error, 'winerror', None)
++    return winerror in (5, 32, 33) or (
++        winerror is None and isinstance(error, PermissionError) and error.errno in (errno.EACCES, errno.EPERM))
++
++
+ def _sharing_retry(operation, deadline):
+     delay, attempts = .025, 0
+     while True:
+@@ -38,7 +45,7 @@ def _sharing_retry(operation, deadline):
+             return operation()
+         except OSError as error:
+             remaining = deadline - time.monotonic()
+-            transient = getattr(error, 'winerror', None) in (5, 32, 33)
++            transient = _sharing_error(error)
+             if not transient or remaining <= 0:
+                 error.xt_io_attempts = attempts
+                 raise
+@@ -108,7 +115,7 @@ class XTServices:
+         try:
+             data = json.loads(run['status'].read_text(encoding='utf-8'))
+         except OSError as error:
+-            if not isinstance(error, FileNotFoundError) and getattr(error, 'winerror', None) not in (5, 32, 33):
++            if not isinstance(error, FileNotFoundError) and not _sharing_error(error):
+                 raise MovieConfigurationError('xt_monitor_failed', 'Supervisor status read: ' + str(error)) from error
+             return dict(run.get('last_valid_status', {}))
+         except ValueError:

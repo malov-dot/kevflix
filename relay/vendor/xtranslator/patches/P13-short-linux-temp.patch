@@ -1,0 +1,203 @@
+diff --git a/linux_supervisor.py b/linux_supervisor.py
+index 6b4a4c7..f57e58c 100644
+--- a/linux_supervisor.py
++++ b/linux_supervisor.py
+@@ -14,8 +14,10 @@ import json
+ import os
+ from pathlib import Path
+ import signal
++import shutil
+ import socket
+ import subprocess
++import tempfile
+ import time
+ import urllib.request
+ import urllib.parse
+@@ -28,6 +30,57 @@ def atomic_json(path, value):
+     os.replace(temporary, path)
+ 
+ 
++def create_short_temp(token):
++    """Linux-native private storage; immutable evidence remains at its original paths."""
++    if Path('/tmp').resolve(strict=True) != Path('/tmp'):
++        raise RuntimeError('XT requires native /tmp, not a redirected temporary root')
++    folder = Path(tempfile.mkdtemp(prefix='xt-', dir='/tmp'))
++    os.chmod(folder, 0o700)
++    stat = folder.stat()
++    owner = {'owner': 'kevflix-xtranslator', 'token': token, 'path': str(folder), 'device': stat.st_dev, 'inode': stat.st_ino,
++             'uid': stat.st_uid, 'supervisor_pid': os.getpid()}
++    atomic_json(folder / '.xt-owner.json', owner)
++    # Installed vLLM 0.14 network_utils.py:143 appends '/' + str(uuid4()).
++    # Linux sockaddr_un has 108 bytes including the terminating NUL.
++    socket_bytes = len((str(folder) + '/' + '00000000-0000-0000-0000-000000000000').encode('utf-8'))
++    return {'owner': owner, 'created_unix': time.time(), 'mode': '0700',
++            'vllm_socket_path_bytes': socket_bytes, 'socket_path_limit_bytes': 107,
++            'socket_path_safety_margin_bytes': 16,
++            'environment': {key: str(folder) for key in ('TMPDIR', 'TEMP', 'TMP', 'VLLM_RPC_BASE_PATH')},
++            'removed': False}
++
++
++def cleanup_short_temp(record, token, processes_confirmed):
++    if record is None:
++        return None
++    result = dict(record)
++    if not processes_confirmed:
++        result.update(removed=False, cleanup_reason='preserved: process/GPU cleanup unconfirmed')
++        return result
++    try:
++        owner = record['owner']
++        folder = Path(owner['path'])
++        if owner.get('owner') != 'kevflix-xtranslator' or owner.get('token') != token \
++                or folder.parent != Path('/tmp') or not folder.name.startswith('xt-') \
++                or folder.is_symlink() or folder.resolve() != folder:
++            raise RuntimeError('private temp ownership/path mismatch')
++        if not folder.exists():
++            result.update(removed=True, cleanup_reason='already absent after confirmed process cleanup')
++            return result
++        stat = folder.stat()
++        if (stat.st_dev, stat.st_ino, stat.st_uid) != (owner['device'], owner['inode'], owner['uid']) \
++                or (stat.st_mode & 0o777) != 0o700 \
++                or json.loads((folder / '.xt-owner.json').read_text()) != owner:
++            raise RuntimeError('private temp identity/marker changed; preserving directory')
++        if not shutil.rmtree.avoids_symlink_attacks:
++            raise RuntimeError('safe Linux directory cleanup is unavailable')
++        shutil.rmtree(folder)
++        result.update(removed=True, cleanup_reason='removed after confirmed owned process/GPU cleanup')
++    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
++        result.update(removed=False, cleanup_reason=str(error))
++    return result
++
++
+ def process_table():
+     rows = {}
+     for entry in Path('/proc').iterdir():
+@@ -91,6 +144,14 @@ def gpu_status(nvidia_smi, owned):
+             'owned_mib': sum(sizes) if all(value is not None for value in sizes) else None}
+ 
+ 
++class IPCPathTooLong(RuntimeError):
++    def __init__(self, record):
++        detail = json.dumps(record, sort_keys=True)
++        super().__init__(detail)
++        self.fault = {'code': 'xt_ipc_path_too_long', 'detail': detail,
++                      'fatal': True, 'recoverable': False, 'stage': 'ipc_path_admission'}
++
++
+ class MTGGUFUnsupported(RuntimeError):
+     def __init__(self, detail):
+         super().__init__(detail)
+@@ -111,7 +172,7 @@ def log_tail(path):
+ def verify_gguf_header(manifest, check, known):
+     """Owned CPU-only helper; poll lease/floor while it maps metadata, before model launch."""
+     output = Path(manifest['status_path']).parent / 'gguf-header.json'
+-    env = {**os.environ, **manifest['environment'], 'CUDA_VISIBLE_DEVICES': '',
++    env = {**os.environ, **manifest['environment'], **manifest['private_temp_environment'], 'CUDA_VISIBLE_DEVICES': '',
+            'KEVFLIX_XT_RUN_TOKEN': manifest['token']}
+     with output.open('wb') as handle:
+         child = subprocess.Popen(manifest['gguf_header_argv'], env=env, stdin=subprocess.DEVNULL,
+@@ -294,16 +355,21 @@ def main():
+         raise ValueError('Invalid supervisor manifest')
+     status_path = Path(manifest['status_path'])
+     known = {}
++    previous = {}
+     try:
+         previous = json.loads(status_path.read_text())
+         if previous.get('token') == manifest['token']:
+             known = {int(row['pid']): int(row['start_ticks']) for row in previous.get('processes', [])}
++        else:
++            previous = {}
+     except FileNotFoundError:
+         pass
+     if args.cleanup:
+         confirmed, processes, gpu = cleanup(manifest, known)
+-        atomic_json(status_path, {'token': manifest['token'], 'phase': 'stopped', 'cleanup_confirmed': confirmed,
+-                                  'processes': processes, 'gpu': gpu, 'updated_unix': time.time()})
++        temporary = cleanup_short_temp(previous.get('short_temp'), manifest['token'], confirmed)
++        confirmed = confirmed and (temporary is None or temporary['removed'])
++        atomic_json(status_path, {**previous, 'token': manifest['token'], 'phase': 'stopped', 'cleanup_confirmed': confirmed,
++                                  'short_temp': temporary, 'processes': processes, 'gpu': gpu, 'updated_unix': time.time()})
+         return 0 if confirmed else 3
+     # Adopt descendants whose intermediate vLLM parent exits during cleanup.
+     libc = ctypes.CDLL(None, use_errno=True)
+@@ -346,6 +412,12 @@ def main():
+     reason = None
+     try:
+         check()
++        state['short_temp'] = create_short_temp(manifest['token'])
++        atomic_json(status_path, state)
++        temporary = state['short_temp']
++        if temporary['vllm_socket_path_bytes'] + temporary['socket_path_safety_margin_bytes'] >= temporary['socket_path_limit_bytes']:
++            raise IPCPathTooLong(temporary)
++        manifest['private_temp_environment'] = state['short_temp']['environment']
+         # Check/reserve EVERY configured port before loading the first model.
+         # Never adopt an unrelated existing service that merely answers HTTP 200.
+         for spec in manifest['services']:
+@@ -384,6 +456,7 @@ def main():
+             log = open(spec['log'], 'ab', buffering=0)
+             logs.append(log)
+             env = {**os.environ, **manifest['environment'], **spec.get('environment', {}),
++                   **manifest['private_temp_environment'],
+                    'KEVFLIX_XT_RUN_TOKEN': manifest['token']}
+             port = urllib.parse.urlparse(spec['health_url']).port
+             reservations.pop(port).close()
+@@ -416,10 +489,13 @@ def main():
+             time.sleep(1.0)
+     except BaseException as error:
+         reason = '%s: %s' % (type(error).__name__, error)
+-        if isinstance(error, (GPUBudgetInsufficient, MTGGUFUnsupported)):
++        if isinstance(error, (GPUBudgetInsufficient, MTGGUFUnsupported, IPCPathTooLong)):
+             state['fault'] = error.fault
+     finally:
+         confirmed, processes, gpu = cleanup(manifest, known)
++        temporary = cleanup_short_temp(state.get('short_temp'), manifest['token'], confirmed)
++        state['short_temp'] = temporary
++        confirmed = confirmed and (temporary is None or temporary['removed'])
+         state.update(phase='stopped', reason=reason, cleanup_confirmed=confirmed,
+                      processes=processes, gpu=gpu, updated_unix=time.time())
+         atomic_json(status_path, state)
+diff --git a/relay/xt_services.py b/relay/xt_services.py
+index da7fa24..221ad5e 100644
+--- a/relay/xt_services.py
++++ b/relay/xt_services.py
+@@ -226,7 +226,6 @@ class XTServices:
+         urls = {name: 'http://127.0.0.1:%d' % port for name, port in ports.items()}
+         audio = folder / 'session_audio'
+         audio.mkdir()
+-        (folder / 'tmp').mkdir()
+         backend = json.loads((vendor / 'translator/config.json').read_text(encoding='utf-8-sig'))
+         backend['server'] = {'host': '127.0.0.1', 'port': ports['app']}
+         backend['asr'].update(provider='qwen3', qwen3_asr_url=urls['asr'] + '/v1/recognize')
+@@ -246,7 +245,6 @@ class XTServices:
+                'XTRANSLATE_LOG_DIR': linux_folder + '/backend-logs',
+                'XTRANSLATE_REQUEST_TIMEOUT_SECONDS': str(float(self._value('xt_request_timeout_seconds', 900))),
+                'XTRANSLATE_VISIT_COUNTER_PATH': linux_folder + '/visit-stats.json',
+-               'TMPDIR': linux_folder + '/tmp',
+                'XVOICE_ROOT': linux_vendor + '/xvoice', 'XVOICE_DEVICE': 'cuda', 'XVOICE_STAGE': '2',
+                'XVOICE_CKPT_FILE': paths['xt_xvoice_ckpt'], 'XVOICE_SRP_CKPT_FILE': paths['xt_rate_ckpt'],
+                'XVOICE_VOCAB_FILE': paths['xt_vocab'], 'XVOICE_VOCOS_DIR': paths['xt_vocos_dir'],
+@@ -279,6 +277,7 @@ class XTServices:
+         spec('app', [python, '-m', 'uvicorn', 'backend.app:create_app', '--factory', '--host', '127.0.0.1',
+                      '--port', str(ports['app'])], linux_folder, '/healthz')
+         manifest = {'version': 'kevflix-xt-supervisor-v1', 'token': token, 'services': services, 'environment': env,
++                    'temporary_storage': 'supervisor-owned private Linux /tmp directory',
+                     'model_manifest_path': _linux_path(model_manifest), 'model_manifest_sha256': model_manifest_sha,
+                     'model_paths': paths,
+                     'gguf_header_argv': [mt_python, linux_vendor + '/gguf_header.py',
+@@ -354,7 +353,7 @@ class XTServices:
+                     return dict(run['endpoints'])
+                 if status.get('phase') == 'stopped' or (run['popen'] and run['popen'].poll() is not None):
+                     fault = status.get('fault') or {}
+-                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported'):
++                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long'):
+                         raise MovieConfigurationError(fault['code'], fault['detail'])
+                     reason = status.get('reason', 'Linux supervisor exited without ready')
+                     if 'resource:' in reason:
+@@ -380,7 +379,7 @@ class XTServices:
+                 if status.get('phase') == 'stopped':
+                     reason = status.get('reason', 'XT Linux services stopped')
+                     fault = status.get('fault') or {}
+-                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported'):
++                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long'):
+                         self._failure = MovieConfigurationError(fault['code'], fault['detail'])
+                     else:
+                         self._failure = MovieResourceWait('xt_resource_yield', reason) if 'resource:' in reason \

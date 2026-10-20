@@ -1,0 +1,470 @@
+"""Explicitly started, lease-owned WSL X-Translator services. No import-time work.
+
+Windows Job ownership alone does NOT own Linux descendants. The Linux supervisor
+also owns groups, a run token, a stale-heartbeat guard and confirmed targeted
+cleanup. A lease is never released merely because wsl.exe exited.
+"""
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import os
+import shutil
+from pathlib import Path, PurePosixPath
+import subprocess
+import threading
+import time
+import uuid
+
+from .movie_faults import MovieConfigurationError, MovieResourceWait, MovieFault
+
+SUPPORTED_SOURCE_LANGUAGES = {key: key for key in (
+    'af', 'zh', 'en', 'fr', 'pt', 'es', 'ja', 'ru', 'ko', 'th', 'it', 'de', 'vi', 'id', 'pl', 'cs', 'nl')}
+
+
+def _linux_path(path):
+    value = Path(path).resolve().as_posix()
+    if len(value) < 3 or value[1:3] != ':/' or not value[0].isalpha():
+        raise MovieConfigurationError('xt_path_not_wsl_mappable', 'XT shared files require a local Windows drive: ' + value)
+    return '/mnt/' + value[0].lower() + value[2:]
+
+
+def _write_json(path, value):
+    path = Path(path)
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    temporary.write_text(json.dumps(value, sort_keys=True), encoding='utf-8')
+    os.replace(temporary, path)
+
+
+class XTServices:
+    def __init__(self, config, lease_source=None):
+        self.config, self.lease_source = config, lease_source
+        self.settings = getattr(config, 'data', config)
+        self._lock = threading.RLock()
+        self._run = None
+        self._closed = False
+        self._failure = None
+        self._last_budget = None
+        self._demucs_memory = None
+        self._last_used = time.monotonic()
+
+    def _value(self, key, default=None):
+        return self.settings.get(key, default)
+
+    def set_demucs_memory(self, memory):
+        """Accept the live resident's latest completed window, never cached stem metadata."""
+        with self._lock:
+            self._demucs_memory = None
+            if not isinstance(memory, dict) or memory.get('version') != 'demucs-window-cuda-memory-v1':
+                raise MovieConfigurationError('xt_demucs_memory_missing', 'Fresh resident Demucs window memory is required')
+            peak, current = memory.get('peak_reserved_bytes'), memory.get('current_reserved_bytes')
+            measured = memory.get('measured_at_unix')
+            if any(type(value) is not int or value < 0 for value in (peak, current)) \
+                    or not str(memory.get('device', '')).startswith('cuda') \
+                    or memory.get('reset_peak_memory_stats') is not True or memory.get('empty_cache_completed') is not True \
+                    or not isinstance(measured, (int, float)) or not math.isfinite(measured) \
+                    or not 0 <= time.time() - measured <= 900 or not isinstance(memory.get('pid'), int) \
+                    or memory['pid'] <= 0:
+                raise MovieConfigurationError('xt_demucs_memory_invalid', 'Demucs memory must identify a fresh completed CUDA window')
+            self._demucs_memory = dict(memory)
+
+    def _required_linux(self, key):
+        value = str(self._value(key, '') or '')
+        if not value.startswith('/') or '\x00' in value or '\n' in value:
+            raise MovieConfigurationError('xt_not_provisioned', key + ' must be a provisioned absolute Ubuntu path')
+        return value
+
+    def _status(self, run):
+        try:
+            data = json.loads(run['status'].read_text(encoding='utf-8'))
+        except (OSError, ValueError):
+            return {}
+        return data if data.get('token') == run['token'] else {}
+
+    def health(self):
+        """Read-only status; never starts WSL, queries a model or refreshes a heartbeat."""
+        with self._lock:
+            run = self._run
+            status = self._status(run) if run else {}
+            return {'engine': 'xtranslator', 'running': bool(run and status.get('phase') == 'ready'),
+                    'generation': run['token'] if run else None, 'status': status,
+                    'failure': str(self._failure) if self._failure else None,
+                    'gpu_budget': self._last_budget,
+                    'cleanup_confirmed': bool(status.get('cleanup_confirmed')),
+                    'reference_denoising': 'Demucs upstream; DeepFilterNet disabled',
+                    'route': 'Ubuntu-24.04 WSL2; explicit Linux ownership'}
+
+    def _gpu_budget(self, models, paths, folder):
+        """Metadata only. Warm helper residency is already subtracted from fresh free memory."""
+        mib = 1024 * 1024
+        binary = shutil.which('nvidia-smi.exe') or shutil.which('nvidia-smi')
+        if not binary:
+            raise MovieConfigurationError('xt_gpu_metadata_unavailable', 'Windows nvidia-smi was not found')
+        try:
+            reply = subprocess.run([binary, '--query-gpu=index,uuid,memory.total,memory.free',
+                                    '--format=csv,noheader,nounits'], capture_output=True, text=True,
+                                   check=True, timeout=10, creationflags=0x08000000)
+            lines = [line for line in reply.stdout.splitlines() if line.strip()]
+            if len(lines) != 1:
+                raise ValueError('exactly one GPU is required for the recorded admission arithmetic')
+            fields = [value.strip() for value in lines[0].split(',')]
+            index, gpu_uuid, total_mib, free_mib = int(fields[0]), fields[1], int(fields[2]), int(fields[3])
+            if total_mib <= 0 or not 0 <= free_mib <= total_mib or not gpu_uuid:
+                raise ValueError('invalid fresh GPU metadata')
+        except (OSError, ValueError, IndexError, subprocess.SubprocessError) as error:
+            raise MovieConfigurationError('xt_gpu_metadata_unavailable', str(error)) from error
+        total_bytes, free_bytes = total_mib * mib, free_mib * mib
+        overhead = int(self._value('xt_vllm_overhead_mib', 1024))
+        memory = self._demucs_memory
+        if memory is None or not 0 <= time.time() - memory['measured_at_unix'] <= 900:
+            raise MovieConfigurationError('xt_demucs_memory_missing', 'Fresh live Demucs peak/current measurement required before model load')
+        growth_bytes = max(0, memory['peak_reserved_bytes'] - memory['current_reserved_bytes'])
+        allowances = {'xvoice_mib': int(self._value('xt_xvoice_allowance_mib', 2048)),
+                      'campplus_mib': int(self._value('xt_campplus_allowance_mib', 256)),
+                      'demucs_additional_growth_mib': (growth_bytes + mib - 1) // mib}
+        if overhead < 0 or any(value < 0 for value in allowances.values()):
+            raise MovieConfigurationError('xt_gpu_budget_invalid', 'Overhead and additional allowances must be nonnegative')
+        if int(self._value('xt_vllm_max_num_seqs', 1)) != 1 or self._value('xt_vllm_enforce_eager', True) is not True:
+            raise MovieConfigurationError('xt_gpu_budget_invalid', 'First XT route requires max_num_seqs=1 and enforce_eager=True')
+        engines = {}
+        for name, repo, key, kv_default, kv_min, maxlen in (
+                ('asr', 'Qwen/Qwen3-ASR-1.7B', 'xt_asr_model', 1024, 896, 8192),
+                ('mt', 'mradermacher/LMT-60-8B-GGUF', 'xt_mt_model', 768, 576, 4096)):
+            configured = PurePosixPath(paths[key])
+            records = [row for row in models['models'] if row.get('repo') == repo
+                       and PurePosixPath(row['folder']) == (configured.parent if name == 'mt' else configured)]
+            if len(records) != 1:
+                raise MovieConfigurationError('xt_gpu_budget_invalid', name + ' is not the pinned configured model; no model substitution')
+            if name == 'mt':
+                if self._value('xt_mt_format') != 'gguf-q8_0' or self._value('xt_mt_dtype') != 'half' \
+                        or configured.name != 'LMT-60-8B.Q8_0.gguf':
+                    raise MovieConfigurationError('xt_mt_gguf_unsupported', 'Only the pinned Q8_0 GGUF with half activations is authorized')
+                weights = [row for row in records[0]['files'] if row['path'] == configured.name]
+                if len(weights) != 1 or weights[0]['sha256'] != 'f7671cd4fca54b20398754d89de00e340cdf422b6ffe6976f63e4ee522150ead':
+                    raise MovieConfigurationError('xt_mt_gguf_unsupported', 'Pinned Q8_0 file identity missing')
+            else:
+                weights = [row for row in records[0]['files'] if row['path'].endswith('.safetensors')
+                           or PurePosixPath(row['path']).name == 'pytorch_model.bin']
+            weight_bytes = sum(int(row['bytes']) for row in weights)
+            kv_mib = int(self._value('xt_' + name + '_kv_cache_mib', kv_default))
+            configured_len = int(self._value('xt_' + name + '_max_model_len', maxlen))
+            if weight_bytes <= 0 or any(int(row['bytes']) <= 0 for row in weights) or kv_mib < kv_min or configured_len != maxlen:
+                raise MovieConfigurationError('xt_gpu_budget_invalid', name + ' weight/KV/context metadata invalid')
+            kv_bytes = kv_mib * mib
+            engine_overhead = int(self._value('xt_mt_gguf_overhead_mib', 1536)) if name == 'mt' else overhead
+            if engine_overhead < (1536 if name == 'mt' else 1024):
+                raise MovieConfigurationError('xt_gpu_budget_invalid', 'Engine workspace allowance is below its reviewed minimum')
+            required = weight_bytes + kv_bytes + engine_overhead * mib
+            hundredths = (100 * required + total_bytes - 1) // total_bytes
+            engines[name] = {'repository': repo, 'weight_bytes': weight_bytes, 'weight_files': weights,
+                             'kv_cache_bytes': kv_bytes, 'overhead_bytes': engine_overhead * mib,
+                             'required_bytes': required, 'fraction_hundredths': hundredths,
+                             'gpu_memory_utilization': hundredths / 100.,
+                             'startup_required_bytes': (hundredths * total_bytes + 99) // 100,
+                             'max_model_len': maxlen, 'max_num_batched_tokens': maxlen,
+                             'max_num_seqs': 1, 'enforce_eager': True, 'dtype': 'half' if name == 'mt' else 'bfloat16',
+                             'format': 'gguf-q8_0' if name == 'mt' else 'safetensors'}
+        fraction_sum = sum(row['fraction_hundredths'] for row in engines.values())
+        required_free = sum(row['required_bytes'] for row in engines.values()) + (sum(allowances.values()) + 3072) * mib
+        record = {'measured_unix': time.time(), 'measurement': 'fresh Windows nvidia-smi after warmed helpers',
+                  'gpu_index': index, 'gpu_uuid': gpu_uuid, 'total_bytes': total_bytes, 'fresh_free_bytes': free_bytes,
+                  'engines': engines, 'allowances': allowances, 'floor_bytes': 3072 * mib,
+                  'required_free_bytes': required_free, 'fraction_sum_hundredths': fraction_sum,
+                  'formula': 'ceil_0.01((manifest weights + fixed KV + overhead) / GPU total)',
+                  'helper_accounting': {'current_residency_already_in_fresh_free': True,
+                      'paired_current_and_peak_available': True, 'demucs_window': memory,
+                      'additional_growth_mib': allowances['demucs_additional_growth_mib'],
+                      'scope': 'measured previous window peak minus current; future larger windows are not proven'},
+                  'legacy_fixed_fraction_config_ignored': True,
+                  'ok': fraction_sum <= 80 and required_free <= free_bytes}
+        self._last_budget = record
+        _write_json(folder / 'gpu-budget.json', record)
+        if not record['ok']:
+            raise MovieConfigurationError('xt_gpu_budget_insufficient', json.dumps(record, sort_keys=True))
+        return record
+
+    def _manifest(self, token, folder):
+        if self._value('xt_wsl_distro', 'Ubuntu-24.04') != 'Ubuntu-24.04':
+            raise MovieConfigurationError('xt_distro_refused', 'Only Ubuntu-24.04 is allowed; Sem-Unreal is never touched')
+        vendor = Path(self.config.resolve(self._value('xt_vendor_dir'))).resolve()
+        if not (vendor / 'linux_supervisor.py').is_file() or not (vendor / 'PROVENANCE.json').is_file():
+            raise MovieConfigurationError('xt_vendor_missing', 'Pinned vendor/supervisor provenance is missing')
+        provenance = json.loads((vendor / 'PROVENANCE.json').read_text(encoding='utf-8-sig'))
+        for record in provenance['files']:
+            path = (vendor / record['path']).resolve()
+            if not path.is_relative_to(vendor) or not path.is_file() \
+                    or hashlib.sha256(path.read_bytes()).hexdigest() != record['sha256']:
+                raise MovieConfigurationError('xt_vendor_changed', 'Vendored source differs from provenance: ' + record['path'])
+        if hashlib.sha256(Path(__file__).read_bytes()).hexdigest() != provenance['xt_services_sha256']:
+            raise MovieConfigurationError('xt_services_changed', 'Service launcher differs from its reviewed provenance')
+        linux_vendor, linux_folder = _linux_path(vendor), _linux_path(folder)
+        python = self._required_linux('xt_python')
+        asr_python, mt_python, tts_python = [self._required_linux(key) for key in
+                                           ('xt_asr_python', 'xt_mt_python', 'xt_tts_python')]
+        paths = {key: self._required_linux(key) for key in (
+            'xt_asr_model', 'xt_mt_model', 'xt_mt_tokenizer', 'xt_xvoice_ckpt', 'xt_rate_ckpt', 'xt_vocab',
+            'xt_vocos_dir', 'xt_campplus_model', 'xt_espeak_library', 'xt_espeak_data')}
+        model_manifest = Path(self.config.resolve(self._value('xt_model_manifest', ''))).resolve()
+        runtime_receipt = Path(self.config.resolve(self._value('xt_runtime_receipt', ''))).resolve()
+        if not model_manifest.is_file() or model_manifest.stat().st_size > 16 << 20 or not runtime_receipt.is_file():
+            raise MovieConfigurationError('xt_assets_not_provisioned', 'Bounded model manifest and provisioning receipt are required')
+        model_manifest_sha = hashlib.sha256(model_manifest.read_bytes()).hexdigest()
+        installed = json.loads(runtime_receipt.read_text(encoding='utf-8-sig'))
+        if installed.get('models_manifest_sha256') != model_manifest_sha:
+            raise MovieConfigurationError('xt_asset_manifest_changed', 'Model manifest differs from the provisioning receipt')
+        try:
+            budget = self._gpu_budget(json.loads(model_manifest.read_text(encoding='utf-8-sig')), paths, folder)
+        except MovieFault:
+            raise
+        except (KeyError, TypeError, ValueError) as error:
+            raise MovieConfigurationError('xt_gpu_budget_invalid', str(error)) from error
+        ports = {name: int(self._value('xt_' + name + '_port', default)) for name, default in
+                 (('asr', 18761), ('mt', 18762), ('tts', 18763), ('app', 18764))}
+        if len(set(ports.values())) != 4 or any(not 1024 <= port <= 65535 for port in ports.values()):
+            raise MovieConfigurationError('xt_ports_invalid', 'Four distinct local nonprivileged ports are required')
+        urls = {name: 'http://127.0.0.1:%d' % port for name, port in ports.items()}
+        audio = folder / 'session_audio'
+        audio.mkdir()
+        backend = json.loads((vendor / 'translator/config.json').read_text(encoding='utf-8-sig'))
+        backend['server'] = {'host': '127.0.0.1', 'port': ports['app']}
+        backend['asr'].update(provider='qwen3', qwen3_asr_url=urls['asr'] + '/v1/recognize')
+        backend['translation'].update(provider='lmt', lmt_url=urls['mt'] + '/v1/chat/completions',
+                                      model='lmt', source_lang='auto', target_lang='en')
+        backend['tts'].update(provider='xvoice', xvoice_tts_url=urls['tts'] + '/synthesize',
+                              speaker_embedding_provider='modelscope_campplus', speaker_embedding_model=paths['xt_campplus_model'])
+        backend['storage'].update(session_audio_dir=_linux_path(audio), log_dir=linux_folder + '/backend-logs')
+        _write_json(folder / 'backend-config.json', backend)
+        env = {'PYTHONPATH': linux_vendor + '/offline:' + linux_vendor + '/translator:' + linux_vendor + '/xvoice/src',
+               'CUDA_VISIBLE_DEVICES': '0', 'HF_HUB_OFFLINE': '1', 'TRANSFORMERS_OFFLINE': '1',
+               'VLLM_HOST_IP': '127.0.0.1', 'GLOO_SOCKET_IFNAME': 'lo', 'NCCL_SOCKET_IFNAME': 'lo',
+               'WANDB_MODE': 'disabled', 'TOKENIZERS_PARALLELISM': 'false',
+               'MODELSCOPE_OFFLINE': '1', 'PYTHONDONTWRITEBYTECODE': '1',
+               'XTRANSLATE_CONFIG': linux_folder + '/backend-config.json',
+               'XTRANSLATE_HOST': '127.0.0.1', 'XTRANSLATE_PORT': str(ports['app']),
+               'XTRANSLATE_LOG_DIR': linux_folder + '/backend-logs',
+               'XTRANSLATE_REQUEST_TIMEOUT_SECONDS': str(float(self._value('xt_request_timeout_seconds', 900))),
+               'XTRANSLATE_VISIT_COUNTER_PATH': linux_folder + '/visit-stats.json',
+               'XVOICE_ROOT': linux_vendor + '/xvoice', 'XVOICE_DEVICE': 'cuda', 'XVOICE_STAGE': '2',
+               'XVOICE_CKPT_FILE': paths['xt_xvoice_ckpt'], 'XVOICE_SRP_CKPT_FILE': paths['xt_rate_ckpt'],
+               'XVOICE_VOCAB_FILE': paths['xt_vocab'], 'XVOICE_VOCOS_DIR': paths['xt_vocos_dir'],
+               'XVOICE_AUTO_DETECT_LANG': '0', 'XVOICE_DENOISE_REF': '0',
+               'PHONEMIZER_ESPEAK_LIBRARY': paths['xt_espeak_library'], 'ESPEAK_DATA_PATH': paths['xt_espeak_data']}
+        services = []
+        def spec(name, argv, cwd, health):
+            services.append({'name': name, 'argv': argv, 'cwd': cwd, 'host': '127.0.0.1',
+                             'health_url': urls[name] + health, 'log': linux_folder + '/' + name + '.log',
+                             'vllm_budget': budget['engines'].get(name)})
+        asr, mt = budget['engines']['asr'], budget['engines']['mt']
+        spec('asr', [asr_python, linux_vendor + '/translator/server/qwen3asr/qwen3asr_server.py',
+                     '--host', '127.0.0.1', '--port', str(ports['asr']), '--model', paths['xt_asr_model'],
+                     '--gpu-memory-utilization', str(asr['gpu_memory_utilization']), '--max-model-len', '8192',
+                     '--kv-cache-memory-bytes', str(asr['kv_cache_bytes']), '--max-num-seqs', '1',
+                     '--max-num-batched-tokens', '8192', '--enforce-eager', '--dtype', 'bfloat16'],
+             linux_folder, '/healthz')
+        spec('mt', [mt_python, '-m', 'vllm.entrypoints.openai.api_server', '--host', '127.0.0.1',
+                    '--port', str(ports['mt']), '--model', paths['xt_mt_model'], '--trust-remote-code',
+                    '--quantization', 'gguf', '--load-format', 'gguf',
+                    '--tokenizer', paths['xt_mt_tokenizer'], '--hf-config-path', paths['xt_mt_tokenizer'],
+                    '--dtype', 'half', '--served-model-name', 'lmt', '--tensor-parallel-size', '1',
+                    '--gpu-memory-utilization', str(mt['gpu_memory_utilization']), '--max-model-len', '4096',
+                    '--kv-cache-memory-bytes', str(mt['kv_cache_bytes']), '--max-num-seqs', '1',
+                    '--max-num-batched-tokens', '4096', '--enforce-eager'],
+             linux_folder, '/health')
+        spec('tts', [tts_python, linux_vendor + '/translator/server/xvoice/server.py', '--host', '127.0.0.1',
+                     '--port', str(ports['tts']), '--device', 'cuda', '--stage', '2'],
+             linux_vendor + '/xvoice', '/healthz')
+        spec('app', [python, '-m', 'uvicorn', 'backend.app:create_app', '--factory', '--host', '127.0.0.1',
+                     '--port', str(ports['app'])], linux_folder, '/healthz')
+        manifest = {'version': 'kevflix-xt-supervisor-v1', 'token': token, 'services': services, 'environment': env,
+                    'temporary_storage': 'supervisor-owned private Linux /tmp directory',
+                    'model_manifest_path': _linux_path(model_manifest), 'model_manifest_sha256': model_manifest_sha,
+                    'model_paths': paths,
+                    'gguf_header_argv': [mt_python, linux_vendor + '/gguf_header.py',
+                                         '--model', paths['xt_mt_model'], '--original', paths['xt_mt_tokenizer']],
+                    'gpu_budget': budget,
+                    'heartbeat_path': linux_folder + '/heartbeat.json', 'status_path': linux_folder + '/status.json',
+                    'stop_path': linux_folder + '/stop.json', 'gpu_floor_mib': 3072,
+                    'start_timeout_seconds': float(self._value('xt_start_timeout_seconds', 600)),
+                    'nvidia_smi': '/usr/lib/wsl/lib/nvidia-smi'}
+        endpoints = {**urls, 'ws': urls['app'].replace('http:', 'ws:') + '/ws', 'generation': token,
+                     'session_audio_dir': str(audio), 'session_audio_wsl_dir': _linux_path(audio),
+                     'supported_source_languages': dict(SUPPORTED_SOURCE_LANGUAGES), 'seek_pad_seconds': 14.3}
+        return manifest, endpoints, python, linux_vendor
+
+    def _heartbeat(self, run):
+        run['view'].check()
+        _write_json(run['heartbeat'], {'token': run['token'], 'expires_unix': time.time() + 10.0})
+
+    def ensure(self, owner):
+        with self._lock:
+            if self._closed:
+                raise MovieConfigurationError('xt_services_closed', 'XTServices is closed')
+            if self._failure:
+                if isinstance(self._failure, MovieResourceWait) and self._run is None:
+                    self._failure = None  # prior Linux generation was confirmed cleaned
+                else:
+                    raise self._failure
+            self._last_used = time.monotonic()
+            if self._run:
+                run = self._run
+                run['owner'] = owner
+            else:
+                if self.lease_source is None:
+                    raise MovieConfigurationError('xt_lease_missing', 'A real existing GPU lease source is required')
+                owner.check()
+                token = uuid.uuid4().hex
+                folder = Path(self.config.state) / 'xt-services' / token
+                folder.mkdir(parents=True)
+                manifest, endpoints, python, vendor = self._manifest(token, folder)
+                manifest_path = folder / 'manifest.json'
+                _write_json(manifest_path, manifest)
+                view = self.lease_source('kevflix X-Translator WSL')
+                run = {'token': token, 'folder': folder, 'status': folder / 'status.json',
+                       'heartbeat': folder / 'heartbeat.json', 'manifest': manifest_path, 'endpoints': endpoints,
+                       'python': python, 'vendor': vendor, 'view': view, 'popen': None, 'released': False,
+                       'stop_monitor': threading.Event(), 'log': None, 'owner': owner}
+                self._run = run
+                try:
+                    self._heartbeat(run)
+                    log = open(folder / 'supervisor.log', 'ab', buffering=0)
+                    run['log'] = log
+                    argv = ['wsl.exe', '-d', 'Ubuntu-24.04', '--exec', '/usr/bin/env',
+                            'KEVFLIX_XT_RUN_TOKEN=' + token, python, vendor + '/linux_supervisor.py',
+                            '--manifest', _linux_path(manifest_path)]
+                    run['popen'] = view.spawn(argv, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT,
+                                              creationflags=0x08000000)
+                    if hasattr(view, 'report_resident'):
+                        view.report_resident(run['popen'].pid, None)
+                    threading.Thread(target=self._monitor, args=(run,), daemon=True, name='xt-lease-watchdog').start()
+                except BaseException:
+                    self._cleanup(run, 'startup_failed')
+                    raise
+        deadline = time.monotonic() + 4 * float(self._value('xt_start_timeout_seconds', 600)) + 30
+        try:
+            while True:
+                owner.check()
+                if self._failure:
+                    raise self._failure
+                status = self._status(run)
+                if isinstance(status.get('gpu_budget'), dict):
+                    self._last_budget = status['gpu_budget']
+                if status.get('phase') == 'ready':
+                    return dict(run['endpoints'])
+                if status.get('phase') == 'stopped' or (run['popen'] and run['popen'].poll() is not None):
+                    fault = status.get('fault') or {}
+                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long'):
+                        raise MovieConfigurationError(fault['code'], fault['detail'])
+                    reason = status.get('reason', 'Linux supervisor exited without ready')
+                    if 'resource:' in reason:
+                        raise MovieResourceWait('xt_resource_yield', reason)
+                    raise MovieConfigurationError('xt_startup_failed', reason)
+                if time.monotonic() >= deadline:
+                    raise MovieConfigurationError('xt_startup_timeout', 'XT services did not become healthy in the bounded load window')
+                run['stop_monitor'].wait(.2)
+        except BaseException:
+            self._cleanup(run, 'ensure_failed_or_cancelled')
+            raise
+
+    def _monitor(self, run):
+        while not run['stop_monitor'].wait(2.0):
+            try:
+                cancelled = getattr(run['owner'], 'cancelled', None)
+                if cancelled is not None and cancelled.is_set():
+                    raise MovieResourceWait('xt_owner_cancelled', 'Current movie owner cancelled')
+                self._heartbeat(run)
+                status = self._status(run)
+                if isinstance(status.get('gpu_budget'), dict):
+                    self._last_budget = status['gpu_budget']
+                if status.get('phase') == 'stopped':
+                    reason = status.get('reason', 'XT Linux services stopped')
+                    fault = status.get('fault') or {}
+                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long'):
+                        self._failure = MovieConfigurationError(fault['code'], fault['detail'])
+                    else:
+                        self._failure = MovieResourceWait('xt_resource_yield', reason) if 'resource:' in reason \
+                            else MovieConfigurationError('xt_service_failed', reason)
+                    self._cleanup(run, 'service_stopped')
+                    return
+                if status and time.time() - float(status.get('updated_unix', 0)) > 15:
+                    raise MovieResourceWait('xt_supervisor_stale', 'Linux supervisor status heartbeat is stale')
+                if hasattr(run['view'], 'report_resident') and run['popen']:
+                    run['view'].report_resident(run['popen'].pid, (status.get('gpu') or {}).get('owned_mib'))
+            except BaseException as error:
+                self._failure = error if isinstance(error, MovieFault) else MovieResourceWait('xt_lease_ended', str(error))
+                try:
+                    self._cleanup(run, 'lease_or_supervisor_yield')
+                except BaseException as cleanup_error:
+                    self._failure = cleanup_error
+                return
+
+    def _cleanup(self, run, reason):
+        with self._lock:
+            if run['released']:
+                return
+            run['stop_monitor'].set()
+            _write_json(run['folder'] / 'stop.json', {'token': run['token'], 'reason': reason})
+            deadline = time.monotonic() + 25
+            while time.monotonic() < deadline:
+                status = self._status(run)
+                if status.get('cleanup_confirmed') is True and (run['popen'] is None or run['popen'].poll() is not None):
+                    break
+                time.sleep(.2)
+            else:
+                # Explicit targeted cleanup is independent of a revoked lease;
+                # it can only signal this manifest's tagged/starttime-checked PIDs.
+                try:
+                    subprocess.run(['wsl.exe', '-d', 'Ubuntu-24.04', '--exec', run['python'],
+                                    run['vendor'] + '/linux_supervisor.py', '--manifest', _linux_path(run['manifest']), '--cleanup'],
+                                   stdin=subprocess.DEVNULL, stdout=run['log'] or subprocess.DEVNULL,
+                                   stderr=subprocess.STDOUT, timeout=45, creationflags=0x08000000, check=True)
+                except Exception as error:
+                    raise MovieResourceWait('xt_cleanup_unconfirmed', str(error)) from error
+                status = self._status(run)
+            if status.get('cleanup_confirmed') is not True:
+                raise MovieResourceWait('xt_cleanup_unconfirmed', 'Owned Linux processes or GPU allocations remain; lease retained')
+            if run['popen'] and run['popen'].poll() is None:
+                try:
+                    run['popen'].wait(timeout=5)
+                except subprocess.TimeoutExpired as error:
+                    raise MovieResourceWait('xt_wrapper_unconfirmed', 'Linux clean but wrapper not exited; lease retained') from error
+            if run['popen'] and hasattr(run['view'], 'forget_resident'):
+                run['view'].forget_resident(run['popen'].pid)
+            run['view'].release('xt_linux_cleanup_confirmed')
+            run['released'] = True
+            if run['log']:
+                run['log'].close()
+            if self._run is run:
+                self._run = None
+
+    def idle_check(self):
+        with self._lock:
+            run = self._run
+            if run and time.monotonic() - self._last_used >= float(self._value('xt_idle_seconds', 150)):
+                self._cleanup(run, 'idle')
+
+    def close(self):
+        with self._lock:
+            self._closed = True
+            if self._run:
+                self._cleanup(self._run, 'close')
+
+    def resolve_audio(self, linux_path):
+        """Optional diagnostic mapping; production client verifies the hashed binary frame."""
+        with self._lock:
+            if not self._run:
+                raise MovieConfigurationError('xt_audio_session_missing', 'No active service generation')
+            endpoints = self._run['endpoints']
+            path = PurePosixPath(str(linux_path))
+            base = PurePosixPath(endpoints['session_audio_wsl_dir'])
+            if not path.is_absolute() or '..' in path.parts:
+                raise MovieConfigurationError('xt_audio_path_refused', 'TTS path is not a normalized absolute Linux path')
+            try:
+                relative = path.relative_to(base)
+            except ValueError as error:
+                raise MovieConfigurationError('xt_audio_path_refused', 'TTS path leaves the owned session directory') from error
+            root = Path(endpoints['session_audio_dir']).resolve()
+            result = (root / Path(*relative.parts)).resolve()
+            if not result.is_relative_to(root) or not result.is_file():
+                raise MovieConfigurationError('xt_audio_missing', 'Owned TTS file missing or outside mapped root')
+            return result

@@ -1,0 +1,552 @@
+[
+  {
+    "path": "translator/README.md",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/README.md",
+    "git_blob_sha1": "299fdd48baea6f7b57ce96af65db3360c4dab78f",
+    "upstream_sha256": "f5ec845d7445536cae7838a85d8c8b92194035e983cc2d91fbfc1f3ea17def6d",
+    "bytes": 3941
+  },
+  {
+    "path": "translator/backend/__init__.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/__init__.py",
+    "git_blob_sha1": "67c699729cc0a54df8aaa48b27d4a1f9ffecc1b3",
+    "upstream_sha256": "28945c14508ba7b469f839da67208999e9a89cfa4e9185d1b40e004d2f8a81c7",
+    "bytes": 27
+  },
+  {
+    "path": "translator/backend/app.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/app.py",
+    "git_blob_sha1": "ed14de5acca8c7735d74e6df32fb2e452423301b",
+    "upstream_sha256": "3564b42fc744e87a18cfa2ff9cae752fe234e0a0909f2a8b9526b099a96304e8",
+    "bytes": 5805
+  },
+  {
+    "path": "translator/backend/asr_backends.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/asr_backends.py",
+    "git_blob_sha1": "1ce8a71f54563685acf2c6f66db38626a6c140ce",
+    "upstream_sha256": "83d8fe4c70d7e8aeede6dfea78d5b8da5fa713fc22fe5c383a22d321b0092fe4",
+    "bytes": 29802
+  },
+  {
+    "path": "translator/backend/config.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/config.py",
+    "git_blob_sha1": "2fe0aa094e44db876dc266566e94271889e18fb9",
+    "upstream_sha256": "b4f23ef62a1f24e9aea8bf0be70b87d8a4f793bded16cad933f891dcce2dc61f",
+    "bytes": 12521
+  },
+  {
+    "path": "translator/backend/logging_utils.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/logging_utils.py",
+    "git_blob_sha1": "6c5229882da386174aea0a220e130490b103cfa7",
+    "upstream_sha256": "98b47fdfc163c02067b5ecbfecd9edf1c221ab9f1e194430f6be4445469e28eb",
+    "bytes": 1204
+  },
+  {
+    "path": "translator/backend/services.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/services.py",
+    "git_blob_sha1": "f22825e40cf2b3a7ddcc86d2aca646f4e3722145",
+    "upstream_sha256": "53e0017b7f1862e43d23920b84c8dd1c52f5f61dc5bede76b99d9a4f286ef5e8",
+    "bytes": 32919
+  },
+  {
+    "path": "translator/backend/session.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/session.py",
+    "git_blob_sha1": "4b7930cff2d0d6cad7d63ebb3aa56ed70f39afdf",
+    "upstream_sha256": "34ef4d667e0c327302f4b92e96c5148e3452921c936e091b649a78c1e9a432cb",
+    "bytes": 68128
+  },
+  {
+    "path": "translator/backend/speaker_prompt.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/speaker_prompt.py",
+    "git_blob_sha1": "a35d1be4d62549a3f27227caf4e87b5318a5e351",
+    "upstream_sha256": "aac1fa3eb485fb7019b9d3e0e605b529b72d513ac6c4111d8d70d624916472db",
+    "bytes": 34949
+  },
+  {
+    "path": "translator/backend/visit_counter.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/visit_counter.py",
+    "git_blob_sha1": "acb5621129d7a0b3a30223f062a5eaa585527d48",
+    "upstream_sha256": "8fcf7f0b90d9f62a75fee46003f540710dd411f72de07b40d12ffab972efaed0",
+    "bytes": 1394
+  },
+  {
+    "path": "translator/backend/zipformer_postprocess.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/zipformer_postprocess.py",
+    "git_blob_sha1": "bed2d2b0878d0eda71c2a34cd79cd62d1103e419",
+    "upstream_sha256": "63e359e11023f0ce89d55723e3b74aac9a8bd5a84286bfcd67d59fc403e1d009",
+    "bytes": 3032
+  },
+  {
+    "path": "translator/config.json",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/config.json",
+    "git_blob_sha1": "92f357c3cd14596de6d7f03e73db33227787b20a",
+    "upstream_sha256": "d912ba191b52dfda6972abd469e026698d7bb93bd8cd67faf1128e2fdedd6561",
+    "bytes": 2039
+  },
+  {
+    "path": "translator/main.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/main.py",
+    "git_blob_sha1": "ed0b6238db3ed20af558a6aaf59bde278cee23f2",
+    "upstream_sha256": "fb3624689bb3988cacf37d091e698834707985dd6bb4d810673d09d303fe925d",
+    "bytes": 610
+  },
+  {
+    "path": "translator/pyproject.toml",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/pyproject.toml",
+    "git_blob_sha1": "d686eb2336fd3b869bbe302cca35b09d5878de32",
+    "upstream_sha256": "21511b69b616d71eb53e455cdee0513c778fb771b032dcacfd9a5c7897dc2595",
+    "bytes": 569
+  },
+  {
+    "path": "translator/server/LMT/start_lmt_vllm.sh",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/LMT/start_lmt_vllm.sh",
+    "git_blob_sha1": "ff3092cd8606774c02b7799aee21f109ba07c20d",
+    "upstream_sha256": "0dda77629fd7204ed32aab4c519b208f9b95cf28f630a93b373f808ebfb62d93",
+    "bytes": 935
+  },
+  {
+    "path": "translator/server/qwen3asr/qwen3asr_server.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/qwen3asr/qwen3asr_server.py",
+    "git_blob_sha1": "de60804e4eda24518e09f84e591824ad9936d3d1",
+    "upstream_sha256": "4f5a78690fd93810c01c3fcff3e40c3b5d6be7d6921dacfa7ff9aeb4dd26fcbd",
+    "bytes": 9732
+  },
+  {
+    "path": "translator/server/qwen3asr/start.sh",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/qwen3asr/start.sh",
+    "git_blob_sha1": "81c921b8770f5f3190236d1ba8231d99372a0373",
+    "upstream_sha256": "62dfd2482691d9e4b6b22ff47de45aa9b7ee1394565f7fda5e447ef50ddb427d",
+    "bytes": 222
+  },
+  {
+    "path": "translator/server/xvoice/server.py",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/xvoice/server.py",
+    "git_blob_sha1": "cbbd6db5497464d56923359f8fb226c5f6aa38c0",
+    "upstream_sha256": "179b90e2a51b20c356f171ec2a67dcff40eeaea4872e60564779523aa0d38c77",
+    "bytes": 23025
+  },
+  {
+    "path": "translator/server/xvoice/start_x_voice.sh",
+    "repository": "zhaoyx239/X-Translator",
+    "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+    "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/xvoice/start_x_voice.sh",
+    "git_blob_sha1": "ec22d917252c8a9094dbcc264a208984fbb7e5a1",
+    "upstream_sha256": "5e7a0633fa274776416370291f6b3cc5061a4411547f785d19840acd156b6503",
+    "bytes": 664
+  },
+  {
+    "path": "xvoice/README.md",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/README.md",
+    "git_blob_sha1": "1ebcecc956eb067b6417aa3fa840a6df9b32c5b3",
+    "upstream_sha256": "9f4d2877aa8d5827b5b86c602740abfe849dc1d9a5ddaca3755f829f1a67e3e1",
+    "bytes": 8446
+  },
+  {
+    "path": "xvoice/pyproject.toml",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/pyproject.toml",
+    "git_blob_sha1": "a7a38ce567162a2976b2382aff5ae7bbd336aae6",
+    "upstream_sha256": "1478203dfa92dbc76832edaf8b53a363d13407dd735ae662f759925f41a1d25f",
+    "bytes": 2611
+  },
+  {
+    "path": "xvoice/src/rate_pred/README.md",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/README.md",
+    "git_blob_sha1": "3ff315b5970cb1e5a9d7e53579b86c3359dd9f6f",
+    "upstream_sha256": "919c28d67a02e12232a7f253ccafc1ca54c3436a0b9795a374373106f9366cef",
+    "bytes": 3229
+  },
+  {
+    "path": "xvoice/src/rate_pred/configs/SpeedPredict_Multilingual.yaml",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/configs/SpeedPredict_Multilingual.yaml",
+    "git_blob_sha1": "513b7e75c89f3e63a5ae3ad3d37818e0d500a5db",
+    "upstream_sha256": "16e3b782bbee8ba54f6d72e8e9c1e3347d982b3c030d03476f179dc10a2f0877",
+    "bytes": 1620
+  },
+  {
+    "path": "xvoice/src/rate_pred/model/__init__.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/__init__.py",
+    "git_blob_sha1": "dfb28bb80d550d0cea7ad9d41d5b7541a09e9592",
+    "upstream_sha256": "7f776a93fa6f691bd867fba4d20e2ec0caf876933cb72053e5ddeee0662ffc27",
+    "bytes": 113
+  },
+  {
+    "path": "xvoice/src/rate_pred/model/dataset.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/dataset.py",
+    "git_blob_sha1": "d1b4a1dbb7a29a66307dc4d716b68bfb90a14f2e",
+    "upstream_sha256": "9a53a233987bbac9de549bcc0cdc5bd0bc69cb0d66c4020df58bb2ce26cc6f42",
+    "bytes": 12434
+  },
+  {
+    "path": "xvoice/src/rate_pred/model/jp_syllable.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/jp_syllable.py",
+    "git_blob_sha1": "41566d5a9c9fe2b1ab7ad3409492c3d5e460fc15",
+    "upstream_sha256": "beecdc1f55375d7d68cb1bebdeb56b5dcfc57d64060faaee1d4aac8ebef65092",
+    "bytes": 13060
+  },
+  {
+    "path": "xvoice/src/rate_pred/model/modules.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/modules.py",
+    "git_blob_sha1": "c25c1d57f5621f6c22da1a98e5125154e7121dd8",
+    "upstream_sha256": "394f3c6817ced408fb9d03acc7b91eefa7f0e6b094bda68e33be52e0bdea3d3a",
+    "bytes": 19463
+  },
+  {
+    "path": "xvoice/src/rate_pred/model/speed_predictor.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/speed_predictor.py",
+    "git_blob_sha1": "7e28afed43f48266d7eb805063d48d2fd6cb6142",
+    "upstream_sha256": "c72cca3a84124411f1e579b86ec1ead6d3c93754333e14163a9c5a5f19dc49d4",
+    "bytes": 7906
+  },
+  {
+    "path": "xvoice/src/rate_pred/model/trainer.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/trainer.py",
+    "git_blob_sha1": "8137944f15443f8ea6f8f0aa04c2b04b5163b098",
+    "upstream_sha256": "27b52852b93d81302c579b42909e2595307d18a495442b87d5a4d10d93ac32dc",
+    "bytes": 24861
+  },
+  {
+    "path": "xvoice/src/rate_pred/model/utils.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/utils.py",
+    "git_blob_sha1": "d9b9c6ee1894a51006b1aae3b2ca7cf49a05e165",
+    "upstream_sha256": "9ff9318f27353c528bb19dc85b9c4def731374bc56c9aff3afabb94e49aaa25a",
+    "bytes": 4501
+  },
+  {
+    "path": "xvoice/src/rate_pred/train/README.md",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/train/README.md",
+    "git_blob_sha1": "ac4b1458fd63f9af7d321070b5b7b0552911881c",
+    "upstream_sha256": "08a546b272d9039a7505279c55e7cc291ec22187a88d4d86e42065fde0ef6c9a",
+    "bytes": 2789
+  },
+  {
+    "path": "xvoice/src/rate_pred/train/datasets/prepare_multilingual_speed.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/train/datasets/prepare_multilingual_speed.py",
+    "git_blob_sha1": "79b18962df8c8cd2df5e28c17079da2f416e59dc",
+    "upstream_sha256": "b705cc18e6c78ade706c5f68285dbeca113a8ce8079e955b37321b50fd0f1b65",
+    "bytes": 7893
+  },
+  {
+    "path": "xvoice/src/rate_pred/train/train.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/train/train.py",
+    "git_blob_sha1": "606e872462d68e745b406e539d6e544e5d62aecc",
+    "upstream_sha256": "5bfd604da1a18eb224ea03ecbbc3673f169b9bedeb5c8c647781fd17a8b07e67",
+    "bytes": 2417
+  },
+  {
+    "path": "xvoice/src/x_voice/configs/XVoice_Base_Infer.yaml",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/configs/XVoice_Base_Infer.yaml",
+    "git_blob_sha1": "85d2bd60a48bffc6b924e28b37eceefda28191e9",
+    "upstream_sha256": "a17819ac64cc78d4f5bf511e8ea4e353eec91265849c106a27e8244b8f8bb220",
+    "bytes": 616
+  },
+  {
+    "path": "xvoice/src/x_voice/configs/XVoice_Base_Stage1.yaml",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/configs/XVoice_Base_Stage1.yaml",
+    "git_blob_sha1": "bc2357f096722c8459f6fd60a0c6c606d1183834",
+    "upstream_sha256": "b8d3c6be982b8f635dfd3fa367761a0d4f58f1562f3b174642cae9aa1b161007",
+    "bytes": 2603
+  },
+  {
+    "path": "xvoice/src/x_voice/configs/XVoice_Base_Stage2.yaml",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/configs/XVoice_Base_Stage2.yaml",
+    "git_blob_sha1": "67e9fc5f8c3018d987af9390a0415d908ab8b031",
+    "upstream_sha256": "f4669df28add6529b87ebe64fc51407dd8f8d91ba92684695defe959c46d5af2",
+    "bytes": 2711
+  },
+  {
+    "path": "xvoice/src/x_voice/infer/README.md",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/README.md",
+    "git_blob_sha1": "050425765624357df377018827bca89f38f5ab66",
+    "upstream_sha256": "a151d38e3106d3c229f47e615fe7c44c6cf081417c4e1c89ab2b3e71b22141ed",
+    "bytes": 8282
+  },
+  {
+    "path": "xvoice/src/x_voice/infer/infer_cli_stage1.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/infer_cli_stage1.py",
+    "git_blob_sha1": "6c0aa0b4dc380ad164e30cec4787eb83addaef2e",
+    "upstream_sha256": "14252c6baa64782488215a9dd772c8e1fc48b7bdf9e9ba51c25948cb065a5ae8",
+    "bytes": 19872
+  },
+  {
+    "path": "xvoice/src/x_voice/infer/infer_cli_stage2.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/infer_cli_stage2.py",
+    "git_blob_sha1": "715f6090ed3865a237b9a2ba651f73798b4d4e0e",
+    "upstream_sha256": "4d978fb78a82eaca662356c93158338c6681eb010df80086baa8b1547cdb311a",
+    "bytes": 18323
+  },
+  {
+    "path": "xvoice/src/x_voice/infer/infer_gradio.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/infer_gradio.py",
+    "git_blob_sha1": "b60373fe531908e01ee1878671c68de44a32384b",
+    "upstream_sha256": "096ac359e75591fbea685adfeb7f552fb6438e07ac1da51c3e1132d34de13821",
+    "bytes": 37084
+  },
+  {
+    "path": "xvoice/src/x_voice/infer/utils_infer.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/utils_infer.py",
+    "git_blob_sha1": "7886ab207eedd73eb0284a64eeaaca9e832453c3",
+    "upstream_sha256": "c5deb32bfcfdc944387fad051c380d0f8d3572b18d672cdaa9914904b39b03b0",
+    "bytes": 57305
+  },
+  {
+    "path": "xvoice/src/x_voice/model/__init__.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/__init__.py",
+    "git_blob_sha1": "fc3a9d2e074d67c33e059898da0b0b2df0f0a8df",
+    "upstream_sha256": "895ff4d4c3cb9f8d3c57f17cc32604aa2076b1b063e12a5002d77f62d3ede418",
+    "bytes": 389
+  },
+  {
+    "path": "xvoice/src/x_voice/model/backbones/README.md",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/backbones/README.md",
+    "git_blob_sha1": "09bd4da5b51d3349b0136cec601d5d3ae9ed92f0",
+    "upstream_sha256": "b0f2aed6adaa3fdc6338cdfdd0abab852859c4b7a018ef7e823497f76d758a44",
+    "bytes": 708
+  },
+  {
+    "path": "xvoice/src/x_voice/model/backbones/dit.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/backbones/dit.py",
+    "git_blob_sha1": "d8f39129e4592ceb071cb94cbff5923da820de15",
+    "upstream_sha256": "593f4a0766a2140a8a7bcf9ec46514e9cc9a973fe464211088011fc1f83d13d6",
+    "bytes": 24125
+  },
+  {
+    "path": "xvoice/src/x_voice/model/backbones/mmdit.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/backbones/mmdit.py",
+    "git_blob_sha1": "ac0eb20daaf7ce36dcd65a3258f0d50081762449",
+    "upstream_sha256": "9f184965004b9c75820a104de5f3d1642c7acda2dae7dc59d6c24bdb2a72cef5",
+    "bytes": 6940
+  },
+  {
+    "path": "xvoice/src/x_voice/model/backbones/unett.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/backbones/unett.py",
+    "git_blob_sha1": "3cb12e7240d5bf83e7746d0ccdc0faba264c330a",
+    "upstream_sha256": "8197646aef478938033145b915128e8619c9c7ff0e72f0dbaaa302bc3cca2f85",
+    "bytes": 9391
+  },
+  {
+    "path": "xvoice/src/x_voice/model/cfm.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/cfm.py",
+    "git_blob_sha1": "09e02d3b1127a6b60a07fea1c1fa3c2114941121",
+    "upstream_sha256": "7eb1d41d56cb7d8ddc5357ff37cb5fd45d2f6359699e9724f99e3478e7727462",
+    "bytes": 15233
+  },
+  {
+    "path": "xvoice/src/x_voice/model/cfm_sft.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/cfm_sft.py",
+    "git_blob_sha1": "6b604265e3c3663dab29a88eae42771afbf3c4b8",
+    "upstream_sha256": "e00a8a401655b07ebc38ba81b17d9a2e4bfcad36dd74a25e3f9f772b6b0f67d6",
+    "bytes": 17995
+  },
+  {
+    "path": "xvoice/src/x_voice/model/dataset.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/dataset.py",
+    "git_blob_sha1": "98c2a7bf24d0fcb842601c01375f721b82241985",
+    "upstream_sha256": "1c00eb2a519a56afa21148d299ca24004d23ce56f08abe190db6d02a73995d52",
+    "bytes": 25185
+  },
+  {
+    "path": "xvoice/src/x_voice/model/inferencer_gp.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/inferencer_gp.py",
+    "git_blob_sha1": "f9f000cf61d2b3c2fce2572a15ffe9ed231cac73",
+    "upstream_sha256": "d0d6ac4c9b1e5fcd08d868df4c7dbf7121254285c10488cd06d0e68b47a76272",
+    "bytes": 10212
+  },
+  {
+    "path": "xvoice/src/x_voice/model/modules.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/modules.py",
+    "git_blob_sha1": "ae52a34435fcf708d89a6c41f7e4b72b884415f8",
+    "upstream_sha256": "5399573a3f539c2a69ce48951ba73882e668e8ecb544308c05914925f95f79eb",
+    "bytes": 32091
+  },
+  {
+    "path": "xvoice/src/x_voice/model/trainer.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/trainer.py",
+    "git_blob_sha1": "6028f2063bbf078a7838e6e416a6ae429462e0e6",
+    "upstream_sha256": "a67b0b079fc5ead180b1394ffd676f740e4fea3bdbee77823e6bb4993bc10b70",
+    "bytes": 24284
+  },
+  {
+    "path": "xvoice/src/x_voice/model/trainer_sft.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/trainer_sft.py",
+    "git_blob_sha1": "4c0e2ffaa6ae4e5a391c6783e3c46bb090bc68a9",
+    "upstream_sha256": "7650a1a4f74498252a23db004950e28eb7087cbc7ea496381531d22fa1952ab9",
+    "bytes": 22665
+  },
+  {
+    "path": "xvoice/src/x_voice/model/utils.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/utils.py",
+    "git_blob_sha1": "fe06951808156cddd896cc615584dce8db87a932",
+    "upstream_sha256": "6c75fe1ec6df902f9199360f8bebd8d0037014240609de82157fe13c850f14e6",
+    "bytes": 18702
+  },
+  {
+    "path": "xvoice/src/x_voice/train/README.md",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/README.md",
+    "git_blob_sha1": "c576e27f6d5df00717133dbb13696c960b00c691",
+    "upstream_sha256": "49100064f8d21daf27d1348aa708cf0bc5202ba5f80fbaed7ef57789e3b4cf1d",
+    "bytes": 6043
+  },
+  {
+    "path": "xvoice/src/x_voice/train/datasets/ipa_v3_tokenizer.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/datasets/ipa_v3_tokenizer.py",
+    "git_blob_sha1": "6684776729eb21cc14bff7110968c30f24278558",
+    "upstream_sha256": "6109b0bdc557c97d269276628d98880ba169c2ff25b344a8dec586254b7674d1",
+    "bytes": 8771
+  },
+  {
+    "path": "xvoice/src/x_voice/train/datasets/ipa_v6_tokenizer.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/datasets/ipa_v6_tokenizer.py",
+    "git_blob_sha1": "504a446a7a3235885b04644fb8cc41bb559f6b77",
+    "upstream_sha256": "8adad1139db0f2dc79286c034dfe517e53767cdc009bf665b800219f70d9ccb7",
+    "bytes": 12294
+  },
+  {
+    "path": "xvoice/src/x_voice/train/inference_gp.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/inference_gp.py",
+    "git_blob_sha1": "287d619afcff0a144e041ecf3e2ab277acb81c53",
+    "upstream_sha256": "bc2af7f09127c90d794b354217d99ef70fa4cc8f28ca5860d8e850cd2311e408",
+    "bytes": 3745
+  },
+  {
+    "path": "xvoice/src/x_voice/train/train.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/train.py",
+    "git_blob_sha1": "fd1bd228e57aaed757fa8c1d340355cf2892f1a9",
+    "upstream_sha256": "04534a137dc7ab4cdbef5b6277ca333cc40c883dad05f545fbdd7c4cfbe81776",
+    "bytes": 3531
+  },
+  {
+    "path": "xvoice/src/x_voice/train/train_sft.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/train_sft.py",
+    "git_blob_sha1": "c3869c69fe6f44ec8ba86f0fa0044c7326e3a39c",
+    "upstream_sha256": "e55d20bc903df77e91948972ae84632ae5f044f5d08c929c2ff0b5ed7a74acc8",
+    "bytes": 3752
+  },
+  {
+    "path": "xvoice/src/x_voice/eval/text_normalizer.py",
+    "repository": "sunnyxrxrx/X-Voice",
+    "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+    "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/eval/text_normalizer.py",
+    "git_blob_sha1": "755552da4983235cb754ef869d1494efbce25d79",
+    "upstream_sha256": "036ae1eadadc72620123f347542679805fbc36ca1ca3b8ef99964bd0314b1e74",
+    "bytes": 3881,
+    "reason": "Direct runtime import from utils_infer.normalize_text_for_lang; no eval tree vendored"
+  }
+]

@@ -1,0 +1,50 @@
+# No pip install of the vendored projects: PYTHONPATH supplies their source.
+# Use: pip install -c runtime-constraints.txt -r runtime-requirements.txt
+# Core controller, CAM++ and source loading.
+fastapi>=0.110,<1
+uvicorn[standard]>=0.30,<1
+requests>=2.25,<3
+websockets>=12,<16
+soxr>=0.3,<1
+numpy
+modelscope[framework]
+# Required by ModelScope's pipelines -> MsDataset -> datasets import chain.
+pyarrow
+torch
+torchaudio
+soundfile>0.10
+hydra-core
+omegaconf
+huggingface-hub
+cached-path>=1.6,<2
+# X-Voice Stage2, Vocos and SpeedPredictor (no Trainer imports).
+transformers
+vocos
+torchdiffeq>=0.2.4,<0.3
+x-transformers
+einops>=0.7,<1
+safetensors
+matplotlib>=3.7,<4
+librosa
+pydub==0.25.1
+pyloudnorm
+tqdm
+# IPA/tokenizer and English normalizer imports in the actual Stage2 path.
+phonemizer>=3.2,<4
+regex
+jieba
+pypinyin
+pyphen
+pythainlp
+# Imported unconditionally by pythainlp.transliterate.ipa during XVoice startup.
+epitran
+pyopenjtalk
+g2pk
+pykakasi
+finnsyll
+nemo-text-processing
+num2words
+# Intentionally absent: faster-whisper, ctranslate2, gradio, deepfilternet,
+# torchcodec, onnxruntime[-gpu], fastlid/fasttext, wandb/accelerate/ema-pytorch.
+# The packages' ordinary transitive dependencies remain resolver-managed under
+# the constraints above; root records the final freeze and pip check metadata.

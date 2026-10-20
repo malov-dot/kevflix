@@ -1,0 +1,7 @@
+0.4.26 bounded source correction, 2026-10-18.
+
+Installed vLLM0.14 utils/network_utils.py:178-198 was read through Ubuntu UNC. _get_open_port uses socket(AF_INET,SOCK_STREAM).bind(('',0)) at191, then an AF_INET6 equivalent if IPv4 fails. It returns getsockname()[1] and closes the probe. The original offline audit correctly rejected a wildcard address, but this prevented the internal free-port probe in T185311Z. Root retains that evidence.
+
+Only offline/sitecustomize.py implementation changes: a wrapper around socket.socket.bind redirects AF_INET/AF_INET6 SOCK_STREAM wildcard addresses at any port to127.0.0.1/::1, per Claude r71. IPv4 must have a2-element tuple; IPv6 keeps the2/3/4-element tuple's existing port, flowinfo and scopeid. The original bind then emits its normal audit event, now for loopback, and validates the original port unchanged. This also covers the optional VLLM_PORT fixed-port probe at network_utils.py:184. Datagrams, other families, external addresses, connect and DNS remain governed by the unchanged audit. No wildcard listener is allowed: wildcard requests are narrowed to loopback; the audit is not exempted or disabled.
+
+Baseline r69-sitecustomize.py.txt and P16-loopback-port-probe.patch saved; provenance refreshed. No model/controller/port/deadline or other implementation edits. Source inspection/diff/hashes only; no imports, tests, apps, builds, servers or models executed by this worker. Actual startup remains for root's newly authorized run and Claude review.

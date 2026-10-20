@@ -1,0 +1,211 @@
+diff --git a/translator/server/qwen3asr/qwen3asr_server.py b/translator/server/qwen3asr/qwen3asr_server.py
+index d393bbc..1e086a4 100644
+--- a/translator/server/qwen3asr/qwen3asr_server.py
++++ b/translator/server/qwen3asr/qwen3asr_server.py
+@@ -34,6 +34,20 @@ MAX_SESSION_STEPS = 60
+ OVERLAP_CHUNKS = 4
+ VAD_THRESHOLD = 0.001
+ 
++# Native Qwen names only; an unmappable label remains unknown, never guessed.
++NATIVE_LANGUAGE_CODES = dict(zip(
++    ('Chinese English Arabic German French Spanish Portuguese Indonesian Italian Korean Russian Thai Vietnamese '
++     'Japanese Turkish Hindi Malay Dutch Swedish Danish Finnish Polish Czech Persian Greek Romanian Hungarian Macedonian').lower().split(),
++    'zh en ar de fr es pt id it ko ru th vi ja tr hi ms nl sv da fi pl cs fa el ro hu mk'.split()))
++
++
++def recognition_result(text, state):
++    raw = getattr(state, 'language', None)
++    raw = raw.strip() if isinstance(raw, str) and raw.strip() else None
++    return {'text': text or '', 'language_raw': raw,
++            'language_code': NATIVE_LANGUAGE_CODES.get(raw.lower()) if raw else None,
++            'language_source': 'qwen3-asr-native' if raw else None}
++
+ 
+ def preview_text(text: str, limit: int = 120) -> str:
+     value = (text or "").strip()
+@@ -171,8 +185,9 @@ def run_inference(request: RecognitionRequest, audio_data: np.ndarray):
+                         preview_text(getattr(ctx["state"], "text", "")),
+                         preview_text(final_text),
+                     )
++                    result = recognition_result(final_text, ctx['state'])
+                     del session_cache[request.session_id]
+-                    return final_text
++                    return result
+                 else:
+                     # 如果当前识别结果为空（由于静音过滤等），返回上一帧文本避免闪烁
+                     full_text = merge_text_prefix(
+@@ -189,17 +204,18 @@ def run_inference(request: RecognitionRequest, audio_data: np.ndarray):
+                     )
+                     if not current_text:
+                         ctx["last_valid_text"] = ""
+-                        return ""
++                        return recognition_result('', ctx['state'])
+                     if ctx["last_valid_text"] and current_text == ctx["last_valid_text"]:
+-                        return ctx["last_valid_text"]
++                        return dict(ctx['last_valid_result'])
+                     ctx["last_valid_text"] = current_text
+-                    return current_text
++                    ctx['last_valid_result'] = recognition_result(current_text, ctx['state'])
++                    return dict(ctx['last_valid_result'])
+             else:
+                 # 非流式处理
+                 state = model.init_streaming_state(unfixed_chunk_num=2, unfixed_token_num=5, chunk_size_sec=2.0)
+                 model.streaming_transcribe(audio_data, state)
+                 model.finish_streaming_transcribe(state)
+-                return state.text
++                return recognition_result(state.text, state)
+                 
+         except Exception as e:
+             logger.error(f"Inference internal error: {e}")
+@@ -240,11 +256,11 @@ async def recognize(request: RecognitionRequest):
+         
+         loop = asyncio.get_running_loop()
+         # 增加超时保护
+-        text = await asyncio.wait_for(
++        result = await asyncio.wait_for(
+             loop.run_in_executor(executor, run_inference, request, audio),
+             timeout=15.0
+         )
+-        return {"text": text, "session_id": request.session_id, "is_final": request.is_final}
++        return {**result, "session_id": request.session_id, "is_final": request.is_final}
+         
+     except Exception as e:
+         logger.error(f"Request error: {e}")
+diff --git a/translator/backend/services.py b/translator/backend/services.py
+index f22825e..d9c30be 100644
+--- a/translator/backend/services.py
++++ b/translator/backend/services.py
+@@ -251,7 +251,7 @@ class Qwen3ASRService:
+         is_final: bool,
+         sample_rate: int | None = None,
+         committed_text: str = "",
+-    ) -> str:
++    ) -> dict:
+         """按 session_id 执行流式识别。"""
+         wav_bytes = self._pcm_to_wav_bytes(audio)
+         audio_data_url = self._to_data_url(wav_bytes)
+@@ -268,19 +268,27 @@ class Qwen3ASRService:
+         response = self.session.post(self.base_url, json=payload, timeout=30)
+         response.raise_for_status()
+         elapsed_ms = (time.perf_counter() - start_time) * 1000
+-        text = response.json().get("text", "")
++        result = response.json()
++        if not isinstance(result, dict) or not isinstance(result.get('text'), str):
++            raise ValueError('Malformed Qwen native recognition result')
++        text = result['text']
++        code, raw, source = (result.get(key) for key in ('language_code', 'language_raw', 'language_source'))
++        if (code is not None and (not isinstance(code, str) or not re.fullmatch('[a-z]{2}', code))) \
++                or (raw is not None and not isinstance(raw, str)) \
++                or source not in (None, 'qwen3-asr-native') or (code is not None and (not raw or source is None)):
++            raise ValueError('Malformed Qwen native language evidence')
+         logger.info(
+             "qwen3 request final=%s elapsed_ms=%.1f text_len=%s",
+             is_final,
+             elapsed_ms,
+             len((text or "").strip()),
+         )
+-        return text
++        return {**result, 'language_code': code, 'language_raw': raw, 'language_source': source}
+ 
+-    def commit_stream(self, cache: dict, committed_text: str, sample_rate: int | None = None) -> str:
++    def commit_stream(self, cache: dict, committed_text: str, sample_rate: int | None = None) -> dict:
+         """通知远端提交已翻译前缀并重建流式 state。"""
+         if "session_id" not in cache or not committed_text.strip():
+-            return ""
++            return {'text': '', 'language_code': None, 'language_raw': None, 'language_source': None}
+         silence = np.zeros((0,), dtype=np.float32)
+         return self.recognize_stream(
+             silence,
+@@ -742,7 +750,7 @@ class OmniTTSService:
+                 cache={},
+                 is_final=True,
+                 sample_rate=self.asr_sample_rate,
+-            )
++            )['text']
+         elif isinstance(self.asr_service, ZipformerASRService):
+             self.asr_service.recognize_stream(audio_float)
+             text = self.asr_service.finalize_stream()
+diff --git a/translator/backend/asr_backends.py b/translator/backend/asr_backends.py
+index 1ce8a71..bb9c974 100644
+--- a/translator/backend/asr_backends.py
++++ b/translator/backend/asr_backends.py
+@@ -272,6 +272,12 @@ class Qwen3ASR:
+         self.service = service
+         self.sample_rate = sample_rate
+         self.cache: dict[str, str] = {}
++        self.language_result = {}
++
++    def _retain_result(self, result: dict) -> str:
++        self.language_result = {key: result.get(key) for key in
++                                ('language_code', 'language_raw', 'language_source')}
++        return result['text']
+ 
+     def recognize(
+         self,
+@@ -281,13 +287,13 @@ class Qwen3ASR:
+         committed_text: str = "",
+     ) -> str:
+         """执行流式识别。"""
+-        return self.service.recognize_stream(
++        return self._retain_result(self.service.recognize_stream(
+             audio_chunk,
+             self.cache,
+             is_final=is_final,
+             sample_rate=sample_rate or self.sample_rate,
+             committed_text=committed_text,
+-        )
++        ))
+ 
+     def finalize(self, audio_chunk: np.ndarray, sample_rate: int = 16000) -> str:
+         """结束当前流式轮次。"""
+@@ -296,14 +302,15 @@ class Qwen3ASR:
+     def reset(self) -> None:
+         """重置远端流式会话。"""
+         self.service.reset_stream(self.cache)
++        self.language_result = {}
+ 
+     def commit(self, committed_text: str, sample_rate: int = 16000) -> str:
+         """提交已消费前缀，让远端重建流式状态。"""
+-        return self.service.commit_stream(
++        return self._retain_result(self.service.commit_stream(
+             self.cache,
+             committed_text=committed_text,
+             sample_rate=sample_rate or self.sample_rate,
+-        )
++        ))
+ 
+ 
+ class ZipformerASR:
+@@ -629,6 +636,8 @@ class Qwen3StreamingRecognizer:
+ 
+     def _extract_outputs_from_text(self, full_text: str) -> list[dict]:
+         outputs: list[dict] = []
++        # Commit rebuilds remote state. Bind emitted text to the preceding recognition.
++        language = dict(self.asr.language_result)
+         committable, _tail = split_text_by_committable_punctuation(full_text)
+ 
+         if committable:
+@@ -641,6 +650,7 @@ class Qwen3StreamingRecognizer:
+                     {
+                         "type": "final",
+                         "text": new_final,
++                        **language,
+                         "delta": "",
+                         "ts": time.time(),
+                     }
+@@ -704,6 +714,7 @@ class Qwen3StreamingRecognizer:
+                     {
+                         "type": "final",
+                         "text": remaining_text or final_text,
++                        **self.asr.language_result,
+                         "delta": "",
+                         "ts": time.time(),
+                     }
+@@ -750,6 +761,7 @@ class Qwen3StreamingRecognizer:
+         result = {
+             "type": "final",
+             "text": remaining_text.strip(),
++            **self.asr.language_result,
+             "delta": "",
+             "ts": time.time(),
+         }

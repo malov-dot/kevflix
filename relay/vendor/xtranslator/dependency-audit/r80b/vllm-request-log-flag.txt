@@ -1,0 +1,18 @@
+            parser = EngineArgs.add_cli_args(parser)
+        parser.add_argument(
+            "--enable-log-requests",
+            action=argparse.BooleanOptionalAction,
+            default=AsyncEngineArgs.enable_log_requests,
+            help="Enable logging requests.",
+        )
+        parser.add_argument(
+            "--disable-log-requests",
+            action=argparse.BooleanOptionalAction,
+            default=not AsyncEngineArgs.enable_log_requests,
+            help="[DEPRECATED] Disable logging requests.",
+            deprecated=True,
+        )
+        current_platform.pre_register_and_update(parser)
+        return parser
+
+

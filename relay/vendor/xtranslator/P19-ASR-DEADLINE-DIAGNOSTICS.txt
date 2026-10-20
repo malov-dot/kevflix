@@ -1,0 +1,15 @@
+r78 bounded Qwen request deadline and diagnostics, 2026-10-18.
+
+Evidence read from T193425Z/isolated/profile/state/xt-services/164f1ad2212a4b58921144a9ea7e8b18:
+- app.log: last successful empty Qwen response15:37:21.945; next ASR chunk at15:37:21.947; session audio saved on closure15:37:36.960 (~15.013s later).
+- asr.log: three empty partial200 responses, tokenizer warnings, then bare 'Request error: ' and POST400. No 'Inference internal error' is present.
+- Old source waited15.0s in asyncio.wait_for around executor run_inference; client HTTP timeout30s. TimeoutError commonly has an empty str().
+Inference: the evidence strongly fits the outer15s timeout while the first decode was still running. It does NOT prove the exception class or why decode took that long: old logging omitted class/traceback, and no late successful decode was observed. CAM++ embeddings/matches are present independently; telemetry DNS rejection is a background-thread event and is not attributed as the request cause.
+
+Change: server ASR_REQUEST_TIMEOUT_SECONDS=90; backend HTTP connect5s/read100s. Both fit below the existing120s no-progress barrier without changing its deadline, request budget, model/KV/GPU settings or controller. No inference retry/warmup/manual audio was added. HTTP failures remain terminal; an HTTP400 does not become a transport retry. Server notes that cancelling wait_for cannot stop an already running executor thread; existing failed-session cleanup remains responsible for stopping the service generation.
+
+New diagnostics: outer request error contains exception class, decode_audio/executor_inference_wait/response stage, elapsed seconds,90s deadline, session/final identity, nonempty message and executor_may_still_be_running. logger.exception emits traceback. run_inference internal failures also emit class/stage/elapsed/traceback. Client preserves up to4096 response-body characters in its HTTPError and logs class/http stage/elapsed/status/session. Actual exceptions propagate, never swallowed.
+
+Optional noise removal approved in scope: XTServices exports VLLM_NO_USAGE_STATS=1 and DO_NOT_TRACK=1 to the owned services. Installed vLLM usage/usage_lib.py:58-68 and envs.py:637-644 recognize these variables. Existing offline audit remains unchanged; no external connection is permitted.
+
+Changed implementation: translator/server/qwen3asr/qwen3asr_server.py, translator/backend/services.py, relay/xt_services.py (two telemetry environment keys). r78 baselines and P19-asr-deadline-diagnostics.patch saved; provenance refreshed. Existing failed-run evidence untouched. Source/log inspection/diffs/hashes only; no tests/imports/apps/builds/GPU probes/model runs by worker. The90s deadline is an implemented bound, not proof that cold decoding now completes.

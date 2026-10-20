@@ -1,0 +1,14 @@
+P8 / r55 source freeze: fixed KV, bounded single-chain BF16 eager inference.
+
+ASR: max_model_len8192, fixedKV1024MiB(default; lowerbound896), max_num_seqs1, max_num_batched_tokens8192, enforce_eagerTrue, dtypebfloat16.
+MT: max_model_len4096, fixedKV768MiB(default; lowerbound576), max_num_seqs1, max_num_batched_tokens4096, enforce_eagerTrue, dtypebfloat16. SameLMT60-8B; no model substitution.
+Qwen server CLI forwards allvalues through Qwen3ASRModel.LLM. Root confirmed installedvLLM0.14 source accepts kv_cache_memory_bytes/--kv-cache-memory-bytes and that fixedKV overrides fraction-derivedKV; this worker didnotimportorprobeinstalledruntime.
+
+XTServices._gpu_budget (xt_services.py:79): futureensure queriesfreshWindowsnvidia-smi metadataONLY, afterroot'slazyseparation/languagepath. It sumsonlymanifestweightshardsforconfiguredQwen/LMT; addsfixedKVandxt_vllm_overhead_mib(default1024). Fraction hundredths computedwithintegerceil(100*bytes/total), then /100; sum mustbe<=.80. Legacyfixedfractionconfigignored.
+required_free=sum(vLLMweights+KV+overhead)+XVoice2048MiB+CAM256MiB+explicitadditionalDemucsgrowth(default0)+3072MiBfloor. WarmedhelperresidencyisALREADYdeductedinfreshfree. Thereisnopairedcurrent/peakmeasurementinterfacehere, sotheadditionalgrowth0 isspecificallyrecordedasthesame-sizedwindowassumption, NOTmeasuredpeakproof. No fullDemucsresident/peakaddedagain.
+InitialfailureisfatalMovieConfigurationError('xt_gpu_budget_insufficient') withfullarithmetic. No modelprocessstarts, no automatic4BswitchorCPUfallback.
+
+Linuxsupervisor (launchloopafterassetverification) remeasuresfreshfreeonthe SAMEGPUuuidandtotal beforeeachvLLMspawn; requiresfreshfree>=ceil(derivedfraction*GPUtotal). Failurewritesstructuredfatalxt_gpu_budget_insufficientwithinitialandlaunch arithmetic; XTServices propagatesthesamecode, ratherthanvLLMcrashingorresource-retrying. Runtime3072MiBfloorandlease/Semyieldguardremaininforce. Budgetandlaunchadmissionsareincludedinhealth/statusandthereforethebackendidentityreceipt.
+
+Changedimplementationfiles: relay/xt_services.py; vendor/linux_supervisor.py; vendor/translator/server/qwen3asr/qwen3asr_server.py. TheQwenCLIchangeispatches/P8-fixed-kv-eager-budget.patch. No dependencieschanged. ExistingP1-P7 remain.
+No tests,imports,actualGPUmetadataquery,builds,serversormodelrunsperformedbyworkerAforP8. Theseareimplementedadmissionchecks, notproofthatallmodelsfit or thattranslationaudio works. Rootreportsdependencies/assetsinstalled; actualmodel/runtimebehaviorstillawaitsapprovedexample.

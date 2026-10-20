@@ -32,8 +32,38 @@ $('pair-tv').onclick=makePairCode;
 async function loadSections(){
  const sections=await api('/api/plex/sections');$('sections').replaceChildren(...sections.map(s=>{const o=element('option',s.title);o.value=s.key;return o;}));
 }
+let savedSpeechEngine=null;
+const speechEngineNames={generic:'Generic English',xtranslator:'XTranslator + XVoice',actor:'Actor cloning',sapi:'Windows speech',piper:'Piper'};
+function engineSelectionChanged(){
+ const xt=$('setting-speech-engine').value==='xtranslator';
+ $('xt-language-field').hidden=!xt;$('setting-xt-language').disabled=!xt;$('xt-audio-note').hidden=!xt;
+}
+$('setting-speech-engine').onchange=()=>{engineSelectionChanged();$('settings-result').textContent='Engine selection is not saved yet.';};
+function showEngineStatus(value){
+ const state=value.engine_status||{},engine=value.speech_engine;
+ $('engine-summary').textContent=(speechEngineNames[engine]||engine||'Unknown engine')+' · '+(state.state||'Not observed')+
+  (state.engine&&state.engine!==engine?' · Reported runtime: '+(speechEngineNames[state.engine]||state.engine):'');
+ const language=state.detected_language;
+ $('engine-language').textContent=typeof language==='string'?language:language&&typeof language==='object'?JSON.stringify(language):'Not observed';
+ $('engine-speakers').textContent=Number.isFinite(state.speaker_count)?String(state.speaker_count):'Not observed';
+ $('engine-resets').textContent=Number.isFinite(state.speaker_state_reset_count)?String(state.speaker_state_reset_count):'Not observed';
+ const health=state.service_health;
+ $('engine-health').textContent=health&&typeof health==='object'?Object.entries(health).map(([name,item])=>{
+  const status=typeof item==='string'?item:item?.state||item?.status||(typeof item?.ready==='boolean'?(item.ready?'health check ready':'health check not ready'):'not observed');
+  return name+': '+status;
+ }).join(' · ')||'Service health not observed':'Service health not observed';
+ $('engine-status-error').textContent=state.error||'';
+ $('engine-details').textContent=JSON.stringify({scope:'Reported observations only; health is not playback or translation acceptance',
+  job_id:state.job_id??null,observed_at:state.observed_at??null,receipt_path:state.receipt_path??null,
+  versions:state.versions??null,service_health:health??null},null,2);
+}
 async function loadSettings(){
  const value=await api('/api/settings');
+ savedSpeechEngine=value.speech_engine;
+ $('setting-speech-engine').value=value.speech_engine;$('setting-xt-language').value=value.xt_source_language||'auto';
+ $('setting-speech-engine').disabled=false;
+ engineSelectionChanged();showEngineStatus(value);
+ if($('subtitles'))$('subtitles').disabled=savedSpeechEngine==='xtranslator';
  $('setting-startup').checked=value.start_with_windows;$('setting-updates').checked=value.updates_enabled;
  $('setting-playback').checked=!value.setup_only;$('setting-playback').disabled=value.setup_locked;
  $('setup-lock-note').textContent=value.setup_locked?'Playback is locked off for the current setup session.':'Changing playback mode takes effect after closing and reopening KevFLIX.';
@@ -50,16 +80,20 @@ async function loadSettings(){
 $('settings-form').onsubmit=async event=>{
  event.preventDefault();
  try{
+  if(savedSpeechEngine===null)throw Error('Connect and load the saved settings before making changes.');
   const result=await api('/api/settings',{start_with_windows:$('setting-startup').checked,updates_enabled:$('setting-updates').checked,
+   speech_engine:$('setting-speech-engine').value,
+   xt_source_language:$('setting-speech-engine').value==='xtranslator'?$('setting-xt-language').value:undefined,
    setup_only:!$('setting-playback').checked,
    media_roots:$('setting-roots').value.split(/\r?\n/).map(x=>x.trim()).filter(Boolean),path_mappings:JSON.parse($('setting-mappings').value||'[]'),
    bind:$('setting-bind').value,port:Number($('setting-port').value),public_url:$('setting-url').value,
    device:$('setting-device').value,cpu_threads:Number($('setting-threads').value),
    tv:{max_height:Number($('setting-quality').value),video_encoder:$('setting-encoder').value,upscale:$('setting-upscale').value==='on',hdr_mode:$('setting-hdr').value,buffer_segments:Number($('setting-buffer').value)}});
   $('settings-result').textContent=result.restart_required?'Saved. Close and reopen only KevFLIX to apply the network or playback-mode change.':'Settings saved on this PC.';
- }catch(error){$('settings-result').textContent=error.message;}
+  await loadSettings();
+ }catch(error){$('settings-result').textContent='Settings change did not complete: '+error.message;try{await loadSettings();}catch{}}
 };
-for(const [id,component] of [['install-video','ffmpeg'],['install-dependencies','dependencies'],['install-models','models']]){
+for(const [id,component] of [['install-video','ffmpeg'],['install-dependencies','dependencies'],['install-models','models'],['install-xtranslator','xtranslator']]){
  $(id).onclick=async()=>{try{const result=await api('/api/settings/install',{component,accept_terms:$('accept-model-terms').checked});$('install-status').textContent=result.message;}catch(e){$('install-status').textContent=e.message;}};
 }
 async function listServers(){
@@ -95,6 +129,7 @@ async function refresh(){
  const session=status.sessions[0]?.payload;
  $('session').textContent=session?session.title+' · '+session.state+' · '+time(session.position):'No playback session on the selected TV.';
  $('worker').textContent='Worker: '+status.config.device+' · English speech: '+status.config.speech_engine+' · '+(status.watch_enabled?'Watch context enabled':'Watch context off');
+ try{showEngineStatus(await api('/api/settings'));}catch(error){$('engine-status-error').textContent='Status unavailable: '+error.message;}
  $('plex-error').textContent=status.plex_error||'';
  $('jobs').replaceChildren(...status.jobs.map(job=>{
   const p=job.payload,c=element('article',undefined,'card');c.append(element('h3',p.title),element('span',job.state,'pill'));
@@ -129,13 +164,14 @@ function renderLibrary(items){
   card.append(buttons);return card;
  }));
 }
-$('local').onsubmit=async e=>{e.preventDefault();try{await api('/api/jobs',{source:$('source').value,subtitles:$('subtitles').value||null,mode:'prepared'});notice('Preparation queued.');await refresh();}catch(error){notice(error.message,true);}};
+$('local').onsubmit=async e=>{e.preventDefault();try{await api('/api/jobs',{source:$('source').value,subtitles:savedSpeechEngine==='xtranslator'?null:$('subtitles').value||null,mode:'prepared'});notice('Preparation queued.');await refresh();}catch(error){notice(error.message,true);}};
 document.querySelectorAll('[data-control]').forEach(b=>b.onclick=()=>api('/api/plex/control',{action:b.dataset.control}).then(refresh).catch(e=>notice(e.message,true)));
 $('seek').onsubmit=e=>{e.preventDefault();api('/api/plex/control',{action:'seekTo',position:Number($('seek-position').value)}).then(refresh).catch(e=>notice(e.message,true));};
 $('watch').onclick=()=>api('/api/watch/start',{}).then(refresh).catch(e=>notice(e.message,true));
 $('watch-stop').onclick=()=>api('/api/watch/stop',{}).then(refresh).catch(e=>notice(e.message,true));
 async function showJob(id,index){
  const job=await api('/api/jobs/'+id);const chunk=(index===undefined?null:job.chunks.find(x=>x.idx===index))||job.chunks.find(x=>x.state==='needs_review')||job.chunks.find(x=>x.state==='error')||job.chunks.at(-1);
+ const xt=job.payload.speech_engine==='xtranslator';
  if(!chunk){notice('No segments have been processed yet.');return;}
  selectedReview={job,chunk};$('review').hidden=false;
  $('review-segment').replaceChildren(...job.chunks.map(c=>{const o=element('option',time(c.payload.start)+' · '+c.state);o.value=c.idx;return o;}));$('review-segment').value=chunk.idx;
@@ -148,7 +184,7 @@ async function showJob(id,index){
   if(!response.ok)throw Error((await response.json()).error);
   if(blobUrl)URL.revokeObjectURL(blobUrl);blobUrl=URL.createObjectURL(await response.blob());$('audio').src=blobUrl;
  })));
- $('cues').replaceChildren(...(chunk.payload.cues||[]).map(cue=>{
+ $('cues').replaceChildren(...(xt?[]:chunk.payload.cues||[]).map(cue=>{
   const row=element('div',undefined,'cue');row.dataset.id=cue.id;
   row.append(element('p',time(cue.start)));
   const original=element('textarea');original.dataset.field='source_text';original.value=cue.text||'';original.setAttribute('aria-label','Original dialogue');
@@ -160,11 +196,13 @@ async function showJob(id,index){
   for(const input of row.querySelectorAll('[data-field]'))input.dataset.original=input.value;
   return row;
  }));
- $('approve').disabled=chunk.state!=='needs_review'||!chunk.payload.audio;
- $('save-corrections').disabled=chunk.state!=='needs_review';
+ if(xt)$('cues').append(element('p','This XTranslator job uses source audio directly. Manual text, speaker and voice-reference corrections are unavailable.','muted'));
+ $('approve').disabled=xt||chunk.state!=='needs_review'||!chunk.payload.audio;
+ $('save-corrections').disabled=xt||chunk.state!=='needs_review';
  $('review').scrollIntoView({behavior:'smooth'});
 }
 $('save-corrections').onclick=async()=>{try{
+ if(selectedReview.job.payload.speech_engine==='xtranslator')throw Error('XTranslator processes source audio without manual corrections.');
  const corrections={};for(const row of $('cues').children){const fields={};for(const input of row.querySelectorAll('[data-field]'))if(input.value.trim()&&input.value!==input.dataset.original)fields[input.dataset.field]=input.value.trim();if(Object.keys(fields).length)corrections[row.dataset.id]=fields;}
  if(!Object.keys(corrections).length)throw Error('Change the uncertain text, language or speaker before saving.');
  await api('/api/jobs/'+selectedReview.job.id+'/review',{chunk:selectedReview.chunk.idx,corrections});notice('Corrections saved; affected segments will be regenerated.');$('review').hidden=true;await refresh();

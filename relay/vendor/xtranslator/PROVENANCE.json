@@ -1,0 +1,1910 @@
+{
+  "format": "kevflix-xtranslator-vendor-v1",
+  "source_only": true,
+  "upstream": [
+    {
+      "repository": "https://github.com/zhaoyx239/X-Translator",
+      "license": "MIT as declared in upstream README",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c"
+    },
+    {
+      "repository": "https://github.com/sunnyxrxrx/X-Voice",
+      "license": "MIT as declared in upstream README/pyproject",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0"
+    }
+  ],
+  "original_files": [
+    {
+      "path": "translator/README.md",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/README.md",
+      "git_blob_sha1": "299fdd48baea6f7b57ce96af65db3360c4dab78f",
+      "upstream_sha256": "f5ec845d7445536cae7838a85d8c8b92194035e983cc2d91fbfc1f3ea17def6d",
+      "bytes": 3941
+    },
+    {
+      "path": "translator/backend/__init__.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/__init__.py",
+      "git_blob_sha1": "67c699729cc0a54df8aaa48b27d4a1f9ffecc1b3",
+      "upstream_sha256": "28945c14508ba7b469f839da67208999e9a89cfa4e9185d1b40e004d2f8a81c7",
+      "bytes": 27
+    },
+    {
+      "path": "translator/backend/app.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/app.py",
+      "git_blob_sha1": "ed14de5acca8c7735d74e6df32fb2e452423301b",
+      "upstream_sha256": "3564b42fc744e87a18cfa2ff9cae752fe234e0a0909f2a8b9526b099a96304e8",
+      "bytes": 5805
+    },
+    {
+      "path": "translator/backend/asr_backends.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/asr_backends.py",
+      "git_blob_sha1": "1ce8a71f54563685acf2c6f66db38626a6c140ce",
+      "upstream_sha256": "83d8fe4c70d7e8aeede6dfea78d5b8da5fa713fc22fe5c383a22d321b0092fe4",
+      "bytes": 29802
+    },
+    {
+      "path": "translator/backend/config.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/config.py",
+      "git_blob_sha1": "2fe0aa094e44db876dc266566e94271889e18fb9",
+      "upstream_sha256": "b4f23ef62a1f24e9aea8bf0be70b87d8a4f793bded16cad933f891dcce2dc61f",
+      "bytes": 12521
+    },
+    {
+      "path": "translator/backend/logging_utils.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/logging_utils.py",
+      "git_blob_sha1": "6c5229882da386174aea0a220e130490b103cfa7",
+      "upstream_sha256": "98b47fdfc163c02067b5ecbfecd9edf1c221ab9f1e194430f6be4445469e28eb",
+      "bytes": 1204
+    },
+    {
+      "path": "translator/backend/services.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/services.py",
+      "git_blob_sha1": "f22825e40cf2b3a7ddcc86d2aca646f4e3722145",
+      "upstream_sha256": "53e0017b7f1862e43d23920b84c8dd1c52f5f61dc5bede76b99d9a4f286ef5e8",
+      "bytes": 32919
+    },
+    {
+      "path": "translator/backend/session.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/session.py",
+      "git_blob_sha1": "4b7930cff2d0d6cad7d63ebb3aa56ed70f39afdf",
+      "upstream_sha256": "34ef4d667e0c327302f4b92e96c5148e3452921c936e091b649a78c1e9a432cb",
+      "bytes": 68128
+    },
+    {
+      "path": "translator/backend/speaker_prompt.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/speaker_prompt.py",
+      "git_blob_sha1": "a35d1be4d62549a3f27227caf4e87b5318a5e351",
+      "upstream_sha256": "aac1fa3eb485fb7019b9d3e0e605b529b72d513ac6c4111d8d70d624916472db",
+      "bytes": 34949
+    },
+    {
+      "path": "translator/backend/visit_counter.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/visit_counter.py",
+      "git_blob_sha1": "acb5621129d7a0b3a30223f062a5eaa585527d48",
+      "upstream_sha256": "8fcf7f0b90d9f62a75fee46003f540710dd411f72de07b40d12ffab972efaed0",
+      "bytes": 1394
+    },
+    {
+      "path": "translator/backend/zipformer_postprocess.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/backend/zipformer_postprocess.py",
+      "git_blob_sha1": "bed2d2b0878d0eda71c2a34cd79cd62d1103e419",
+      "upstream_sha256": "63e359e11023f0ce89d55723e3b74aac9a8bd5a84286bfcd67d59fc403e1d009",
+      "bytes": 3032
+    },
+    {
+      "path": "translator/config.json",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/config.json",
+      "git_blob_sha1": "92f357c3cd14596de6d7f03e73db33227787b20a",
+      "upstream_sha256": "d912ba191b52dfda6972abd469e026698d7bb93bd8cd67faf1128e2fdedd6561",
+      "bytes": 2039
+    },
+    {
+      "path": "translator/main.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/main.py",
+      "git_blob_sha1": "ed0b6238db3ed20af558a6aaf59bde278cee23f2",
+      "upstream_sha256": "fb3624689bb3988cacf37d091e698834707985dd6bb4d810673d09d303fe925d",
+      "bytes": 610
+    },
+    {
+      "path": "translator/pyproject.toml",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/pyproject.toml",
+      "git_blob_sha1": "d686eb2336fd3b869bbe302cca35b09d5878de32",
+      "upstream_sha256": "21511b69b616d71eb53e455cdee0513c778fb771b032dcacfd9a5c7897dc2595",
+      "bytes": 569
+    },
+    {
+      "path": "translator/server/LMT/start_lmt_vllm.sh",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/LMT/start_lmt_vllm.sh",
+      "git_blob_sha1": "ff3092cd8606774c02b7799aee21f109ba07c20d",
+      "upstream_sha256": "0dda77629fd7204ed32aab4c519b208f9b95cf28f630a93b373f808ebfb62d93",
+      "bytes": 935
+    },
+    {
+      "path": "translator/server/qwen3asr/qwen3asr_server.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/qwen3asr/qwen3asr_server.py",
+      "git_blob_sha1": "de60804e4eda24518e09f84e591824ad9936d3d1",
+      "upstream_sha256": "4f5a78690fd93810c01c3fcff3e40c3b5d6be7d6921dacfa7ff9aeb4dd26fcbd",
+      "bytes": 9732
+    },
+    {
+      "path": "translator/server/qwen3asr/start.sh",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/qwen3asr/start.sh",
+      "git_blob_sha1": "81c921b8770f5f3190236d1ba8231d99372a0373",
+      "upstream_sha256": "62dfd2482691d9e4b6b22ff47de45aa9b7ee1394565f7fda5e447ef50ddb427d",
+      "bytes": 222
+    },
+    {
+      "path": "translator/server/xvoice/server.py",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/xvoice/server.py",
+      "git_blob_sha1": "cbbd6db5497464d56923359f8fb226c5f6aa38c0",
+      "upstream_sha256": "179b90e2a51b20c356f171ec2a67dcff40eeaea4872e60564779523aa0d38c77",
+      "bytes": 23025
+    },
+    {
+      "path": "translator/server/xvoice/start_x_voice.sh",
+      "repository": "zhaoyx239/X-Translator",
+      "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+      "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/xvoice/start_x_voice.sh",
+      "git_blob_sha1": "ec22d917252c8a9094dbcc264a208984fbb7e5a1",
+      "upstream_sha256": "5e7a0633fa274776416370291f6b3cc5061a4411547f785d19840acd156b6503",
+      "bytes": 664
+    },
+    {
+      "path": "xvoice/README.md",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/README.md",
+      "git_blob_sha1": "1ebcecc956eb067b6417aa3fa840a6df9b32c5b3",
+      "upstream_sha256": "9f4d2877aa8d5827b5b86c602740abfe849dc1d9a5ddaca3755f829f1a67e3e1",
+      "bytes": 8446
+    },
+    {
+      "path": "xvoice/pyproject.toml",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/pyproject.toml",
+      "git_blob_sha1": "a7a38ce567162a2976b2382aff5ae7bbd336aae6",
+      "upstream_sha256": "1478203dfa92dbc76832edaf8b53a363d13407dd735ae662f759925f41a1d25f",
+      "bytes": 2611
+    },
+    {
+      "path": "xvoice/src/rate_pred/README.md",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/README.md",
+      "git_blob_sha1": "3ff315b5970cb1e5a9d7e53579b86c3359dd9f6f",
+      "upstream_sha256": "919c28d67a02e12232a7f253ccafc1ca54c3436a0b9795a374373106f9366cef",
+      "bytes": 3229
+    },
+    {
+      "path": "xvoice/src/rate_pred/configs/SpeedPredict_Multilingual.yaml",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/configs/SpeedPredict_Multilingual.yaml",
+      "git_blob_sha1": "513b7e75c89f3e63a5ae3ad3d37818e0d500a5db",
+      "upstream_sha256": "16e3b782bbee8ba54f6d72e8e9c1e3347d982b3c030d03476f179dc10a2f0877",
+      "bytes": 1620
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/__init__.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/__init__.py",
+      "git_blob_sha1": "dfb28bb80d550d0cea7ad9d41d5b7541a09e9592",
+      "upstream_sha256": "7f776a93fa6f691bd867fba4d20e2ec0caf876933cb72053e5ddeee0662ffc27",
+      "bytes": 113
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/dataset.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/dataset.py",
+      "git_blob_sha1": "d1b4a1dbb7a29a66307dc4d716b68bfb90a14f2e",
+      "upstream_sha256": "9a53a233987bbac9de549bcc0cdc5bd0bc69cb0d66c4020df58bb2ce26cc6f42",
+      "bytes": 12434
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/jp_syllable.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/jp_syllable.py",
+      "git_blob_sha1": "41566d5a9c9fe2b1ab7ad3409492c3d5e460fc15",
+      "upstream_sha256": "beecdc1f55375d7d68cb1bebdeb56b5dcfc57d64060faaee1d4aac8ebef65092",
+      "bytes": 13060
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/modules.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/modules.py",
+      "git_blob_sha1": "c25c1d57f5621f6c22da1a98e5125154e7121dd8",
+      "upstream_sha256": "394f3c6817ced408fb9d03acc7b91eefa7f0e6b094bda68e33be52e0bdea3d3a",
+      "bytes": 19463
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/speed_predictor.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/speed_predictor.py",
+      "git_blob_sha1": "7e28afed43f48266d7eb805063d48d2fd6cb6142",
+      "upstream_sha256": "c72cca3a84124411f1e579b86ec1ead6d3c93754333e14163a9c5a5f19dc49d4",
+      "bytes": 7906
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/trainer.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/trainer.py",
+      "git_blob_sha1": "8137944f15443f8ea6f8f0aa04c2b04b5163b098",
+      "upstream_sha256": "27b52852b93d81302c579b42909e2595307d18a495442b87d5a4d10d93ac32dc",
+      "bytes": 24861
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/utils.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/model/utils.py",
+      "git_blob_sha1": "d9b9c6ee1894a51006b1aae3b2ca7cf49a05e165",
+      "upstream_sha256": "9ff9318f27353c528bb19dc85b9c4def731374bc56c9aff3afabb94e49aaa25a",
+      "bytes": 4501
+    },
+    {
+      "path": "xvoice/src/rate_pred/train/README.md",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/train/README.md",
+      "git_blob_sha1": "ac4b1458fd63f9af7d321070b5b7b0552911881c",
+      "upstream_sha256": "08a546b272d9039a7505279c55e7cc291ec22187a88d4d86e42065fde0ef6c9a",
+      "bytes": 2789
+    },
+    {
+      "path": "xvoice/src/rate_pred/train/datasets/prepare_multilingual_speed.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/train/datasets/prepare_multilingual_speed.py",
+      "git_blob_sha1": "79b18962df8c8cd2df5e28c17079da2f416e59dc",
+      "upstream_sha256": "b705cc18e6c78ade706c5f68285dbeca113a8ce8079e955b37321b50fd0f1b65",
+      "bytes": 7893
+    },
+    {
+      "path": "xvoice/src/rate_pred/train/train.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/rate_pred/train/train.py",
+      "git_blob_sha1": "606e872462d68e745b406e539d6e544e5d62aecc",
+      "upstream_sha256": "5bfd604da1a18eb224ea03ecbbc3673f169b9bedeb5c8c647781fd17a8b07e67",
+      "bytes": 2417
+    },
+    {
+      "path": "xvoice/src/x_voice/configs/XVoice_Base_Infer.yaml",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/configs/XVoice_Base_Infer.yaml",
+      "git_blob_sha1": "85d2bd60a48bffc6b924e28b37eceefda28191e9",
+      "upstream_sha256": "a17819ac64cc78d4f5bf511e8ea4e353eec91265849c106a27e8244b8f8bb220",
+      "bytes": 616
+    },
+    {
+      "path": "xvoice/src/x_voice/configs/XVoice_Base_Stage1.yaml",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/configs/XVoice_Base_Stage1.yaml",
+      "git_blob_sha1": "bc2357f096722c8459f6fd60a0c6c606d1183834",
+      "upstream_sha256": "b8d3c6be982b8f635dfd3fa367761a0d4f58f1562f3b174642cae9aa1b161007",
+      "bytes": 2603
+    },
+    {
+      "path": "xvoice/src/x_voice/configs/XVoice_Base_Stage2.yaml",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/configs/XVoice_Base_Stage2.yaml",
+      "git_blob_sha1": "67e9fc5f8c3018d987af9390a0415d908ab8b031",
+      "upstream_sha256": "f4669df28add6529b87ebe64fc51407dd8f8d91ba92684695defe959c46d5af2",
+      "bytes": 2711
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/README.md",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/README.md",
+      "git_blob_sha1": "050425765624357df377018827bca89f38f5ab66",
+      "upstream_sha256": "a151d38e3106d3c229f47e615fe7c44c6cf081417c4e1c89ab2b3e71b22141ed",
+      "bytes": 8282
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/infer_cli_stage1.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/infer_cli_stage1.py",
+      "git_blob_sha1": "6c0aa0b4dc380ad164e30cec4787eb83addaef2e",
+      "upstream_sha256": "14252c6baa64782488215a9dd772c8e1fc48b7bdf9e9ba51c25948cb065a5ae8",
+      "bytes": 19872
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/infer_cli_stage2.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/infer_cli_stage2.py",
+      "git_blob_sha1": "715f6090ed3865a237b9a2ba651f73798b4d4e0e",
+      "upstream_sha256": "4d978fb78a82eaca662356c93158338c6681eb010df80086baa8b1547cdb311a",
+      "bytes": 18323
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/infer_gradio.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/infer_gradio.py",
+      "git_blob_sha1": "b60373fe531908e01ee1878671c68de44a32384b",
+      "upstream_sha256": "096ac359e75591fbea685adfeb7f552fb6438e07ac1da51c3e1132d34de13821",
+      "bytes": 37084
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/utils_infer.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/infer/utils_infer.py",
+      "git_blob_sha1": "7886ab207eedd73eb0284a64eeaaca9e832453c3",
+      "upstream_sha256": "c5deb32bfcfdc944387fad051c380d0f8d3572b18d672cdaa9914904b39b03b0",
+      "bytes": 57305
+    },
+    {
+      "path": "xvoice/src/x_voice/model/__init__.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/__init__.py",
+      "git_blob_sha1": "fc3a9d2e074d67c33e059898da0b0b2df0f0a8df",
+      "upstream_sha256": "895ff4d4c3cb9f8d3c57f17cc32604aa2076b1b063e12a5002d77f62d3ede418",
+      "bytes": 389
+    },
+    {
+      "path": "xvoice/src/x_voice/model/backbones/README.md",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/backbones/README.md",
+      "git_blob_sha1": "09bd4da5b51d3349b0136cec601d5d3ae9ed92f0",
+      "upstream_sha256": "b0f2aed6adaa3fdc6338cdfdd0abab852859c4b7a018ef7e823497f76d758a44",
+      "bytes": 708
+    },
+    {
+      "path": "xvoice/src/x_voice/model/backbones/dit.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/backbones/dit.py",
+      "git_blob_sha1": "d8f39129e4592ceb071cb94cbff5923da820de15",
+      "upstream_sha256": "593f4a0766a2140a8a7bcf9ec46514e9cc9a973fe464211088011fc1f83d13d6",
+      "bytes": 24125
+    },
+    {
+      "path": "xvoice/src/x_voice/model/backbones/mmdit.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/backbones/mmdit.py",
+      "git_blob_sha1": "ac0eb20daaf7ce36dcd65a3258f0d50081762449",
+      "upstream_sha256": "9f184965004b9c75820a104de5f3d1642c7acda2dae7dc59d6c24bdb2a72cef5",
+      "bytes": 6940
+    },
+    {
+      "path": "xvoice/src/x_voice/model/backbones/unett.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/backbones/unett.py",
+      "git_blob_sha1": "3cb12e7240d5bf83e7746d0ccdc0faba264c330a",
+      "upstream_sha256": "8197646aef478938033145b915128e8619c9c7ff0e72f0dbaaa302bc3cca2f85",
+      "bytes": 9391
+    },
+    {
+      "path": "xvoice/src/x_voice/model/cfm.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/cfm.py",
+      "git_blob_sha1": "09e02d3b1127a6b60a07fea1c1fa3c2114941121",
+      "upstream_sha256": "7eb1d41d56cb7d8ddc5357ff37cb5fd45d2f6359699e9724f99e3478e7727462",
+      "bytes": 15233
+    },
+    {
+      "path": "xvoice/src/x_voice/model/cfm_sft.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/cfm_sft.py",
+      "git_blob_sha1": "6b604265e3c3663dab29a88eae42771afbf3c4b8",
+      "upstream_sha256": "e00a8a401655b07ebc38ba81b17d9a2e4bfcad36dd74a25e3f9f772b6b0f67d6",
+      "bytes": 17995
+    },
+    {
+      "path": "xvoice/src/x_voice/model/dataset.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/dataset.py",
+      "git_blob_sha1": "98c2a7bf24d0fcb842601c01375f721b82241985",
+      "upstream_sha256": "1c00eb2a519a56afa21148d299ca24004d23ce56f08abe190db6d02a73995d52",
+      "bytes": 25185
+    },
+    {
+      "path": "xvoice/src/x_voice/model/inferencer_gp.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/inferencer_gp.py",
+      "git_blob_sha1": "f9f000cf61d2b3c2fce2572a15ffe9ed231cac73",
+      "upstream_sha256": "d0d6ac4c9b1e5fcd08d868df4c7dbf7121254285c10488cd06d0e68b47a76272",
+      "bytes": 10212
+    },
+    {
+      "path": "xvoice/src/x_voice/model/modules.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/modules.py",
+      "git_blob_sha1": "ae52a34435fcf708d89a6c41f7e4b72b884415f8",
+      "upstream_sha256": "5399573a3f539c2a69ce48951ba73882e668e8ecb544308c05914925f95f79eb",
+      "bytes": 32091
+    },
+    {
+      "path": "xvoice/src/x_voice/model/trainer.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/trainer.py",
+      "git_blob_sha1": "6028f2063bbf078a7838e6e416a6ae429462e0e6",
+      "upstream_sha256": "a67b0b079fc5ead180b1394ffd676f740e4fea3bdbee77823e6bb4993bc10b70",
+      "bytes": 24284
+    },
+    {
+      "path": "xvoice/src/x_voice/model/trainer_sft.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/trainer_sft.py",
+      "git_blob_sha1": "4c0e2ffaa6ae4e5a391c6783e3c46bb090bc68a9",
+      "upstream_sha256": "7650a1a4f74498252a23db004950e28eb7087cbc7ea496381531d22fa1952ab9",
+      "bytes": 22665
+    },
+    {
+      "path": "xvoice/src/x_voice/model/utils.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/model/utils.py",
+      "git_blob_sha1": "fe06951808156cddd896cc615584dce8db87a932",
+      "upstream_sha256": "6c75fe1ec6df902f9199360f8bebd8d0037014240609de82157fe13c850f14e6",
+      "bytes": 18702
+    },
+    {
+      "path": "xvoice/src/x_voice/train/README.md",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/README.md",
+      "git_blob_sha1": "c576e27f6d5df00717133dbb13696c960b00c691",
+      "upstream_sha256": "49100064f8d21daf27d1348aa708cf0bc5202ba5f80fbaed7ef57789e3b4cf1d",
+      "bytes": 6043
+    },
+    {
+      "path": "xvoice/src/x_voice/train/datasets/ipa_v3_tokenizer.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/datasets/ipa_v3_tokenizer.py",
+      "git_blob_sha1": "6684776729eb21cc14bff7110968c30f24278558",
+      "upstream_sha256": "6109b0bdc557c97d269276628d98880ba169c2ff25b344a8dec586254b7674d1",
+      "bytes": 8771
+    },
+    {
+      "path": "xvoice/src/x_voice/train/datasets/ipa_v6_tokenizer.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/datasets/ipa_v6_tokenizer.py",
+      "git_blob_sha1": "504a446a7a3235885b04644fb8cc41bb559f6b77",
+      "upstream_sha256": "8adad1139db0f2dc79286c034dfe517e53767cdc009bf665b800219f70d9ccb7",
+      "bytes": 12294
+    },
+    {
+      "path": "xvoice/src/x_voice/train/inference_gp.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/inference_gp.py",
+      "git_blob_sha1": "287d619afcff0a144e041ecf3e2ab277acb81c53",
+      "upstream_sha256": "bc2af7f09127c90d794b354217d99ef70fa4cc8f28ca5860d8e850cd2311e408",
+      "bytes": 3745
+    },
+    {
+      "path": "xvoice/src/x_voice/train/train.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/train.py",
+      "git_blob_sha1": "fd1bd228e57aaed757fa8c1d340355cf2892f1a9",
+      "upstream_sha256": "04534a137dc7ab4cdbef5b6277ca333cc40c883dad05f545fbdd7c4cfbe81776",
+      "bytes": 3531
+    },
+    {
+      "path": "xvoice/src/x_voice/train/train_sft.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/train/train_sft.py",
+      "git_blob_sha1": "c3869c69fe6f44ec8ba86f0fa0044c7326e3a39c",
+      "upstream_sha256": "e55d20bc903df77e91948972ae84632ae5f044f5d08c929c2ff0b5ed7a74acc8",
+      "bytes": 3752
+    },
+    {
+      "path": "xvoice/src/x_voice/eval/text_normalizer.py",
+      "repository": "sunnyxrxrx/X-Voice",
+      "commit": "817bcdd9f8173eb01c7d5c895858b1d93780d9d0",
+      "url": "https://raw.githubusercontent.com/sunnyxrxrx/X-Voice/817bcdd9f8173eb01c7d5c895858b1d93780d9d0/src/x_voice/eval/text_normalizer.py",
+      "git_blob_sha1": "755552da4983235cb754ef869d1494efbce25d79",
+      "upstream_sha256": "036ae1eadadc72620123f347542679805fbc36ca1ca3b8ef99964bd0314b1e74",
+      "bytes": 3881,
+      "reason": "Direct runtime import from utils_infer.normalize_text_for_lang; no eval tree vendored"
+    }
+  ],
+  "models": [
+    {
+      "repository": "Qwen/Qwen3-ASR-1.7B",
+      "revision": "7278e1e70fe206f11671096ffdd38061171dd6e5",
+      "license": "apache-2.0",
+      "weights_vendored": false
+    },
+    {
+      "repository": "NiuTrans/LMT-60-8B",
+      "revision": "c77b9bf3b01db78174e7be3ec1d4927e3a0454f7",
+      "license": "apache-2.0",
+      "weights_vendored": false
+    },
+    {
+      "repository": "XRXRX/X-Voice",
+      "revision": "7f24fe778ddf7a47e25d87e5d5153599c1d4d5c2",
+      "license": "cc-by-nc-4.0",
+      "weights_vendored": false
+    },
+    {
+      "repository": "charactr/vocos-mel-24khz",
+      "revision": "0feb3fdd929bcd6649e0e7c5a688cf7dd012ef21",
+      "license": "mit",
+      "weights_vendored": false
+    },
+    {
+      "repository": "iic/speech_campplus_sv_zh-cn_16k-common",
+      "revision": "v2.0.2",
+      "license": "Apache-2.0",
+      "license_source": "https://modelscope.cn/api/v1/models/iic/speech_campplus_sv_zh-cn_16k-common/repo?Revision=v2.0.2&FilePath=README.md",
+      "weights_vendored": false
+    }
+  ],
+  "patches": [
+    "P1-segment-terminal-audio.patch",
+    "P10-native-language-disposition.patch",
+    "P11-q8-runtime.patch",
+    "P12-external-template.patch",
+    "P13-short-linux-temp.patch",
+    "P14-shared-json-heartbeat.patch",
+    "P15-permissionerror-form.patch",
+    "P16-loopback-port-probe.patch",
+    "P17-xvoice-import-closure.patch",
+    "P17b-normalizer-warmup.patch",
+    "P18-pyarrow-numpy-compatibility.patch",
+    "P19-asr-deadline-diagnostics.patch",
+    "P19b-asr-startup-warmup.patch",
+    "P2-processed-barrier-backpressure.patch",
+    "P20-unicode-segment-admission.patch",
+    "P21-committed-tail-retention.patch",
+    "P22-mt-deadline-port-reuse.patch",
+    "P23-P25-mt-warmup-asr-context.patch",
+    "P3-no-spectral-fallback.patch",
+    "P31-boundary-wakeup.patch",
+    "P32-sentence-context-reference.patch",
+    "P4-xvoice-cuda-local-assets.patch",
+    "P5-campplus-cuda.patch",
+    "P6-loopback-headless-health.patch",
+    "P7-lazy-training-exports.patch",
+    "P8-fixed-kv-eager-budget.patch",
+    "P9-native-qwen-language.patch",
+    "R86-compute-cache-telemetry.patch"
+  ],
+  "files": [
+    {
+      "path": "INTEGRATION.txt",
+      "sha256": "b25b13819c68c5fb3a564a065252e0e155fa00298f15815fcf4d1427b867fa76",
+      "bytes": 5031
+    },
+    {
+      "path": "NOTICE.txt",
+      "sha256": "643b039ffb4c61a79a49a81017e28a6efe2839594dac71a527bc2197b2334f7b",
+      "bytes": 983
+    },
+    {
+      "path": "P12-EXTERNAL-TEMPLATE.txt",
+      "sha256": "f419b7773ab9ed50859f70047a6d2bbe58bdb3596236ba4c9860f64c80596733",
+      "bytes": 2075
+    },
+    {
+      "path": "P13-SHORT-LINUX-TEMP.txt",
+      "sha256": "f26c679bcdfbe64a562f2b9e14a440e0a8453992c06dcb919bf09f8a013a9d04",
+      "bytes": 3616
+    },
+    {
+      "path": "P14-SHARED-JSON-HEARTBEAT.txt",
+      "sha256": "8e89198ca208fe4d3717a8f2e9936d5dd90814d73720394e75ab49d1ce0803ed",
+      "bytes": 3893
+    },
+    {
+      "path": "P15-PERMISSIONERROR-FORM.txt",
+      "sha256": "ac8361d2f8b3c62ba23342fe7acefadd44c5fe01ceedcf5e3396ef81971dcb93",
+      "bytes": 1249
+    },
+    {
+      "path": "P16-LOOPBACK-PORT-PROBE.txt",
+      "sha256": "5c259a6d8156eb3f8c480d380590ac1e814b7198ba4eb720574335536873adc5",
+      "bytes": 1506
+    },
+    {
+      "path": "P17-XVOICE-IMPORT-CLOSURE.txt",
+      "sha256": "5c55980cefb2a04986145837994b14613265986532d76804129b7e7d87800c25",
+      "bytes": 4664
+    },
+    {
+      "path": "P17B-NORMALIZER-WARMUP.txt",
+      "sha256": "478625a25acd1fb4567db2f594c850032753043f0267d0853b843d65c87bb79a",
+      "bytes": 1807
+    },
+    {
+      "path": "P18-PYARROW-NUMPY-COMPATIBILITY.txt",
+      "sha256": "82c99b346fe147f7487a13ebcd7dc015f4bed597cb22ff25a4f01b5c9bbcb598",
+      "bytes": 3708
+    },
+    {
+      "path": "P19-ASR-DEADLINE-DIAGNOSTICS.txt",
+      "sha256": "5da37c42de6147a8467ed978cacc9eb14381f88b8b5f1d764e17114177c4b12f",
+      "bytes": 2777
+    },
+    {
+      "path": "P19B-ASR-STARTUP-WARMUP.txt",
+      "sha256": "be7f6b8bafdad730bb6febb300f5be58e7ca2bacc62ab1f1d6232b7822491169",
+      "bytes": 2426
+    },
+    {
+      "path": "P20-SOURCE-REPORT.txt",
+      "sha256": "8eb98bb57b610d1c9ebcf92a9195fc2bb50ca98ce579c25501cb309d3f873be0",
+      "bytes": 1601
+    },
+    {
+      "path": "P21-SOURCE-REPORT.txt",
+      "sha256": "55e04d70591bd40841338661827ccccd0c42f07e545fcac05614223ee23ab115",
+      "bytes": 1095
+    },
+    {
+      "path": "P22-MT-DEADLINE-PORT-REUSE.txt",
+      "sha256": "8b3aef8e48290eac338ba62948f248bb4682fd611438fc40521550e5b8e3de5c",
+      "bytes": 3521
+    },
+    {
+      "path": "P23-P25-MT-WARMUP-ASR-CONTEXT.txt",
+      "sha256": "2e162332c69251cb017c35d16e5699a4171e6c67bd64a0b731ce5b7c5d9e8479",
+      "bytes": 4214
+    },
+    {
+      "path": "P26-AUDIT-PACKAGING.txt",
+      "sha256": "dcbb0b335750531d869c458a80e6f8ec79286ea85a76c4e7838b756accbcab3f",
+      "bytes": 1231
+    },
+    {
+      "path": "P31-BOUNDARY-WAKEUP.txt",
+      "sha256": "4b3b3cf03179a2410628a3189e87595b8dc4ae3fb8d80c2669209035d56b13b5",
+      "bytes": 1606
+    },
+    {
+      "path": "P32-sentence-context-reference.patch",
+      "sha256": "22860aeaf5664b5961f436a470c4fd461c8b183fa9eefc4b14838e15c7f06e62",
+      "bytes": 20050
+    },
+    {
+      "path": "P8-BUDGET.txt",
+      "sha256": "1b4afca04285ecd4db6d46e12d5699affb229e7b207277054c363ce1935f0c13",
+      "bytes": 2526
+    },
+    {
+      "path": "P9-P11-SOURCE-REVIEW.txt",
+      "sha256": "b46a41d3a768da65b0616d6afe6f0726a4b9dc1999757cd92c35bc3f1120c43c",
+      "bytes": 3908
+    },
+    {
+      "path": "R86-COMPUTE-CACHE-TELEMETRY.txt",
+      "sha256": "7b0fc219f1f6f8724b81093256f4f99e7137f71decedf93d628c65427878c4ea",
+      "bytes": 1693
+    },
+    {
+      "path": "UPSTREAM-FILES.json",
+      "sha256": "0f3dab6e0d51addafa25f61c768a977e7a455702ecc93d987e951aeb74542f1d",
+      "bytes": 29624
+    },
+    {
+      "path": "dependency-audit/AUDIT.txt",
+      "sha256": "df7cb2a7c1a5ea9e4997bcb86059d2d068407c3d0cee76b99b0914ab4b4e5ed4",
+      "bytes": 2864
+    },
+    {
+      "path": "dependency-audit/campplus-configuration.json",
+      "sha256": "6f7acaf1e81ca121f4a3c71b6ddb66beec24350a3ef330e2c846f17829176a8f",
+      "bytes": 581
+    },
+    {
+      "path": "dependency-audit/datasets-2.21.0.json",
+      "sha256": "1d336c1b5ff7e8dbb5abf6d8450e979e9dcb3dd7d5ec85e66dfa9cef90e2eb6a",
+      "bytes": 6804
+    },
+    {
+      "path": "dependency-audit/modelscope-1.20.0-speaker-source-index.json",
+      "sha256": "7d97fca0349dbf5422c6b8f3538cbfd2c7943864a7b7df797ab96b5d27e7cf48",
+      "bytes": 6241
+    },
+    {
+      "path": "dependency-audit/modelscope-1.20.0.json",
+      "sha256": "d7118cea40080f8c262c14b015c173d7146d2c6e6565b0f8b02d6afddc7dab57",
+      "bytes": 20867
+    },
+    {
+      "path": "dependency-audit/modelscope-DTDNN.source.txt",
+      "sha256": "1e39830130292c6620869a2fcd40061b264066574253a8a483855c53f05ee880",
+      "bytes": 7326
+    },
+    {
+      "path": "dependency-audit/modelscope-speaker-light.source.txt",
+      "sha256": "6c57dc7b78191d7033c478085616177d1290131755b9744b5cd6704f3b40b46e",
+      "bytes": 6037
+    },
+    {
+      "path": "dependency-audit/modelscope_models_base_base_torch_model.py.source.txt",
+      "sha256": "bf1267549924a664d3bf73c2bd4e5f11374a3efcbeb172e74742ab23a5597e3c",
+      "bytes": 5679
+    },
+    {
+      "path": "dependency-audit/modelscope_msdatasets_ms_dataset.py.source.txt",
+      "sha256": "d08fef5e7c245a60529877ec844d1b1198ab925842e37edea3847b8ceb077e42",
+      "bytes": 38790
+    },
+    {
+      "path": "dependency-audit/modelscope_msdatasets_utils_oss_utils.py.source.txt",
+      "sha256": "ffa53cddf69f90a623787b58e9740145fa49b4977f8b835bcf0a370eacc203e6",
+      "bytes": 6234
+    },
+    {
+      "path": "dependency-audit/modelscope_pipelines___init__.py.source.txt",
+      "sha256": "e0c761b2153720c45e7398881bad9fa980920958fc325920b6c3477c4c2fba75",
+      "bytes": 150
+    },
+    {
+      "path": "dependency-audit/modelscope_pipelines_base.py.source.txt",
+      "sha256": "722f5286c70575c816409e9c28b73574e5878d9bb22ec35187dd2e7498e07e6a",
+      "bytes": 23434
+    },
+    {
+      "path": "dependency-audit/numpy-1.26.4.json",
+      "sha256": "18bd22aa55f1f3d80d5c1655dd4606fb6848a766530913c7fbac5e8fb32f3671",
+      "bytes": 166
+    },
+    {
+      "path": "dependency-audit/r72/epitran-1.35.3-py3-none-any.whl",
+      "sha256": "44cdda79e6412e648fa83f89d3fae24b5d099ea5ae9ba143829fadf2d8dd919b",
+      "bytes": 222987
+    },
+    {
+      "path": "dependency-audit/r72/epitran-pypi.json",
+      "sha256": "f5c34ae588832a4d1e8e5eaf241774cb05c3d502f56ea11c525431ac6edfface",
+      "bytes": 257666
+    },
+    {
+      "path": "dependency-audit/r72/installed-backend-metadata.json",
+      "sha256": "e0d4bddcf3c2b3522f8ac4933a7d4e3d317f758f00484a3757fbe5199d63fa56",
+      "bytes": 38253
+    },
+    {
+      "path": "dependency-audit/r72/marisa-trie-pypi.json",
+      "sha256": "3aac5103cb7e464ff12372c0a549e667f3f4eb58e437067c1a0cd44c555098df",
+      "bytes": 1171746
+    },
+    {
+      "path": "dependency-audit/r72/munkres-1.1.4-pypi.json",
+      "sha256": "110fb33504ecfabf8b7905fa855404711cf3a8a8e1e713c77e284a9fd668506b",
+      "bytes": 4003
+    },
+    {
+      "path": "dependency-audit/r72/munkres-pypi.json",
+      "sha256": "55db91c64194b272f7fbc0644c8e43a2f88916138983c294d30108eed371e6b8",
+      "bytes": 84778
+    },
+    {
+      "path": "dependency-audit/r72/nltk-cmudict-source.json",
+      "sha256": "8c20bfa50603d8b8721bafa7a79d42556fe695589ab49f10db837a90b5004e06",
+      "bytes": 1099
+    },
+    {
+      "path": "dependency-audit/r72/panphon-0.22.2-py2.py3-none-any.whl",
+      "sha256": "a4c65113430d0699054cb00df978c02712d3c80913a1ef67697f888d96f3a00a",
+      "bytes": 78888
+    },
+    {
+      "path": "dependency-audit/r72/panphon-pypi.json",
+      "sha256": "d4cf6f0e165ef4daa5d9edd948ed97ccdfba724b60a21c1aa9451ba2d7f88560",
+      "bytes": 67263
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran-1.35.3.dist-info/METADATA",
+      "sha256": "07c104c40e86fcb34fb3448ef53d3a30d9114c1535b7d05d3a81ba095e3dddd8",
+      "bytes": 36672
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/__init__.py",
+      "sha256": "05adc0136584f7bf0928db55a47bffee4a54926102907d62ca66d4ffd75b45bc",
+      "bytes": 292
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/_epitran.py",
+      "sha256": "27d7883880e790cb2a6da1f3a94c70e2a30b7eed4e1c61e7f3db4895b2639dd9",
+      "bytes": 7366
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/backoff.py",
+      "sha256": "b72eb61b4c0faa9fa3d1ab2f6528f8dc8ef26533b66de5cc7ac829bce3ceb838",
+      "bytes": 3093
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/connl2engipaspace.py",
+      "sha256": "d87b88f3fd582053e8edc8e5b13535a2639e0d503fb6d38dc72165c46d084264",
+      "bytes": 2320
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/connl2ipaspace.py",
+      "sha256": "ae8ae22b4ada08c7a7d18a7d53251ce7e50b9dec829db0583368ae7f503dbb00",
+      "bytes": 3352
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/decompose.py",
+      "sha256": "19d9ca5081f77d0e4890e202a2da420166e531a381f1824f31f03b14b5c256e8",
+      "bytes": 230
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/detectcaps.py",
+      "sha256": "ea3531d2b9cdd357f1b1c4dd34d84e8e6d5a55df3c35b01873ea15454305172f",
+      "bytes": 523
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/epitranscribe.py",
+      "sha256": "6cc233c05998ce65832d8aa00be3f063e93f9d6b38aaa8fd32bad122f639ad69",
+      "bytes": 644
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/extract_test_cases.py",
+      "sha256": "e086d18a2839f0f9e76ae758c84b15c2609d24e1cdb688b77d018d4afe156910",
+      "bytes": 1963
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/isbijective.py",
+      "sha256": "944ac9711e17590cc4bd74086441a21761a7ef3a466d6ffeb245c9e619b1ac5d",
+      "bytes": 698
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/ltf2ipaspace.py",
+      "sha256": "1d35cbb7a42257afaac7cf97afdfec584903de4b1da63371e72491714787d8ae",
+      "bytes": 1534
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/migraterules.py",
+      "sha256": "aa54295162ecfb26fee9222a23b48cf9129a39a3bf4a5732491765b5c4040bc0",
+      "bytes": 1175
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/reromanize.py",
+      "sha256": "408422c4397d4ac9655b851c1e6be68f66eb0d79c4b2e3a3c84b9d2ccca0e528",
+      "bytes": 699
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/space2punc.py",
+      "sha256": "9b03b43405e60109773e3f1f65f925ce68c5356eac5221c377f9444318bc042d",
+      "bytes": 596
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/testvectorgen.py",
+      "sha256": "14268cdd43e2991a8ec28a87e5f998a7b1384c4072f59d10ef5ea92348b55c4b",
+      "bytes": 1213
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/uigtransliterate.py",
+      "sha256": "376232a3be16fa035448da31c8d632ccb8abf050aca92282637ef265fd2929da",
+      "bytes": 200
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/bin/vie-tones.py",
+      "sha256": "465dbabec2ab42cd5380ba90d21213862165c8423ff1daa7b510a4d04e836a19",
+      "bytes": 1041
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/cedict.py",
+      "sha256": "48899d68d55972ebd8dcbbc6418575a7e19b2e49fe047e74a384d0e3e50bf74d",
+      "bytes": 5880
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/data/map/count_phones.py",
+      "sha256": "42bb85e2ff497231f70de7cef6104df8508f3b1fbfc70f62b2254aa4f63670f0",
+      "bytes": 484
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/data/map/find_duplicates.py",
+      "sha256": "4b1f55b60fbe1e561e1559465f370a45172535fc3d0a0cfee4ab5e9b5e3db216",
+      "bytes": 461
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/data/map/make_map_dict.py",
+      "sha256": "69fbe1787c0e1ca9e4e12048042e5a374abd73b6c0c337ae29995a098d91ad94",
+      "bytes": 352
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/dictfirst.py",
+      "sha256": "b9bfdbce2aa340ccc5f23351e71862d3eb359510180ac2d9af621ceafab56b5f",
+      "bytes": 1167
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/download.py",
+      "sha256": "311e93bef7bcb8304211d227d87ade4014605a2493152cc36de9778f216db80e",
+      "bytes": 1775
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/epihan.py",
+      "sha256": "532d5968242370f283312b561f8d378d415b2559b6c289b728e43d00602992fc",
+      "bytes": 8808
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/exceptions.py",
+      "sha256": "64a99b5d5be848ac2f8fa607f42a6a5099f1a872abe5183e720740302df851b7",
+      "bytes": 131
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/flite.py",
+      "sha256": "69e175fdd8bc4d6e26ad0adf5a83c92297a0e22747806d5671c0a46070e66573",
+      "bytes": 7509
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/ligaturize.py",
+      "sha256": "a96c8db6e5503be94432d5e0265b50c8ffc3074aafb7da0d10b5358688218efc",
+      "bytes": 1039
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/meta.py",
+      "sha256": "efa7e847eb12619522501173e244ec19a26d48de276d9ba59e77ba8414dc1a30",
+      "bytes": 2124
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/ppprocessor.py",
+      "sha256": "5b746277bc6f2de472c103573d367495c3d740d3f149dc9790e01e3793a4cff1",
+      "bytes": 1690
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/puncnorm.py",
+      "sha256": "5dee714b01556ed72ed7481ba35720957f96307b46ffc2341d571f00073a59c8",
+      "bytes": 1236
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/reromanize.py",
+      "sha256": "4dc94cf4d248ee8b02ba17b03f1e734e3e1642bf8ac7b4776470f04f12863e89",
+      "bytes": 2178
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/rules.py",
+      "sha256": "b43fda19fda9a4feb225c31f986f476fb3d4489937eaf3d9d2bd770e0c1e01c5",
+      "bytes": 4966
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/simple.py",
+      "sha256": "3a97954b3637987e0354fc913dc85e4c94e2b2061d909378478e98921ef7f216",
+      "bytes": 17472
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/space.py",
+      "sha256": "f839924ba6061d66faa4c9d2cdccf2c133eb1c1de9e543ef3a7fb899606c4086",
+      "bytes": 2371
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/stripdiacritics.py",
+      "sha256": "c736e136a3a734ab9156b148f40e80c615d3d6f873aef371a4ec2aaeb973626c",
+      "bytes": 1648
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/tir2pp.py",
+      "sha256": "4747b50f9401ae85009b6073c6a1fadbdd39b4647a64afd0993a70414e43eaa6",
+      "bytes": 446
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/vector.py",
+      "sha256": "e4c4d4b1277c38a7a95fa085dd5dbed140ee233daa14d201c0d82f90d4a9d300",
+      "bytes": 2545
+    },
+    {
+      "path": "dependency-audit/r72/source/epitran/xsampa.py",
+      "sha256": "245678c974e27823347e10eee0afba417eb1682154636817cac01dd9327d44bf",
+      "bytes": 1776
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon-0.22.2.dist-info/METADATA",
+      "sha256": "139f586f3bc220cc29aaf3609d1630b09d2a39d5847e9192c8c3f4d3b76c9938",
+      "bytes": 15213
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/__init__.py",
+      "sha256": "67549f9642b1c9457c84fddff052f2e6f6b07fb40076d3b90aed237cab2e29c9",
+      "bytes": 118
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/_panphon.py",
+      "sha256": "32927a659a9429c30333e98389b95bf317d34d6afefada9e6eb1c5c2cd070a24",
+      "bytes": 18717
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/collapse.py",
+      "sha256": "e6398bf9f1cb0dcf17e359ce41f4e3ac255f14484c2ee075fd68c01ae024cc1f",
+      "bytes": 1258
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/distance.py",
+      "sha256": "83e292bbf5db65d3501f8e59bd90698630a955fbfc6d790a5959c8d07aadb0b8",
+      "bytes": 34339
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/errors.py",
+      "sha256": "9d4ab7f3e13dcef7aa6bbbcdfff17ce01dbebb3def0140959cc8f831cdb29532",
+      "bytes": 66
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/featuretable.py",
+      "sha256": "dd135c2a06c81115b518df0c3cb6b76ee30008405ab9601eb936ca6704c02a1d",
+      "bytes": 23046
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/panphonvec.py",
+      "sha256": "92916bb0b6b1a37f25eb4777e17a8f51431d28a0bd786d6265e4c34b8f20a511",
+      "bytes": 9428
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/permissive.py",
+      "sha256": "6a15191f8fecf0bb22faf635e2bf9c61d12ec72ef72658890dbeb8874a078730",
+      "bytes": 7474
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/segment.py",
+      "sha256": "c10800ea546ea5941bf98f05d0822e379bbd4994779c94fdb3fa079a39f713a9",
+      "bytes": 7858
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/sonority.py",
+      "sha256": "158b6d382ec72efc2286b5f82c8587a88c2a9b74d28e35a5f868cb9e06b6d382",
+      "bytes": 2874
+    },
+    {
+      "path": "dependency-audit/r72/source/panphon/xsampa.py",
+      "sha256": "0b308bf80af66d5416cc8e1763e7cfa1826978afc8699fdddbb3392974cbf55f",
+      "bytes": 1225
+    },
+    {
+      "path": "dependency-audit/r72/unicodecsv-pypi.json",
+      "sha256": "adaf5a8f45ded8682b2c14bd501b8fbb4256d75ac918a03742a333d11756c244",
+      "bytes": 14930
+    },
+    {
+      "path": "dependency-audit/r75/arrow17-lib.pyx.txt",
+      "sha256": "78cbfb559394fd3d8e386812ce3be3fc1c60db445cbbf85ae713ad454d0ede62",
+      "bytes": 5910
+    },
+    {
+      "path": "dependency-audit/r75/installed-datasets3-METADATA.txt",
+      "sha256": "886c20b37acb45748523a816846b0e9fd6478113439c58fcb0479c1d710b2922",
+      "bytes": 20132
+    },
+    {
+      "path": "dependency-audit/r75/installed-pyarrow26-METADATA.txt",
+      "sha256": "be4adabcb9b03f3a468f17bb0f42b48e7e17cdd58741ba15753f28610c2497fb",
+      "bytes": 3031
+    },
+    {
+      "path": "dependency-audit/r75/installed-pyarrow26/lib.pyx",
+      "sha256": "0deba6c02886ae22630841c5dc3294ccfd121a5b85894a1716a729aa0bd5ef5f",
+      "bytes": 6504
+    },
+    {
+      "path": "dependency-audit/r75/installed-pyarrow26/src/arrow/python/numpy_interop.h",
+      "sha256": "cfd182319dc4ae06eaf591324a71198b998814592577ec0f1a1f480a924b7263",
+      "bytes": 3122
+    },
+    {
+      "path": "dependency-audit/r75/pyarrow-17.0.0-pypi.json",
+      "sha256": "b8576e8ac9e8f8e4ea307c4b714ccdbab74c80a8db467ba8b6dfd1fcb0e68a21",
+      "bytes": 47617
+    },
+    {
+      "path": "dependency-audit/r80/installed-demo-streaming.py.txt",
+      "sha256": "5c92e769c8b4b5dd5b2a95ab2c218c1cf476ecff86ac48863d28d0a4c9f02fa3",
+      "bytes": 13945
+    },
+    {
+      "path": "dependency-audit/r80/installed-qwen3_asr.py.txt",
+      "sha256": "0b1770f8e907b6c5a0a1e9ebce037cb63f48555f3cd15eaf6ea2078e9df41a7b",
+      "bytes": 31163
+    },
+    {
+      "path": "dependency-audit/r80/upstream-qwen-server-identity.json",
+      "sha256": "75c212caee2b03d0ad52d3ad9769d07f0c36c68f9ca88fae19cdc616e5987682",
+      "bytes": 483
+    },
+    {
+      "path": "dependency-audit/r80/upstream-qwen-server.py.txt",
+      "sha256": "4f5a78690fd93810c01c3fcff3e40c3b5d6be7d6921dacfa7ff9aeb4dd26fcbd",
+      "bytes": 9732
+    },
+    {
+      "path": "dependency-audit/r80b/lmt-lexical-pattern.json",
+      "sha256": "28c1947a7a32bdd0bbe0257eed0a70b35d80ee64f1b6b66c4d210b44c11e8ed0",
+      "bytes": 646
+    },
+    {
+      "path": "dependency-audit/r80b/transformers-regex-condition.txt",
+      "sha256": "380dcd2d93bab4baedd11a250769dd615d910abd653b4af84fcbfd58badbe542",
+      "bytes": 5635
+    },
+    {
+      "path": "dependency-audit/r80b/vllm-log-bounds.txt",
+      "sha256": "8822d6304dd6b7f1c7274e43c2534f2af7cba9757c04015f35f1185407c8b6eb",
+      "bytes": 1317
+    },
+    {
+      "path": "dependency-audit/r80b/vllm-request-log-flag.txt",
+      "sha256": "88071b0c148742e13e5ab90ad52a9635022ff50fc3dec09861b75a6d56523feb",
+      "bytes": 658
+    },
+    {
+      "path": "dependency-audit/torchaudio-2.8.0.json",
+      "sha256": "e50a146b1a1d8dd7aa1a56caed40b16aac490da5c75a00f1ce726ec93d10a447",
+      "bytes": 193
+    },
+    {
+      "path": "dependency-audit/transformers-4.48.3.json",
+      "sha256": "6359f247f8c679fdfeb08728f9394ce84fcdc756b2c206d0df566ff1cdf27806",
+      "bytes": 16792
+    },
+    {
+      "path": "dependency-audit/vocos-0.1.0.json",
+      "sha256": "198a09feb14121beba62ac73aa831e624d960f035d345c3df86abc083ed120e6",
+      "bytes": 587
+    },
+    {
+      "path": "dependency-audit/x-transformers-1.31.14.json",
+      "sha256": "5a79e323836c3b905e463d6f1335f33b9f84f3900f03bcbf1230f8f340972449",
+      "bytes": 225
+    },
+    {
+      "path": "gguf_header.py",
+      "sha256": "93020f630bf043151402e073fa99019ca68bb61be2fada1349b10b815e6599f5",
+      "bytes": 6883
+    },
+    {
+      "path": "licenses/CAMPLUS-MODEL-CARD.md",
+      "sha256": "9bd58b989a534fa0121c8d10e62c0cce9080a9a9aeb2499bb429676f9c17cc3a",
+      "bytes": 6004
+    },
+    {
+      "path": "linux_supervisor.py",
+      "sha256": "b5a85cdf87d1eae67096c6a5875e80cd29dc512fe77889767f3bb96b58a06351",
+      "bytes": 34778
+    },
+    {
+      "path": "mt_warmup.py",
+      "sha256": "9a0e73d3cdd0153c69a516e33c5f4d0c0d534a5c1a35ed924de9f384e50cf301",
+      "bytes": 1945
+    },
+    {
+      "path": "offline/sitecustomize.py",
+      "sha256": "b018f98b56b3170ba7e1abf160e90e116478bcdd1e0f0060c8b742b7e018d0cf",
+      "bytes": 2058
+    },
+    {
+      "path": "patches/P1-segment-terminal-audio.patch",
+      "sha256": "88d895e61ec71ac747ac5a38d5ed0ca6ec55b4dbce00c36b97dddb90542b37fb",
+      "bytes": 13016
+    },
+    {
+      "path": "patches/P10-native-language-disposition.patch",
+      "sha256": "cfc1f67ae00523bab20671ad8d115278ed842d2e27d53e8976c0b390108b6637",
+      "bytes": 4815
+    },
+    {
+      "path": "patches/P11-q8-runtime.patch",
+      "sha256": "fd30637e32e3620433abe4d272a8b678d9bef66f17821c0e5c27fc4e353ff65b",
+      "bytes": 19473
+    },
+    {
+      "path": "patches/P12-external-template.patch",
+      "sha256": "9cf044a84862ca81b4ebb447e12c01910a1ae0c73e60ef16fd9c7eb289db5452",
+      "bytes": 3118
+    },
+    {
+      "path": "patches/P13-short-linux-temp.patch",
+      "sha256": "f1e1030f482396c44c1fa965b074ba95e832f591a4b9151b8ab7665d07a4e003",
+      "bytes": 11397
+    },
+    {
+      "path": "patches/P14-shared-json-heartbeat.patch",
+      "sha256": "8e95da6f2be854ae9f0effec781337b15a7a2ef4750631d2d23ddccb2039ee4c",
+      "bytes": 20383
+    },
+    {
+      "path": "patches/P15-permissionerror-form.patch",
+      "sha256": "5c2543e2c5a2a5d48cb30ad4506d657bd53c83eb47af8a4d572a3fc42021adc8",
+      "bytes": 1738
+    },
+    {
+      "path": "patches/P16-loopback-port-probe.patch",
+      "sha256": "25634ec33323df90966eb102a0ec4e8fa378c52db130fefb6224939cb5f73a59",
+      "bytes": 1514
+    },
+    {
+      "path": "patches/P17-xvoice-import-closure.patch",
+      "sha256": "c6c5a6f5313e7d507758f2c8f1c8e894c58f9f2abf41f5946b7a0d383d303aab",
+      "bytes": 3798
+    },
+    {
+      "path": "patches/P17b-normalizer-warmup.patch",
+      "sha256": "1edd5dcc7142d7a287d46c04933cf184768049b2f5206733024cf34c292c35bc",
+      "bytes": 2686
+    },
+    {
+      "path": "patches/P18-pyarrow-numpy-compatibility.patch",
+      "sha256": "b4bae4b1dcdf67c449901043922f9310c0360cdda9514fa3b2c80c7f6b2e4a31",
+      "bytes": 814
+    },
+    {
+      "path": "patches/P19-asr-deadline-diagnostics.patch",
+      "sha256": "182aa3dc47ed30426ee0436d9cefc8ea80a250e04ea32e600cd9cb43b68245dc",
+      "bytes": 6150
+    },
+    {
+      "path": "patches/P19b-asr-startup-warmup.patch",
+      "sha256": "556aeadeaf9097b78ba27db868b2ac3903b307c2d0d5f36f020dae443071b2b4",
+      "bytes": 9732
+    },
+    {
+      "path": "patches/P2-processed-barrier-backpressure.patch",
+      "sha256": "1efdc008ed0ef589035fcc8501f19d105818ecbcc5c093beca686101de3129bc",
+      "bytes": 22166
+    },
+    {
+      "path": "patches/P20-unicode-segment-admission.patch",
+      "sha256": "1c2e1a838a4c2d7f011b657bfaba40008ee38cf7350f6693685d4ecbecda38d4",
+      "bytes": 630
+    },
+    {
+      "path": "patches/P21-committed-tail-retention.patch",
+      "sha256": "2d2a8fa7dd4e37f5fe26bf626d5f936b1bd3c96dc8fb990c3e9c02436dd9cb6b",
+      "bytes": 683
+    },
+    {
+      "path": "patches/P22-mt-deadline-port-reuse.patch",
+      "sha256": "815ee9ccaf9106955145339f17d8547fad79e2bcf5d175d0cb10bf1136dd0def",
+      "bytes": 1994
+    },
+    {
+      "path": "patches/P23-P25-mt-warmup-asr-context.patch",
+      "sha256": "ec9de79e7428c0713d5d905bd638ef57f3fd74cec6fe3a04cc5c027c8299782b",
+      "bytes": 10993
+    },
+    {
+      "path": "patches/P3-no-spectral-fallback.patch",
+      "sha256": "7327cf0461c0779881b7a6925413796a62047dc084e76e589d3864d9ec04f5ac",
+      "bytes": 1830
+    },
+    {
+      "path": "patches/P31-boundary-wakeup.patch",
+      "sha256": "68d8d3a55e1424780c296a78212211d6256ec286557a13fc7e15228e4c5dc5ce",
+      "bytes": 1944
+    },
+    {
+      "path": "patches/P4-xvoice-cuda-local-assets.patch",
+      "sha256": "ca9d1868d126ab5c4091434c7eebafdf933afdbea0059a156ba39fdd3fdaf54d",
+      "bytes": 4191
+    },
+    {
+      "path": "patches/P5-campplus-cuda.patch",
+      "sha256": "5017cec310de5349cce498151f5278dd60531dba1ad7e6724a5f64ad0c60e7f1",
+      "bytes": 1403
+    },
+    {
+      "path": "patches/P6-loopback-headless-health.patch",
+      "sha256": "a46f06139b24178f4e0adf6ae17fd48df3848b77b025c38af44a3863d7f28cc3",
+      "bytes": 2435
+    },
+    {
+      "path": "patches/P7-lazy-training-exports.patch",
+      "sha256": "27d275f399a9ba70bc721c91fc1219729cc14e336bcbfa99a0189c9aa651fc31",
+      "bytes": 1581
+    },
+    {
+      "path": "patches/P8-fixed-kv-eager-budget.patch",
+      "sha256": "763e40cb4a2ceffb752a609bcbf8888abaf041d52f34101f6ea7ccf5f1998c6b",
+      "bytes": 1807
+    },
+    {
+      "path": "patches/P9-native-qwen-language.patch",
+      "sha256": "96accf8aec57be4feb9b0eacaf3eb35c20f5f67d54446e31e4646b65f1b956dc",
+      "bytes": 9706
+    },
+    {
+      "path": "patches/R86-compute-cache-telemetry.patch",
+      "sha256": "58b2bc9cbedd3725ce741aeaf8c9b30bf36f4356ba773c6f0beaecfd86533391",
+      "bytes": 6027
+    },
+    {
+      "path": "patches/baselines/P20-session.py.txt",
+      "sha256": "e3114e115fee095406b9d871ad699c792216b6af5b2cf3b0c989493ed17ea546",
+      "bytes": 79921
+    },
+    {
+      "path": "patches/baselines/P21-session.py.txt",
+      "sha256": "eed24af3cd9330378a6055ae164285fa7f62a5787c0adaabda2604f36458e7f8",
+      "bytes": 79923
+    },
+    {
+      "path": "patches/baselines/P31-session.py.txt",
+      "sha256": "9c1e16ac65b7be5d30ca72c0e97749324ece7fbe708651316a27d5ead585d0df",
+      "bytes": 79962
+    },
+    {
+      "path": "patches/baselines/qwen.before-P8.txt",
+      "sha256": "0dcc0003d2ab54fef07f4db0d6e6a2f9cd8dffabe65821c2da0ee2ccd16e0222",
+      "bytes": 10179
+    },
+    {
+      "path": "patches/baselines/r57-linux_supervisor.py.txt",
+      "sha256": "12d6b0ff08ddbe6f2cab34edb137b3257b116b71cc6435c09a212492c0ebcc43",
+      "bytes": 19060
+    },
+    {
+      "path": "patches/baselines/r57-translator-backend-asr_backends.py.txt",
+      "sha256": "83d8fe4c70d7e8aeede6dfea78d5b8da5fa713fc22fe5c383a22d321b0092fe4",
+      "bytes": 29802
+    },
+    {
+      "path": "patches/baselines/r57-translator-backend-services.py.txt",
+      "sha256": "53e0017b7f1862e43d23920b84c8dd1c52f5f61dc5bede76b99d9a4f286ef5e8",
+      "bytes": 32919
+    },
+    {
+      "path": "patches/baselines/r57-translator-backend-session.py.txt",
+      "sha256": "425745ab779c4e0ddfe92e67e1bbac020261a7d3fa5dc316de8936877f37ec02",
+      "bytes": 78509
+    },
+    {
+      "path": "patches/baselines/r57-translator-server-qwen3asr-qwen3asr_server.py.txt",
+      "sha256": "6d64b1bb05d65434d70c2739686ac80d590a357717c8163cf1562f91882711b5",
+      "bytes": 11005
+    },
+    {
+      "path": "patches/baselines/r57-xt_services.py.txt",
+      "sha256": "4dcb144a3e9fbf32783741ccf28a9308f58229136fa3687888f61355751997e5",
+      "bytes": 27902
+    },
+    {
+      "path": "patches/baselines/r62-gguf_header.py.txt",
+      "sha256": "bd9a0a1dd3e7833f9742eff75a2c61639aa339317fe6db07bd2acaa151555927",
+      "bytes": 5369
+    },
+    {
+      "path": "patches/baselines/r62-template-receipt-gguf_header.py.txt",
+      "sha256": "df5a66277bf82b31026f99ed33c023f2c59b4d63151aede66ebb4beaab039e68",
+      "bytes": 6427
+    },
+    {
+      "path": "patches/baselines/r63-linux_supervisor.py.txt",
+      "sha256": "ec6f8d4aa00ea9158b21637cf3999a4ca4487a265db70e5d9e01f27472cfc1c6",
+      "bytes": 21376
+    },
+    {
+      "path": "patches/baselines/r63-xt_services.py.txt",
+      "sha256": "1525627372df9a2fd42e5c3999dbada717ee17ea1c9bc648e0e5c9f7d9f65dec",
+      "bytes": 31260
+    },
+    {
+      "path": "patches/baselines/r66-linux_supervisor.py.txt",
+      "sha256": "a8839b9f894a54aa6c6ff9422d43b52816ece8f0eeb6ada6e832469652cdc096",
+      "bytes": 25566
+    },
+    {
+      "path": "patches/baselines/r66-xt_services.py.txt",
+      "sha256": "0c21ff478004fd432f45eb3f219d7b106988855fe7d6451101617da963ef53f9",
+      "bytes": 31317
+    },
+    {
+      "path": "patches/baselines/r67-xt_services.py.txt",
+      "sha256": "5c18fc5d14dc9866cee2f3cbf6352b4dfe4b8c66da2f928a955e76752b484f07",
+      "bytes": 37910
+    },
+    {
+      "path": "patches/baselines/r68-xt_services.py.txt",
+      "sha256": "1b1f198e45c096c0172d234b3ff18792bd4f924700140f0e31e8a85d8cc613ee",
+      "bytes": 38411
+    },
+    {
+      "path": "patches/baselines/r69-sitecustomize.py.txt",
+      "sha256": "a82142f1bbe40d9759d5b65dc6ab74ae1dd32cbb0dcac9683191912877129d70",
+      "bytes": 1213
+    },
+    {
+      "path": "patches/baselines/r72-linux_supervisor.py.txt",
+      "sha256": "544a16449f69bcc65e94073bd35203c7b6179ce4a5b5c0b49f439275c151fd15",
+      "bytes": 28903
+    },
+    {
+      "path": "patches/baselines/r72-runtime-constraints.txt.txt",
+      "sha256": "0ccb60fef03be0b5f64f1acf9bdcfe6bd00a7b549df7f0b8621c120cad60c2d3",
+      "bytes": 495
+    },
+    {
+      "path": "patches/baselines/r72-runtime-requirements.txt.txt",
+      "sha256": "560b7b9099bcbdaa84a6c8670d51ca523632e1921905785fb12fe43d4279ad45",
+      "bytes": 1127
+    },
+    {
+      "path": "patches/baselines/r72-xt_services.py.txt",
+      "sha256": "c873a69ddc0b40c6251bf58e397eddb21b01969dabf16194e8dd545e159893b0",
+      "bytes": 38601
+    },
+    {
+      "path": "patches/baselines/r73-xvoice-server.py.txt",
+      "sha256": "99adeb4a9a02c73b02c3a53ef3cc886047ae61ffd1481f25ae290ea02dc70325",
+      "bytes": 23790
+    },
+    {
+      "path": "patches/baselines/r75-runtime-constraints.txt.txt",
+      "sha256": "2ee7f69e195aa96fd7f303941be368b5c3093fdeb303656b8a0e1af315afe950",
+      "bytes": 756
+    },
+    {
+      "path": "patches/baselines/r75-runtime-requirements.txt.txt",
+      "sha256": "e7340f6fa5528bb788869fc2fb2324714d475035a2ef206d0a324d9aa1672c1b",
+      "bytes": 1216
+    },
+    {
+      "path": "patches/baselines/r78-backend-services.py.txt",
+      "sha256": "675e86eec2197d95cecffea9e15e66a8642b2e2794865bca652c938db83a4e83",
+      "bytes": 33726
+    },
+    {
+      "path": "patches/baselines/r78-qwen-server.py.txt",
+      "sha256": "3315abf92b398213cabada42ced30bb0fc7ddd185fc25f3b69f94e2d9ce1bc57",
+      "bytes": 12082
+    },
+    {
+      "path": "patches/baselines/r78-xt_services.py.txt",
+      "sha256": "658b22999066004b1014f14e28e9266fc447f393bf6d9e5f822c2b4c7365f9a7",
+      "bytes": 38668
+    },
+    {
+      "path": "patches/baselines/r78b-backend-services.py.txt",
+      "sha256": "90cbd73900e9fd116b0bf3d8d3385034a464a56520495a3af2c3ef05821dc783",
+      "bytes": 34531
+    },
+    {
+      "path": "patches/baselines/r78b-qwen-server.py.txt",
+      "sha256": "a86ad868db37da974656691ab595d45c922fd40afa802041a0777ddf51430a76",
+      "bytes": 13369
+    },
+    {
+      "path": "patches/baselines/r78b-xt_services.py.txt",
+      "sha256": "9871dd9869336c47b2b0f5bd63f66effc0879bb8799735b439a54a529affdf11",
+      "bytes": 38732
+    },
+    {
+      "path": "patches/baselines/r80-backend-services.py.txt",
+      "sha256": "0478d845af2bd78bf3dffb4f8296131b22687ec7afaf2a51df6300392f22ba57",
+      "bytes": 34731
+    },
+    {
+      "path": "patches/baselines/r80-linux_supervisor.py.txt",
+      "sha256": "a84280b757e40f06fb251e41121bd2f61474568927ccc341603ce992c8c2b6bc",
+      "bytes": 29143
+    },
+    {
+      "path": "patches/baselines/r80b-backend-services.py.txt",
+      "sha256": "f725085c190547bffdd7c57ae1ec9d7c6699339d1f4a1a2c2ea08652873486c9",
+      "bytes": 35361
+    },
+    {
+      "path": "patches/baselines/r80b-linux_supervisor.py.txt",
+      "sha256": "7cf5c3beeafe1197af451bc95f9c05acfa8bbef8409d4715e19a1987d6ec8b0b",
+      "bytes": 29387
+    },
+    {
+      "path": "patches/baselines/r80b-qwen-server.py.txt",
+      "sha256": "db315996304c1e0644a8e3d67812d9dd9ec2739ee5c7679b289cecdd97af8762",
+      "bytes": 15911
+    },
+    {
+      "path": "patches/baselines/r80b-xt_services.py.txt",
+      "sha256": "9646282b6e98785a7dac9e7075024ff1fbe6bfff7ceb7c5562613ef2a38b576c",
+      "bytes": 38965
+    },
+    {
+      "path": "patches/baselines/r86-linux_supervisor.py.txt",
+      "sha256": "c46657ca6f1e6bb0091d161aed0a2c9f530bc0f1a10d3c0465330467153c1cfb",
+      "bytes": 31645
+    },
+    {
+      "path": "patches/baselines/session.after-P1.txt",
+      "sha256": "c53218d80791e2ec45070c3fa74d3717c11f3995ee276e13438bb40ebb32628c",
+      "bytes": 68603
+    },
+    {
+      "path": "patches/baselines/session.upstream.txt",
+      "sha256": "34ef4d667e0c327302f4b92e96c5148e3452921c936e091b649a78c1e9a432cb",
+      "bytes": 68128
+    },
+    {
+      "path": "patches/baselines/speaker.after-P3.txt",
+      "sha256": "b664ce54c3b01988c28f8618af5f33283bcef378c1604718b213ab26e29ba27d",
+      "bytes": 34631
+    },
+    {
+      "path": "patches/baselines/speaker.upstream.txt",
+      "sha256": "aac1fa3eb485fb7019b9d3e0e605b529b72d513ac6c4111d8d70d624916472db",
+      "bytes": 34949
+    },
+    {
+      "path": "patches/baselines/src_rate_pred_model___init__.py.upstream.txt",
+      "sha256": "7f776a93fa6f691bd867fba4d20e2ec0caf876933cb72053e5ddeee0662ffc27",
+      "bytes": 113
+    },
+    {
+      "path": "patches/baselines/src_x_voice_model___init__.py.upstream.txt",
+      "sha256": "895ff4d4c3cb9f8d3c57f17cc32604aa2076b1b063e12a5002d77f62d3ede418",
+      "bytes": 389
+    },
+    {
+      "path": "runtime-constraints.txt",
+      "sha256": "fd265deba42df18fc0701f4887b8d43ec9ad86f082696535abb98601739cdb7e",
+      "bytes": 853
+    },
+    {
+      "path": "runtime-requirements.txt",
+      "sha256": "bc7f8bc3e8dde7d1a9a3878f2a4f185ee6047ca032784d38ea401e006cd7c842",
+      "bytes": 1300
+    },
+    {
+      "path": "translator/README.md",
+      "sha256": "f5ec845d7445536cae7838a85d8c8b92194035e983cc2d91fbfc1f3ea17def6d",
+      "bytes": 3941
+    },
+    {
+      "path": "translator/backend/__init__.py",
+      "sha256": "28945c14508ba7b469f839da67208999e9a89cfa4e9185d1b40e004d2f8a81c7",
+      "bytes": 27
+    },
+    {
+      "path": "translator/backend/app.py",
+      "sha256": "a57dbd167e3e4dbd8cf1559c195b7cfb776ba05e608180987c3898ad42be432c",
+      "bytes": 5966
+    },
+    {
+      "path": "translator/backend/asr_backends.py",
+      "sha256": "9ed0227ab0dfe863cc7276c9d06ae5302fcff3a958c6404d5e8006cffa4b6d11",
+      "bytes": 31211
+    },
+    {
+      "path": "translator/backend/config.py",
+      "sha256": "b4f23ef62a1f24e9aea8bf0be70b87d8a4f793bded16cad933f891dcce2dc61f",
+      "bytes": 12521
+    },
+    {
+      "path": "translator/backend/logging_utils.py",
+      "sha256": "98b47fdfc163c02067b5ecbfecd9edf1c221ab9f1e194430f6be4445469e28eb",
+      "bytes": 1204
+    },
+    {
+      "path": "translator/backend/services.py",
+      "sha256": "42d21bccddf0c0825be58a9db67f638c582c86312c93bf592006bb7cde1aadb2",
+      "bytes": 37525
+    },
+    {
+      "path": "translator/backend/session.py",
+      "sha256": "0543ed7b285c1875bb964e851ebb2103294e5dce432cce1c5b093b7abc6be632",
+      "bytes": 81676
+    },
+    {
+      "path": "translator/backend/speaker_prompt.py",
+      "sha256": "62736ca35ce4026cbd320592d554a9eda1d77f757abf3384a61a6329636214b3",
+      "bytes": 35345
+    },
+    {
+      "path": "translator/backend/visit_counter.py",
+      "sha256": "8fcf7f0b90d9f62a75fee46003f540710dd411f72de07b40d12ffab972efaed0",
+      "bytes": 1394
+    },
+    {
+      "path": "translator/backend/zipformer_postprocess.py",
+      "sha256": "63e359e11023f0ce89d55723e3b74aac9a8bd5a84286bfcd67d59fc403e1d009",
+      "bytes": 3032
+    },
+    {
+      "path": "translator/config.json",
+      "sha256": "d912ba191b52dfda6972abd469e026698d7bb93bd8cd67faf1128e2fdedd6561",
+      "bytes": 2039
+    },
+    {
+      "path": "translator/main.py",
+      "sha256": "fb3624689bb3988cacf37d091e698834707985dd6bb4d810673d09d303fe925d",
+      "bytes": 610
+    },
+    {
+      "path": "translator/pyproject.toml",
+      "sha256": "21511b69b616d71eb53e455cdee0513c778fb771b032dcacfd9a5c7897dc2595",
+      "bytes": 569
+    },
+    {
+      "path": "translator/server/LMT/start_lmt_vllm.sh",
+      "sha256": "0dda77629fd7204ed32aab4c519b208f9b95cf28f630a93b373f808ebfb62d93",
+      "bytes": 935
+    },
+    {
+      "path": "translator/server/qwen3asr/qwen3asr_server.py",
+      "sha256": "d9b2e72917f9e9dfa8cbd1d35155c538e21e3e6803f8212f53a884e1f57b9b15",
+      "bytes": 17778
+    },
+    {
+      "path": "translator/server/qwen3asr/start.sh",
+      "sha256": "62dfd2482691d9e4b6b22ff47de45aa9b7ee1394565f7fda5e447ef50ddb427d",
+      "bytes": 222
+    },
+    {
+      "path": "translator/server/xvoice/server.py",
+      "sha256": "0a6e1ee3bcfcb6ef2c547c22b4324fe48345d32d399f658905f344ccf2987003",
+      "bytes": 25295
+    },
+    {
+      "path": "translator/server/xvoice/start_x_voice.sh",
+      "sha256": "5e7a0633fa274776416370291f6b3cc5061a4411547f785d19840acd156b6503",
+      "bytes": 664
+    },
+    {
+      "path": "xvoice/README.md",
+      "sha256": "9f4d2877aa8d5827b5b86c602740abfe849dc1d9a5ddaca3755f829f1a67e3e1",
+      "bytes": 8446
+    },
+    {
+      "path": "xvoice/pyproject.toml",
+      "sha256": "1478203dfa92dbc76832edaf8b53a363d13407dd735ae662f759925f41a1d25f",
+      "bytes": 2611
+    },
+    {
+      "path": "xvoice/src/rate_pred/README.md",
+      "sha256": "919c28d67a02e12232a7f253ccafc1ca54c3436a0b9795a374373106f9366cef",
+      "bytes": 3229
+    },
+    {
+      "path": "xvoice/src/rate_pred/configs/SpeedPredict_Multilingual.yaml",
+      "sha256": "16e3b782bbee8ba54f6d72e8e9c1e3347d982b3c030d03476f179dc10a2f0877",
+      "bytes": 1620
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/__init__.py",
+      "sha256": "ec8eecc1ca13335a7026a084ef26bf1c440d7ff94b6a6133b0a96f40b69e5fb4",
+      "bytes": 227
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/dataset.py",
+      "sha256": "9a53a233987bbac9de549bcc0cdc5bd0bc69cb0d66c4020df58bb2ce26cc6f42",
+      "bytes": 12434
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/jp_syllable.py",
+      "sha256": "beecdc1f55375d7d68cb1bebdeb56b5dcfc57d64060faaee1d4aac8ebef65092",
+      "bytes": 13060
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/modules.py",
+      "sha256": "394f3c6817ced408fb9d03acc7b91eefa7f0e6b094bda68e33be52e0bdea3d3a",
+      "bytes": 19463
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/speed_predictor.py",
+      "sha256": "c72cca3a84124411f1e579b86ec1ead6d3c93754333e14163a9c5a5f19dc49d4",
+      "bytes": 7906
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/trainer.py",
+      "sha256": "27b52852b93d81302c579b42909e2595307d18a495442b87d5a4d10d93ac32dc",
+      "bytes": 24861
+    },
+    {
+      "path": "xvoice/src/rate_pred/model/utils.py",
+      "sha256": "9ff9318f27353c528bb19dc85b9c4def731374bc56c9aff3afabb94e49aaa25a",
+      "bytes": 4501
+    },
+    {
+      "path": "xvoice/src/rate_pred/train/README.md",
+      "sha256": "08a546b272d9039a7505279c55e7cc291ec22187a88d4d86e42065fde0ef6c9a",
+      "bytes": 2789
+    },
+    {
+      "path": "xvoice/src/rate_pred/train/datasets/prepare_multilingual_speed.py",
+      "sha256": "b705cc18e6c78ade706c5f68285dbeca113a8ce8079e955b37321b50fd0f1b65",
+      "bytes": 7893
+    },
+    {
+      "path": "xvoice/src/rate_pred/train/train.py",
+      "sha256": "5bfd604da1a18eb224ea03ecbbc3673f169b9bedeb5c8c647781fd17a8b07e67",
+      "bytes": 2417
+    },
+    {
+      "path": "xvoice/src/x_voice/configs/XVoice_Base_Infer.yaml",
+      "sha256": "a17819ac64cc78d4f5bf511e8ea4e353eec91265849c106a27e8244b8f8bb220",
+      "bytes": 616
+    },
+    {
+      "path": "xvoice/src/x_voice/configs/XVoice_Base_Stage1.yaml",
+      "sha256": "b8d3c6be982b8f635dfd3fa367761a0d4f58f1562f3b174642cae9aa1b161007",
+      "bytes": 2603
+    },
+    {
+      "path": "xvoice/src/x_voice/configs/XVoice_Base_Stage2.yaml",
+      "sha256": "f4669df28add6529b87ebe64fc51407dd8f8d91ba92684695defe959c46d5af2",
+      "bytes": 2711
+    },
+    {
+      "path": "xvoice/src/x_voice/eval/text_normalizer.py",
+      "sha256": "036ae1eadadc72620123f347542679805fbc36ca1ca3b8ef99964bd0314b1e74",
+      "bytes": 3881
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/README.md",
+      "sha256": "a151d38e3106d3c229f47e615fe7c44c6cf081417c4e1c89ab2b3e71b22141ed",
+      "bytes": 8282
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/infer_cli_stage1.py",
+      "sha256": "14252c6baa64782488215a9dd772c8e1fc48b7bdf9e9ba51c25948cb065a5ae8",
+      "bytes": 19872
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/infer_cli_stage2.py",
+      "sha256": "4d978fb78a82eaca662356c93158338c6681eb010df80086baa8b1547cdb311a",
+      "bytes": 18323
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/infer_gradio.py",
+      "sha256": "096ac359e75591fbea685adfeb7f552fb6438e07ac1da51c3e1132d34de13821",
+      "bytes": 37084
+    },
+    {
+      "path": "xvoice/src/x_voice/infer/utils_infer.py",
+      "sha256": "b3c1f3021c92edd2f67a6d0807f3f15b48e85daf924e7a271a0e8c54256ac481",
+      "bytes": 57469
+    },
+    {
+      "path": "xvoice/src/x_voice/model/__init__.py",
+      "sha256": "47e8eae4cd305e698e41d638e4e21a8ac7ccaf00b3f775418ff73e7927f83cc0",
+      "bytes": 726
+    },
+    {
+      "path": "xvoice/src/x_voice/model/backbones/README.md",
+      "sha256": "b0f2aed6adaa3fdc6338cdfdd0abab852859c4b7a018ef7e823497f76d758a44",
+      "bytes": 708
+    },
+    {
+      "path": "xvoice/src/x_voice/model/backbones/dit.py",
+      "sha256": "593f4a0766a2140a8a7bcf9ec46514e9cc9a973fe464211088011fc1f83d13d6",
+      "bytes": 24125
+    },
+    {
+      "path": "xvoice/src/x_voice/model/backbones/mmdit.py",
+      "sha256": "9f184965004b9c75820a104de5f3d1642c7acda2dae7dc59d6c24bdb2a72cef5",
+      "bytes": 6940
+    },
+    {
+      "path": "xvoice/src/x_voice/model/backbones/unett.py",
+      "sha256": "8197646aef478938033145b915128e8619c9c7ff0e72f0dbaaa302bc3cca2f85",
+      "bytes": 9391
+    },
+    {
+      "path": "xvoice/src/x_voice/model/cfm.py",
+      "sha256": "7eb1d41d56cb7d8ddc5357ff37cb5fd45d2f6359699e9724f99e3478e7727462",
+      "bytes": 15233
+    },
+    {
+      "path": "xvoice/src/x_voice/model/cfm_sft.py",
+      "sha256": "e00a8a401655b07ebc38ba81b17d9a2e4bfcad36dd74a25e3f9f772b6b0f67d6",
+      "bytes": 17995
+    },
+    {
+      "path": "xvoice/src/x_voice/model/dataset.py",
+      "sha256": "1c00eb2a519a56afa21148d299ca24004d23ce56f08abe190db6d02a73995d52",
+      "bytes": 25185
+    },
+    {
+      "path": "xvoice/src/x_voice/model/inferencer_gp.py",
+      "sha256": "d0d6ac4c9b1e5fcd08d868df4c7dbf7121254285c10488cd06d0e68b47a76272",
+      "bytes": 10212
+    },
+    {
+      "path": "xvoice/src/x_voice/model/modules.py",
+      "sha256": "5399573a3f539c2a69ce48951ba73882e668e8ecb544308c05914925f95f79eb",
+      "bytes": 32091
+    },
+    {
+      "path": "xvoice/src/x_voice/model/trainer.py",
+      "sha256": "a67b0b079fc5ead180b1394ffd676f740e4fea3bdbee77823e6bb4993bc10b70",
+      "bytes": 24284
+    },
+    {
+      "path": "xvoice/src/x_voice/model/trainer_sft.py",
+      "sha256": "7650a1a4f74498252a23db004950e28eb7087cbc7ea496381531d22fa1952ab9",
+      "bytes": 22665
+    },
+    {
+      "path": "xvoice/src/x_voice/model/utils.py",
+      "sha256": "6c75fe1ec6df902f9199360f8bebd8d0037014240609de82157fe13c850f14e6",
+      "bytes": 18702
+    },
+    {
+      "path": "xvoice/src/x_voice/train/README.md",
+      "sha256": "49100064f8d21daf27d1348aa708cf0bc5202ba5f80fbaed7ef57789e3b4cf1d",
+      "bytes": 6043
+    },
+    {
+      "path": "xvoice/src/x_voice/train/datasets/ipa_v3_tokenizer.py",
+      "sha256": "6109b0bdc557c97d269276628d98880ba169c2ff25b344a8dec586254b7674d1",
+      "bytes": 8771
+    },
+    {
+      "path": "xvoice/src/x_voice/train/datasets/ipa_v6_tokenizer.py",
+      "sha256": "8adad1139db0f2dc79286c034dfe517e53767cdc009bf665b800219f70d9ccb7",
+      "bytes": 12294
+    },
+    {
+      "path": "xvoice/src/x_voice/train/inference_gp.py",
+      "sha256": "bc2af7f09127c90d794b354217d99ef70fa4cc8f28ca5860d8e850cd2311e408",
+      "bytes": 3745
+    },
+    {
+      "path": "xvoice/src/x_voice/train/train.py",
+      "sha256": "04534a137dc7ab4cdbef5b6277ca333cc40c883dad05f545fbdd7c4cfbe81776",
+      "bytes": 3531
+    },
+    {
+      "path": "xvoice/src/x_voice/train/train_sft.py",
+      "sha256": "e55d20bc903df77e91948972ae84632ae5f044f5d08c929c2ff0b5ed7a74acc8",
+      "bytes": 3752
+    }
+  ],
+  "xt_services_sha256": "63921db6280afd222d8b0b13ed2ed58a8f2dc0fc0854b677fd1fe76c873f1e35",
+  "limitations": "Source complete but not executed; no runtime, quality or GPU-fit claim. Root owns provisioning and future explicitly authorized tests."
+}

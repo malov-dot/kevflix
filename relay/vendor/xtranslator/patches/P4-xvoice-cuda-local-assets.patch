@@ -1,0 +1,95 @@
+diff --git a/xvoice/src/x_voice/infer/utils_infer.py b/xvoice/src/x_voice/infer/utils_infer.py
+index 7886ab2..eb09329 100644
+--- a/xvoice/src/x_voice/infer/utils_infer.py
++++ b/xvoice/src/x_voice/infer/utils_infer.py
+@@ -31,7 +31,11 @@ from omegaconf import OmegaConf
+ from pydub import AudioSegment, silence
+ from transformers import pipeline
+ from vocos import Vocos
+-from fastlid import fastlid
++# Fixed-language stage2 does not need fastText/LID assets or an import-time fetch.
++if os.environ.get("XVOICE_AUTO_DETECT_LANG", "1").lower() not in {"0", "false", "no", "off"}:
++    from fastlid import fastlid
++else:
++    fastlid = None
+ 
+ 
+ @contextlib.contextmanager
+@@ -66,15 +70,9 @@ from x_voice.train.datasets.ipa_v6_tokenizer import PhonemizeTextTokenizer as Ph
+ _ref_audio_cache = {}
+ _ref_text_cache = {}
+ 
+-device = (
+-    "cuda"
+-    if torch.cuda.is_available()
+-    else "xpu"
+-    if torch.xpu.is_available()
+-    else "mps"
+-    if torch.backends.mps.is_available()
+-    else "cpu"
+-)
++if not torch.cuda.is_available():
++    raise RuntimeError("X-Voice requires CUDA; CPU/XPU/MPS fallback is forbidden")
++device = "cuda"
+ 
+ tempfile_kwargs = {"delete_on_close": False} if sys.version_info >= (3, 12) else {"delete": False}
+ 
+diff --git a/translator/server/xvoice/server.py b/translator/server/xvoice/server.py
+index cbbd6db..79229a0 100644
+--- a/translator/server/xvoice/server.py
++++ b/translator/server/xvoice/server.py
+@@ -224,6 +224,9 @@ class XVoiceRuntime:
+         )
+ 
+         cfg = self.config
++        import torch
++        if cfg.device != "cuda" or not torch.cuda.is_available():
++            raise RuntimeError("X-Voice server requires explicit --device cuda and an available CUDA device")
+         model_cfg = OmegaConf.load(cfg.model_cfg)
+         self.model_cfg = model_cfg
+         model_cls = get_class(f"x_voice.model.{model_cfg.model.backbone}")
+@@ -239,11 +242,13 @@ class XVoiceRuntime:
+ 
+         vocoder_name = cfg.vocoder_name or model_cfg.model.mel_spec.mel_spec_type
+         vocoder_cfg = model_cfg.model.get("vocoder", {})
+-        vocoder_local_path = _resolve_repo_path(vocoder_cfg.get("local_path", "my_vocoder/vocos-mel-24khz"))
++        vocoder_local_path = os.environ.get("XVOICE_VOCOS_DIR", "")
++        if not vocoder_local_path or not Path(vocoder_local_path).is_dir():
++            raise RuntimeError("XVOICE_VOCOS_DIR must name the provisioned local Vocos directory")
+         self.vocoder_name = vocoder_name
+         self.vocoder = load_vocoder(
+             vocoder_name=vocoder_name,
+-            is_local=cfg.load_vocoder_from_local or bool(vocoder_cfg.get("is_local", False)),
++            is_local=True,
+             local_path=vocoder_local_path,
+             device=cfg.device,
+         )
+@@ -289,6 +294,12 @@ class XVoiceRuntime:
+             self.srp_model = None
+ 
+         self.lang_to_id_map = getattr(self.model.transformer, "lang_to_id", {})
++        for name, module in (("X-Voice", self.model), ("Vocos", self.vocoder), ("SpeedPredictor", self.srp_model)):
++            if module is None:
++                continue
++            parameters = list(module.parameters())
++            if not parameters or any(parameter.device.type != "cuda" for parameter in parameters):
++                raise RuntimeError(name + " actual parameters are not on CUDA")
+         logger.info(
+             "X-Voice loaded stage=%s model=%s ckpt=%s device=%s sample_rate=%s",
+             cfg.stage,
+@@ -570,7 +581,7 @@ if __name__ == "__main__":
+     import uvicorn
+ 
+     parser = argparse.ArgumentParser(description="X-Voice TTS HTTP server")
+-    parser.add_argument("--host", type=str, default="0.0.0.0")
++    parser.add_argument("--host", type=str, default="127.0.0.1")
+     parser.add_argument("--port", type=int, default=11998)
+     parser.add_argument("--stage", type=int, default=None)
+     parser.add_argument("--model", type=str, default=None)
+@@ -593,4 +604,6 @@ if __name__ == "__main__":
+     if args.device is not None:
+         os.environ["XVOICE_DEVICE"] = args.device
+ 
++    if args.host != "127.0.0.1":
++        raise RuntimeError("X-Voice may bind only to loopback")
+     uvicorn.run(app, host=args.host, port=args.port)

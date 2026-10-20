@@ -1,0 +1,34 @@
+diff --git a/translator/backend/session.py b/translator/backend/session.py
+index 52de12a..bf8f5e3 100644
+--- a/translator/backend/session.py
++++ b/translator/backend/session.py
+@@ -311,6 +311,8 @@ class TranslationSession:
+                 message = await self.websocket.receive()
+                 message_type = message.get("type")
+                 if message_type == "websocket.disconnect":
++                    logger.info("websocket disconnected id=%s code=%s reason=%r", self.state.session_id,
++                                message.get("code"), str(message.get("reason") or "")[:256])
+                     break
+                 if message_type != "websocket.receive":
+                     continue
+@@ -318,8 +320,9 @@ class TranslationSession:
+                     await self._handle_text(message["text"])
+                 elif message.get("bytes") is not None:
+                     await self._handle_audio(message["bytes"])
+-        except WebSocketDisconnect:
+-            logger.info("websocket disconnected: %s", self.state.session_id)
++        except WebSocketDisconnect as exc:
++            logger.info("websocket disconnected id=%s code=%s reason=%r", self.state.session_id,
++                        getattr(exc, "code", None), str(getattr(exc, "reason", "") or "")[:256])
+         except RuntimeError as exc:
+             if "disconnect message has been received" in str(exc):
+                 logger.info("websocket disconnected: %s", self.state.session_id)
+@@ -676,7 +679,7 @@ class TranslationSession:
+                         self._asr_boundary_flush_bytes - take_bytes,
+                     )
+                 remaining_bytes = len(self._asr_pending_audio)
+-                if remaining_bytes:
++                if remaining_bytes or self._asr_flush_requested or self._asr_boundary_flush_requested:
+                     self._asr_audio_event.set()
+                 else:
+                     self._asr_audio_event.clear()

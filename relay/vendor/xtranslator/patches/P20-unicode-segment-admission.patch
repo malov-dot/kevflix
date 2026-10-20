@@ -1,0 +1,13 @@
+diff --git a/translator/backend/session.py b/translator/backend/session.py
+index 7643388..769ea19 100644
+--- a/translator/backend/session.py
++++ b/translator/backend/session.py
+@@ -1725,7 +1725,7 @@ def translation_segment_pairs_for_text(text: str) -> list[tuple[str, str]]:
+     pairs: list[tuple[str, str]] = []
+     for source_segment in split_translation_segments(text):
+         cleaned = strip_filler_edges(source_segment)
+-        if cleaned and _content_token_count(cleaned) > 0:
++        if cleaned and any(ch.isalnum() for ch in cleaned):
+             pairs.append((cleaned, source_segment.strip()))
+     return pairs
+ 

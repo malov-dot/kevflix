@@ -1,0 +1,38 @@
+diff --git a/translator/backend/services.py b/translator/backend/services.py
+index 8f91b01..c9fe4ea 100644
+--- a/translator/backend/services.py
++++ b/translator/backend/services.py
+@@ -538,8 +538,17 @@ class OpenAIChatTranslateService:
+             "max_tokens": self.max_tokens,
+         }
+         start_time = time.perf_counter()
+-        response = self.session.post(self.api_url, json=payload, timeout=30)
+-        response.raise_for_status()
++        response = None
++        try:
++            response = self.session.post(self.api_url, json=payload, timeout=(5, 105))
++            if not response.ok:
++                raise requests.HTTPError('MT HTTP %s: %s' %
++                                         (response.status_code, response.text[:4096]), response=response)
++        except requests.RequestException as error:
++            logger.exception('MT request failed class=%s stage=http_translate provider=%s model=%s elapsed_seconds=%.3f status=%s message=%r',
++                             type(error).__name__, self.provider, self.model, time.perf_counter() - start_time,
++                             response.status_code if response is not None else None, str(error))
++            raise
+         data = response.json()
+         text_out = (
+             data.get("choices", [{}])[0]
+diff --git a/linux_supervisor.py b/linux_supervisor.py
+index ad1a2a0..edd9622 100644
+--- a/linux_supervisor.py
++++ b/linux_supervisor.py
+@@ -502,6 +502,9 @@ def main():
+             port = urllib.parse.urlparse(spec['health_url']).port
+             reserved = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+             try:
++                # Permit previous connections' TIME_WAIT, never SO_REUSEPORT or
++                # adoption of an active listener. Health still checks PID ownership.
++                reserved.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                 reserved.bind(('127.0.0.1', port))
+             except BaseException:
+                 reserved.close()

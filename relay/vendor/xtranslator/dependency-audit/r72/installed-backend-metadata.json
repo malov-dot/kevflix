@@ -1,0 +1,1052 @@
+[
+  {
+    "directory": "addict-2.4.0.dist-info",
+    "name": "Name: addict",
+    "version": "Version: 2.4.0",
+    "metadata_sha256": "66320967996f85fa211f1216a7bf5f921d13b41b0de5db97f389daddbc54eaf4"
+  },
+  {
+    "directory": "aiohappyeyeballs-2.7.1.dist-info",
+    "name": "Name: aiohappyeyeballs",
+    "version": "Version: 2.7.1",
+    "metadata_sha256": "e68d1bf48aec9dcc2767343dedec25e12860085cba180e10bc3d3bdd031602ba"
+  },
+  {
+    "directory": "aiohttp-3.14.5.dist-info",
+    "name": "Name: aiohttp",
+    "version": "Version: 3.14.5",
+    "metadata_sha256": "50b29a2268649f7ce5b22c0a41b60896d246fee58e2a74b468f66848e469834c"
+  },
+  {
+    "directory": "aiosignal-1.4.0.dist-info",
+    "name": "Name: aiosignal",
+    "version": "Version: 1.4.0",
+    "metadata_sha256": "09247ef1da8bc696728d47130e702e4307f6f7d101d6c485bff9f3a71ce7008d"
+  },
+  {
+    "directory": "aliyun_python_sdk_core-2.16.1.dist-info",
+    "name": "Name: aliyun-python-sdk-core",
+    "version": "Version: 2.16.1",
+    "metadata_sha256": "d9a43486d838ec9fec593ef1199bfbc017140538bcc94b8c877f425d802ccbef"
+  },
+  {
+    "directory": "aliyun_python_sdk_kms-2.16.5.dist-info",
+    "name": "Name: aliyun-python-sdk-kms",
+    "version": "Version: 2.16.5",
+    "metadata_sha256": "0b508689a5997fd692ca7e75d516691a1ee18e9bcf5dc07c8c695a53bfdcd78c"
+  },
+  {
+    "directory": "annotated_doc-0.0.5.dist-info",
+    "name": "Name: annotated-doc",
+    "version": "Version: 0.0.5",
+    "metadata_sha256": "8c24d70c5d9153d22123353a906042fd7603df2d15c2196290b0f8a962558c46"
+  },
+  {
+    "directory": "annotated_types-0.8.0.dist-info",
+    "name": "Name: annotated-types",
+    "version": "Version: 0.8.0",
+    "metadata_sha256": "614985b278f601b8ef863f82783b991cc3ada4b89f592eb71c7c48c5f2ef2298"
+  },
+  {
+    "directory": "antlr4_python3_runtime-4.9.3.dist-info",
+    "name": "Name: antlr4-python3-runtime",
+    "version": "Version: 4.9.3",
+    "metadata_sha256": "bf325e5155318385a2fcc4680742da710bbadf13a3d1c0979a98b3487980f261"
+  },
+  {
+    "directory": "anyio-4.15.1.dist-info",
+    "name": "Name: anyio",
+    "version": "Version: 4.15.1",
+    "metadata_sha256": "043aecb571af7189e8a6c528f5d8e32545f1b2cdfaaf761d51e6d5b67ea3ca81"
+  },
+  {
+    "directory": "attrs-26.1.0.dist-info",
+    "name": "Name: attrs",
+    "version": "Version: 26.1.0",
+    "metadata_sha256": "4cd40e690f23bf37cbcad34efd6758e062df1df07c86833f7e3ce95bf1fa38cc"
+  },
+  {
+    "directory": "audioread-3.1.0.dist-info",
+    "name": "Name: audioread",
+    "version": "Version: 3.1.0",
+    "metadata_sha256": "fb8bd8b902ba9ba56d0f9b11caf031819b12fd5d1c59815e3776598d291f6846"
+  },
+  {
+    "directory": "boto3-1.43.114.dist-info",
+    "name": "Name: boto3",
+    "version": "Version: 1.43.114",
+    "metadata_sha256": "7a2ff77732088da662168c3ddfd6b14548b03ef288f55bee44d45523421788c0"
+  },
+  {
+    "directory": "botocore-1.43.114.dist-info",
+    "name": "Name: botocore",
+    "version": "Version: 1.43.114",
+    "metadata_sha256": "bb7b4ee0f3af12791deadeaa2b6e0404d681d3b9e37dd2ec72ae28aa58552854"
+  },
+  {
+    "directory": "cached_path-1.8.10.dist-info",
+    "name": "Name: cached_path",
+    "version": "Version: 1.8.10",
+    "metadata_sha256": "3ed224c7a3034ceb3767e16a09d91e398fb61bf98cf71106859b299e717d20ba"
+  },
+  {
+    "directory": "cdifflib-1.2.9.dist-info",
+    "name": "Name: cdifflib",
+    "version": "Version: 1.2.9",
+    "metadata_sha256": "416911d2a747ee892fa1f4fc859e4c6c472776b649cb6cc68ae535ace403d849"
+  },
+  {
+    "directory": "certifi-2026.10.18.dist-info",
+    "name": "Name: certifi",
+    "version": "Version: 2026.10.18",
+    "metadata_sha256": "5f23b0cfb71be0a44970eb5d3ad49ba3db52616d7a583d594697bd9ee1bf2065"
+  },
+  {
+    "directory": "cffi-2.1.1.dist-info",
+    "name": "Name: cffi",
+    "version": "Version: 2.1.1",
+    "metadata_sha256": "558bafb9093a8e790175d9ecff9688382981d744877dad86fd6770db0f4dc918"
+  },
+  {
+    "directory": "charset_normalizer-3.5.2.dist-info",
+    "name": "Name: charset-normalizer",
+    "version": "Version: 3.5.2",
+    "metadata_sha256": "89ce6362bb7be88558f4be99a98f5d1b4da93d19cd0323e5ee0bac05cf883dfb"
+  },
+  {
+    "directory": "click-8.5.0.dist-info",
+    "name": "Name: click",
+    "version": "Version: 8.5.0",
+    "metadata_sha256": "e87bce0bd194de70dfb8e708e0a6b0483009f25611804eaf87bfeb63e6c20501"
+  },
+  {
+    "directory": "cloudpickle-3.1.2.dist-info",
+    "name": "Name: cloudpickle",
+    "version": "Version: 3.1.2",
+    "metadata_sha256": "3d0263bfe9ee4f23b244bdcaff73acbe7a1957ebf82743b6ae42693adc48d721"
+  },
+  {
+    "directory": "contourpy-1.3.3.dist-info",
+    "name": "Name: contourpy",
+    "version": "Version: 1.3.3",
+    "metadata_sha256": "c43cef86baef09cff9c77975e578fa8cca0c9454df40dc176938b499a63de54a"
+  },
+  {
+    "directory": "crcmod-1.7.dist-info",
+    "name": "Name: crcmod",
+    "version": "Version: 1.7",
+    "metadata_sha256": "fe2cef74fb48816e06946adb2cd42c82e54d7643e946e6b1764edd5aaffbe750"
+  },
+  {
+    "directory": "cryptography-50.0.2.dist-info",
+    "name": "Name: cryptography",
+    "version": "Version: 50.0.2",
+    "metadata_sha256": "047cfc71226409de4318b360aef15c63a2adf609731e3dcf7fe932f14ea042ee"
+  },
+  {
+    "directory": "cycler-0.12.1.dist-info",
+    "name": "Name: cycler",
+    "version": "Version: 0.12.1",
+    "metadata_sha256": "23289e19b76f1e01394227696e6af2b6cd1ce79e89731209bf9195148b18ed36"
+  },
+  {
+    "directory": "datasets-3.0.1.dist-info",
+    "name": "Name: datasets",
+    "version": "Version: 3.0.1",
+    "metadata_sha256": "886c20b37acb45748523a816846b0e9fd6478113439c58fcb0479c1d710b2922"
+  },
+  {
+    "directory": "decorator-5.3.1.dist-info",
+    "name": "Name: decorator",
+    "version": "Version: 5.3.1",
+    "metadata_sha256": "2133792485403bbd739e1db5960228bedbcde6d00c0acc052b27f39dbae5b5c4"
+  },
+  {
+    "directory": "defusedxml-0.7.1.dist-info",
+    "name": "Name: defusedxml",
+    "version": "Version: 0.7.1",
+    "metadata_sha256": "369d3cef64870daf849fba711cb8d05a7efe3c8d9ab0f763adc34079fe378bb1"
+  },
+  {
+    "directory": "deprecated-3.0.0.dist-info",
+    "name": "Name: Deprecated",
+    "version": "Version: 3.0.0",
+    "metadata_sha256": "e0f1fb18cd5bd39761fc1de8233112757c443c152fe9898b5b8ca1341a28faf5"
+  },
+  {
+    "directory": "dill-0.3.8.dist-info",
+    "name": "Name: dill",
+    "version": "Version: 0.3.8",
+    "metadata_sha256": "531912b36714f09cab26c579912d1047d72b274ee1ad4252d91888310682e2cb"
+  },
+  {
+    "directory": "dlinfo-2.0.0.dist-info",
+    "name": "Name: dlinfo",
+    "version": "Version: 2.0.0",
+    "metadata_sha256": "380c36fadd6b34f01daa6a4ab51379cd2563b47f9ffbf40f7c700bb0a68df138"
+  },
+  {
+    "directory": "docopt-0.6.2.dist-info",
+    "name": "Name: docopt",
+    "version": "Version: 0.6.2",
+    "metadata_sha256": "d4c3ef35e6f87c733814ee02bcd50e34c431f4044195d4f997a79201f49c5176"
+  },
+  {
+    "directory": "editdistance-0.8.1.dist-info",
+    "name": "Name: editdistance",
+    "version": "Version: 0.8.1",
+    "metadata_sha256": "72df25f676b0904c8d76c7792d287e3a14d4f3d33c8f47d3603988c963ac42d1"
+  },
+  {
+    "directory": "einops-0.8.2.dist-info",
+    "name": "Name: einops",
+    "version": "Version: 0.8.2",
+    "metadata_sha256": "0bd65db043688a44f4a29608c1cba521c932f7ff76f238bbd869441e15012653"
+  },
+  {
+    "directory": "encodec-0.1.1.dist-info",
+    "name": "Name: encodec",
+    "version": "Version: 0.1.1",
+    "metadata_sha256": "13ba41c4753c130e2f48d986ee99b93131cbf951200e537b22b1898feaf12d00"
+  },
+  {
+    "directory": "fastapi-0.146.0.dist-info",
+    "name": "Name: fastapi",
+    "version": "Version: 0.146.0",
+    "metadata_sha256": "876193ba84001ad715c973ed3ab6add7e11d4f9b715a2d7c2d253872c255ff1d"
+  },
+  {
+    "directory": "filelock-3.32.3.dist-info",
+    "name": "Name: filelock",
+    "version": "Version: 3.32.3",
+    "metadata_sha256": "2d80f43bd905689145c00b3133bc95895d654ced70a96a1802e9237e0d66599f"
+  },
+  {
+    "directory": "FinnSyll-2.0.0.dist-info",
+    "name": "Name: FinnSyll",
+    "version": "Version: 2.0.0",
+    "metadata_sha256": "2b4fff8307571072cf0fd33ebd87f87f5b31cee0f69e8a456d79d5ea7caf8242"
+  },
+  {
+    "directory": "fonttools-4.67.0.dist-info",
+    "name": "Name: fonttools",
+    "version": "Version: 4.67.0",
+    "metadata_sha256": "33dec14bec601b457a07a6550086cb6725b5aaedc3a881f9fa7a84d3841ddcfe"
+  },
+  {
+    "directory": "frozenlist-1.8.0.dist-info",
+    "name": "Name: frozenlist",
+    "version": "Version: 1.8.0",
+    "metadata_sha256": "946c22dc9f7e2c76f2d698f00a4306dbe49a820e2b3f1a0e22fe5286cbec35f1"
+  },
+  {
+    "directory": "fsspec-2024.6.1.dist-info",
+    "name": "Name: fsspec",
+    "version": "Version: 2024.6.1",
+    "metadata_sha256": "8a3b75e990333cdf4fd3fd40538cdc29d88cd7ca642327f51a4afe2055eb94bc"
+  },
+  {
+    "directory": "g2pK-0.9.4.dist-info",
+    "name": "Name: g2pK",
+    "version": "Version: 0.9.4",
+    "metadata_sha256": "79cd81a238e5a7f41efa7ac63bf1c38c23a63648e7454d4981e0e601be775127"
+  },
+  {
+    "directory": "google_api_core-2.42.0.dist-info",
+    "name": "Name: google-api-core",
+    "version": "Version: 2.42.0",
+    "metadata_sha256": "1d9c5641a46cb86af469ce7b5c6610c170e47cc8ace987cb4efe5441e8c27c13"
+  },
+  {
+    "directory": "google_auth-2.62.0.dist-info",
+    "name": "Name: google-auth",
+    "version": "Version: 2.62.0",
+    "metadata_sha256": "7f89925f9bab6feb1a5bd97b19902fffb9f0ad00aa24b24423b9163ae6655c2e"
+  },
+  {
+    "directory": "google_cloud_core-2.8.0.dist-info",
+    "name": "Name: google-cloud-core",
+    "version": "Version: 2.8.0",
+    "metadata_sha256": "3d663ba8202ffb11a4cc5fda7cb8caf582ba5297406792d9b06bcd126ac6a372"
+  },
+  {
+    "directory": "google_cloud_storage-3.17.1.dist-info",
+    "name": "Name: google-cloud-storage",
+    "version": "Version: 3.17.1",
+    "metadata_sha256": "9e770136b11c2f4a4b1799d0a9d5403aa2c1808491d638ecaaa54581dd2fcc05"
+  },
+  {
+    "directory": "google_crc32c-1.9.0.dist-info",
+    "name": "Name: google-crc32c",
+    "version": "Version: 1.9.0",
+    "metadata_sha256": "553d7ec13e2e6e6520d577f3f9af4ee53f5425e1432ff30b9a20a3305546b758"
+  },
+  {
+    "directory": "google_resumable_media-2.11.0.dist-info",
+    "name": "Name: google-resumable-media",
+    "version": "Version: 2.11.0",
+    "metadata_sha256": "24e6851ae9d119c5b23d46a8ccac3b4c2054a427c0dbdcd7f0aaffedd47e126e"
+  },
+  {
+    "directory": "googleapis_common_protos-1.75.5.dist-info",
+    "name": "Name: googleapis-common-protos",
+    "version": "Version: 1.75.5",
+    "metadata_sha256": "972d4190abd8f2109a51aa590721a3d499a36b49b013e213466ba04f508e3736"
+  },
+  {
+    "directory": "h11-0.16.0.dist-info",
+    "name": "Name: h11",
+    "version": "Version: 0.16.0",
+    "metadata_sha256": "28f326098ac09fcba79b8f180f96087c841fe2456215cb7b872a9c7d5cd19d64"
+  },
+  {
+    "directory": "hf_xet-1.7.0.dist-info",
+    "name": "Name: hf-xet",
+    "version": "Version: 1.7.0",
+    "metadata_sha256": "05975b1239f188bb418539f178ef68a693ea6824f20c30583a02eea94faf650a"
+  },
+  {
+    "directory": "httptools-0.9.0.dist-info",
+    "name": "Name: httptools",
+    "version": "Version: 0.9.0",
+    "metadata_sha256": "8a743396f45465204e2b44b43cb57ec4a343c423f52604bbaf1777fd438698c9"
+  },
+  {
+    "directory": "huggingface_hub-0.36.2.dist-info",
+    "name": "Name: huggingface_hub",
+    "version": "Version: 0.36.2",
+    "metadata_sha256": "4dc2b0a3fb27bcba8b091f98bccff4b94369d269c9768aeaecd0b99d970665d9"
+  },
+  {
+    "directory": "hydra_core-1.3.2.dist-info",
+    "name": "Name: hydra-core",
+    "version": "Version: 1.3.2",
+    "metadata_sha256": "399046cbf9ae7ebab8dfd009e2b4f748212c710a0e75ca501a72bbb2d456e2e7"
+  },
+  {
+    "directory": "idna-3.20.dist-info",
+    "name": "Name: idna",
+    "version": "Version: 3.20",
+    "metadata_sha256": "dbd8c14c1e4ca1e0c9824a6dbc7cbbf78884f38eb52d91148cd3025f671e4b85"
+  },
+  {
+    "directory": "inflect-7.5.0.dist-info",
+    "name": "Name: inflect",
+    "version": "Version: 7.5.0",
+    "metadata_sha256": "2fc0e84865b9bc7ede08ee9c011e2273a860e84965743019e81e5338b58be180"
+  },
+  {
+    "directory": "jaconv-0.5.0.dist-info",
+    "name": "Name: jaconv",
+    "version": "Version: 0.5.0",
+    "metadata_sha256": "244ada3017da08e08483d1543211c76e404b7dd578795844d5ef6d35f9b49993"
+  },
+  {
+    "directory": "jamo-0.4.1.dist-info",
+    "name": "Name: jamo",
+    "version": "Version: 0.4.1",
+    "metadata_sha256": "2c64d6c2036ac57840c56c8b5ed121d62441c8efdf65adc84ee8a4c036a23f1e"
+  },
+  {
+    "directory": "jieba-0.42.1.dist-info",
+    "name": "Name: jieba",
+    "version": "Version: 0.42.1",
+    "metadata_sha256": "5661d2cfc5b23f8c1b5ed4cecfa1ec866ddf563273c61e3911a362a3e6f3eea1"
+  },
+  {
+    "directory": "jinja2-3.1.6.dist-info",
+    "name": "Name: Jinja2",
+    "version": "Version: 3.1.6",
+    "metadata_sha256": "68c5548fb67c4132a13898d9b31ec50c6bea2abdd915d921f214355c3a6499c8"
+  },
+  {
+    "directory": "jmespath-1.1.0.dist-info",
+    "name": "Name: jmespath",
+    "version": "Version: 1.1.0",
+    "metadata_sha256": "81181e9a312f1b87e5be7c8376c57b0e8c962ba524a25a313d43dc2e2d3984f3"
+  },
+  {
+    "directory": "joblib-1.6.0.dist-info",
+    "name": "Name: joblib",
+    "version": "Version: 1.6.0",
+    "metadata_sha256": "c5fd6509906c5795fd6724d97bc1709d1f266b78aff92c0156d6cf5ad7c045e3"
+  },
+  {
+    "directory": "jpype1-1.7.1.dist-info",
+    "name": "Name: jpype1",
+    "version": "Version: 1.7.1",
+    "metadata_sha256": "48e8ce99fddae701e84735829069942c83f39d675dba90b4edcca8155784be63"
+  },
+  {
+    "directory": "kiwisolver-1.5.1.dist-info",
+    "name": "Name: kiwisolver",
+    "version": "Version: 1.5.1",
+    "metadata_sha256": "f07b7b6c0c9c2a624c8a31f931e16712f2cf3490e7dfd51643d68e9d42d4b2c9"
+  },
+  {
+    "directory": "konlpy-0.6.0.dist-info",
+    "name": "Name: konlpy",
+    "version": "Version: 0.6.0",
+    "metadata_sha256": "db36a2874ddd726049d075d88f1eb00e8b1c487da55ddefb7eef6b27b2fcb03d"
+  },
+  {
+    "directory": "lazy_loader-0.6.dist-info",
+    "name": "Name: lazy-loader",
+    "version": "Version: 0.6",
+    "metadata_sha256": "9cd369edae6bf499af0c1acee15d0389361036907742690ac504f9b3b84d56b3"
+  },
+  {
+    "directory": "librosa-0.10.2.post1.dist-info",
+    "name": "Name: librosa",
+    "version": "Version: 0.10.2.post1",
+    "metadata_sha256": "906b5ae46cf177768535249fde613a0d113d4423b1ed02d63bfd98051598c1f5"
+  },
+  {
+    "directory": "llvmlite-0.50.0.dist-info",
+    "name": "Name: llvmlite",
+    "version": "Version: 0.50.0",
+    "metadata_sha256": "8f1269fc707c42d99b010322f95da3fc46a9ad3c542080fa0bc6d9deab6a9c05"
+  },
+  {
+    "directory": "lxml-6.1.3.dist-info",
+    "name": "Name: lxml",
+    "version": "Version: 6.1.3",
+    "metadata_sha256": "aad89f8107bc74045b86c9b7f7c0984196102520dd7faed5e4e45693b7c315ef"
+  },
+  {
+    "directory": "markdown_it_py-4.2.0.dist-info",
+    "name": "Name: markdown-it-py",
+    "version": "Version: 4.2.0",
+    "metadata_sha256": "72c36ff516755443b1ecb61e17b2567a990230b49a504b0eb0c42d5f82448a9c"
+  },
+  {
+    "directory": "markupsafe-3.0.3.dist-info",
+    "name": "Name: MarkupSafe",
+    "version": "Version: 3.0.3",
+    "metadata_sha256": "12b4cc61a7fa288cf7667ee3f213786d9619db57fb33ff6f934afbcb5c12ec81"
+  },
+  {
+    "directory": "matplotlib-3.11.2.dist-info",
+    "name": "Name: matplotlib",
+    "version": "Version: 3.11.2",
+    "metadata_sha256": "e5f532226d1025af2dd15ff951df27391f66d46403b8244ea61e6b8eb3e4d806"
+  },
+  {
+    "directory": "mdurl-0.1.2.dist-info",
+    "name": "Name: mdurl",
+    "version": "Version: 0.1.2",
+    "metadata_sha256": "b53b29d48f499367053fda3c81e7ce27d2558380ebbf83e66023b02eb7ddd25d"
+  },
+  {
+    "directory": "modelscope-1.20.0.dist-info",
+    "name": "Name: modelscope",
+    "version": "Version: 1.20.0",
+    "metadata_sha256": "b870fbeaa1dded34941e1dd3e89fb8b3d25be4daf8538a1bf73cd469e3e6b200"
+  },
+  {
+    "directory": "more_itertools-11.2.1.dist-info",
+    "name": "Name: more-itertools",
+    "version": "Version: 11.2.1",
+    "metadata_sha256": "8c558bfab61818450e78db4018281f8f7b22115e681cd53ae1d9d4931be54f15"
+  },
+  {
+    "directory": "Morfessor-2.0.6.dist-info",
+    "name": "Name: Morfessor",
+    "version": "Version: 2.0.6",
+    "metadata_sha256": "e72b6e9d9823d170e9bf0c016b9336a6de9d7020c80446c7f504362039e86ea9"
+  },
+  {
+    "directory": "mpmath-1.3.0.dist-info",
+    "name": "Name: mpmath",
+    "version": "Version: 1.3.0",
+    "metadata_sha256": "44b66ea444b9c0d19ae94815d356bf047ae6b680c19268b5c265687cd6a81406"
+  },
+  {
+    "directory": "msgpack-1.2.3.dist-info",
+    "name": "Name: msgpack",
+    "version": "Version: 1.2.3",
+    "metadata_sha256": "f47c09192e9f4f81b8b4a63979473a13f7a63c67dcdc41be2e0f97353a9dc5b4"
+  },
+  {
+    "directory": "multidict-7.1.0.dist-info",
+    "name": "Name: multidict",
+    "version": "Version: 7.1.0",
+    "metadata_sha256": "fe2db435bc86c7e62a42cc1f5b0c0650ba4fd1b05a420413f14085f8a3730e62"
+  },
+  {
+    "directory": "multiprocess-0.70.16.dist-info",
+    "name": "Name: multiprocess",
+    "version": "Version: 0.70.16",
+    "metadata_sha256": "4afd9e1f60a38f28d561aaf24caa8791b25397195503e49b9b3882824049790d"
+  },
+  {
+    "directory": "narwhals-2.27.1.dist-info",
+    "name": "Name: narwhals",
+    "version": "Version: 2.27.1",
+    "metadata_sha256": "5962ef236f36fe34aff21a837a0698386dcb1f0de54462aa18b73698e6ef1a4f"
+  },
+  {
+    "directory": "nemo_text_processing-1.2.0.dist-info",
+    "name": "Name: nemo_text_processing",
+    "version": "Version: 1.2.0",
+    "metadata_sha256": "c0d1ce9d2442f275294c299d35300926c2835b5db3670c968081c18ae3c23c37"
+  },
+  {
+    "directory": "networkx-3.6.1.dist-info",
+    "name": "Name: networkx",
+    "version": "Version: 3.6.1",
+    "metadata_sha256": "aca5d94a97d1f70f301d033addb635f6e66be8973a00aba4127637eed2ef316a"
+  },
+  {
+    "directory": "nltk-3.10.3.dist-info",
+    "name": "Name: nltk",
+    "version": "Version: 3.10.3",
+    "metadata_sha256": "78584b6194873a677ecc029634f2178e6b962fababd4188a0049d76e6b64ba1e"
+  },
+  {
+    "directory": "num2words-0.5.14.dist-info",
+    "name": "Name: num2words",
+    "version": "Version: 0.5.14",
+    "metadata_sha256": "7b5b9217db18274db0fdb75c1e7dee83c61be4f408be4d9d796a2253d55786df"
+  },
+  {
+    "directory": "numba-0.68.0.dist-info",
+    "name": "Name: numba",
+    "version": "Version: 0.68.0",
+    "metadata_sha256": "b3bbd7c095b9d0b410d778176e2824ea5be21e982e63e8d4fc7c8fdb82f98df7"
+  },
+  {
+    "directory": "numpy-1.26.4.dist-info",
+    "name": "Name: numpy",
+    "version": "Version: 1.26.4",
+    "metadata_sha256": "b09734a7fed44e84b4c8161934ce532dff1e779ec6822d415644d117f6381070"
+  },
+  {
+    "directory": "nvidia_cublas_cu12-12.8.4.1.dist-info",
+    "name": "Name: nvidia-cublas-cu12",
+    "version": "Version: 12.8.4.1",
+    "metadata_sha256": "310556f1c2c31ec517d4b049eaf12374081d1c52c8ef4d8eceab2aaf1edff2df"
+  },
+  {
+    "directory": "nvidia_cuda_cupti_cu12-12.8.90.dist-info",
+    "name": "Name: nvidia-cuda-cupti-cu12",
+    "version": "Version: 12.8.90",
+    "metadata_sha256": "6df7fa2fcdfa046eb952f3f8c172f524b2e19a654ec037da3dbb32e93d9671d1"
+  },
+  {
+    "directory": "nvidia_cuda_nvrtc_cu12-12.8.93.dist-info",
+    "name": "Name: nvidia-cuda-nvrtc-cu12",
+    "version": "Version: 12.8.93",
+    "metadata_sha256": "376458a22054b4a36e110dfab570df4bc658c037a2fb47184bdc4dff7ab90d23"
+  },
+  {
+    "directory": "nvidia_cuda_runtime_cu12-12.8.90.dist-info",
+    "name": "Name: nvidia-cuda-runtime-cu12",
+    "version": "Version: 12.8.90",
+    "metadata_sha256": "00431338ea983d4be2f46f9fd29cec2fd9bfa39553933ca59fd37192e7d0f82f"
+  },
+  {
+    "directory": "nvidia_cudnn_cu12-9.10.2.21.dist-info",
+    "name": "Name: nvidia-cudnn-cu12",
+    "version": "Version: 9.10.2.21",
+    "metadata_sha256": "7dc7ea3541119ddea15ed9a68e9f01e4a160b164607abad22f9dec54e2937266"
+  },
+  {
+    "directory": "nvidia_cufft_cu12-11.3.3.83.dist-info",
+    "name": "Name: nvidia-cufft-cu12",
+    "version": "Version: 11.3.3.83",
+    "metadata_sha256": "ed11d2273b98e3897dc87ae88fcd7a0661b8a4c96529b93a5d22799fd4898de5"
+  },
+  {
+    "directory": "nvidia_cufile_cu12-1.13.1.3.dist-info",
+    "name": "Name: nvidia-cufile-cu12",
+    "version": "Version: 1.13.1.3",
+    "metadata_sha256": "df713a26389a8052d17fee3c1521563e060b24a037983b3889fff54f906ef288"
+  },
+  {
+    "directory": "nvidia_curand_cu12-10.3.9.90.dist-info",
+    "name": "Name: nvidia-curand-cu12",
+    "version": "Version: 10.3.9.90",
+    "metadata_sha256": "7d4df14884c3de2ec922c546d995cee62f9a0e5225b3eaf2d8951520212cbf6f"
+  },
+  {
+    "directory": "nvidia_cusolver_cu12-11.7.3.90.dist-info",
+    "name": "Name: nvidia-cusolver-cu12",
+    "version": "Version: 11.7.3.90",
+    "metadata_sha256": "1f06a55dc8f2aef9eb20f018044bfa7731124698ba7b435d11c250c62eaf4dc3"
+  },
+  {
+    "directory": "nvidia_cusparse_cu12-12.5.8.93.dist-info",
+    "name": "Name: nvidia-cusparse-cu12",
+    "version": "Version: 12.5.8.93",
+    "metadata_sha256": "e83b3bf81e6a2c1dc4d4ddcd73b283a88e6f7f9d20385d280ec030dbf5384f22"
+  },
+  {
+    "directory": "nvidia_cusparselt_cu12-0.7.1.dist-info",
+    "name": "Name: nvidia-cusparselt-cu12",
+    "version": "Version: 0.7.1",
+    "metadata_sha256": "b264cea6951b70b52a3fd2ffaa88f9109eaf379633aa8d6e0832ecc92ddf6fba"
+  },
+  {
+    "directory": "nvidia_nccl_cu12-2.27.3.dist-info",
+    "name": "Name: nvidia-nccl-cu12",
+    "version": "Version: 2.27.3",
+    "metadata_sha256": "87ee999c55a3181761f4b7758a385539776b0cba3cda4fd0f8bff4da26c6e355"
+  },
+  {
+    "directory": "nvidia_nvjitlink_cu12-12.8.93.dist-info",
+    "name": "Name: nvidia-nvjitlink-cu12",
+    "version": "Version: 12.8.93",
+    "metadata_sha256": "776feab012c1f3efce8918975dc08aa01793aa33832d87b377caa0448cad4435"
+  },
+  {
+    "directory": "nvidia_nvtx_cu12-12.8.90.dist-info",
+    "name": "Name: nvidia-nvtx-cu12",
+    "version": "Version: 12.8.90",
+    "metadata_sha256": "c63c23e04e8cf04143721ff718cba87a2ae5630a50451b77f8357a0d26133cf1"
+  },
+  {
+    "directory": "omegaconf-2.3.0.dist-info",
+    "name": "Name: omegaconf",
+    "version": "Version: 2.3.0",
+    "metadata_sha256": "ab2dcbf0e3e70cc75dca1d894f8953e7de8b651dc2dc28f08f350bfa5787badb"
+  },
+  {
+    "directory": "opentelemetry_api-1.45.1.dist-info",
+    "name": "Name: opentelemetry-api",
+    "version": "Version: 1.45.1",
+    "metadata_sha256": "5bc71e90cb421be92a43bf5ad5b0f25dccfa2a24ddceaa2877779879962a4c9e"
+  },
+  {
+    "directory": "oss2-2.19.1.dist-info",
+    "name": "Name: oss2",
+    "version": "Version: 2.19.1",
+    "metadata_sha256": "a70bc92ef3c8abe5e854363fa10828bc182e3ed11e1342512d1502af7791a3ff"
+  },
+  {
+    "directory": "packaging-26.3.dist-info",
+    "name": "Name: packaging",
+    "version": "Version: 26.3",
+    "metadata_sha256": "70fdb89fc4d4a9a043bf7372b8972bcc883fddff34ab55e9cf80d73875384763"
+  },
+  {
+    "directory": "pandas-3.0.6.dist-info",
+    "name": "Name: pandas",
+    "version": "Version: 3.0.6",
+    "metadata_sha256": "c2e8c472e1f49c30b7b00dc1cde8b8ed384b1b6d85b4d5ffe163e800e71dbc61"
+  },
+  {
+    "directory": "phonemizer-3.4.0.dist-info",
+    "name": "Name: phonemizer",
+    "version": "Version: 3.4.0",
+    "metadata_sha256": "76ba0d1ede48c1944e10ac8524ff6780f57079467a155277a242f01ad6e34baa"
+  },
+  {
+    "directory": "pillow-13.0.0.dist-info",
+    "name": "Name: pillow",
+    "version": "Version: 13.0.0",
+    "metadata_sha256": "dba7fdfe24e302f46bae562f55d66cc367c0618abae9894a1ebec93dc8f0e511"
+  },
+  {
+    "directory": "pip-25.3.dist-info",
+    "name": "Name: pip",
+    "version": "Version: 25.3",
+    "metadata_sha256": "2a1ba0725e7d236fbe2d5c50a4fff9c9e3fe34ca494f2cebde5c45c3791379d3"
+  },
+  {
+    "directory": "platformdirs-4.13.4.dist-info",
+    "name": "Name: platformdirs",
+    "version": "Version: 4.13.4",
+    "metadata_sha256": "5dc7385b38731209be10dd450b8524ac6a005652eb151d294949e44156a0a45f"
+  },
+  {
+    "directory": "pooch-1.9.0.dist-info",
+    "name": "Name: pooch",
+    "version": "Version: 1.9.0",
+    "metadata_sha256": "7a67b1fba8575748276b1abee0db0d0c7d673d1f4f8f404699e949f1359da962"
+  },
+  {
+    "directory": "propcache-0.5.4.dist-info",
+    "name": "Name: propcache",
+    "version": "Version: 0.5.4",
+    "metadata_sha256": "6ed3bac0ad43050ceaf8bd09878ba3d673c94c4da0d4498f903f86c36cc6fb57"
+  },
+  {
+    "directory": "proto_plus-1.29.0.dist-info",
+    "name": "Name: proto-plus",
+    "version": "Version: 1.29.0",
+    "metadata_sha256": "53ba48a72466ce01421899f516577705a58083f7e90139d967ce42ed15b611d2"
+  },
+  {
+    "directory": "protobuf-7.36.2.dist-info",
+    "name": "Name: protobuf",
+    "version": null,
+    "metadata_sha256": "445916389cc3a87d5f815d763192372a17a221339d474cb661523157bf07d61c"
+  },
+  {
+    "directory": "pyarrow-26.0.0.dist-info",
+    "name": "Name: pyarrow",
+    "version": "Version: 26.0.0",
+    "metadata_sha256": "be4adabcb9b03f3a468f17bb0f42b48e7e17cdd58741ba15753f28610c2497fb"
+  },
+  {
+    "directory": "pyasn1_modules-0.4.2.dist-info",
+    "name": "Name: pyasn1_modules",
+    "version": "Version: 0.4.2",
+    "metadata_sha256": "162666d75297dfcdd0116cbeab134d78fab808b8a66bfa5c1d74832d9b754771"
+  },
+  {
+    "directory": "pyasn1-0.6.4.dist-info",
+    "name": "Name: pyasn1",
+    "version": "Version: 0.6.4",
+    "metadata_sha256": "a092d99fad1e3744d6aa26eef2598e8ee2343ea403137ca73d06dccef19d70e2"
+  },
+  {
+    "directory": "pycparser-3.11.dist-info",
+    "name": "Name: pycparser",
+    "version": "Version: 3.11",
+    "metadata_sha256": "e3a74c846648bb55f4f907284b745e2003b87b96d9c9d17a8a50cf37804541c9"
+  },
+  {
+    "directory": "pycryptodome-4.0.1.dist-info",
+    "name": "Name: pycryptodome",
+    "version": "Version: 4.0.1",
+    "metadata_sha256": "945977567cde74c11d6a540b5946db775bdb6bd36f0bca08187ad12c66825cb4"
+  },
+  {
+    "directory": "pydantic_core-2.41.5.dist-info",
+    "name": "Name: pydantic_core",
+    "version": "Version: 2.41.5",
+    "metadata_sha256": "09f83baa3202ec3da98a284a56afdf1ba69976e4af7172488887e5b2b20591a9"
+  },
+  {
+    "directory": "pydantic-2.12.4.dist-info",
+    "name": "Name: pydantic",
+    "version": "Version: 2.12.4",
+    "metadata_sha256": "9fea0467ea0f8bd08b0faff4eada5d2952007fa1e3be9b01ea868e60ea3cf254"
+  },
+  {
+    "directory": "pydub-0.25.1.dist-info",
+    "name": "Name: pydub",
+    "version": "Version: 0.25.1",
+    "metadata_sha256": "7f433cfd956d6e2628508f5e8d721e274dc9a3d03935b8bed15d5b56ab398989"
+  },
+  {
+    "directory": "pygments-2.21.0.dist-info",
+    "name": "Name: Pygments",
+    "version": "Version: 2.21.0",
+    "metadata_sha256": "1dde075570136774c706bf0009183a793fe0ee262e4a5590cc6eff8453eedd43"
+  },
+  {
+    "directory": "pykakasi-2.3.0.dist-info",
+    "name": "Name: pykakasi",
+    "version": "Version: 2.3.0",
+    "metadata_sha256": "368dde2a701a1482371c02eb07560c39f09b55a3700911c006b2480823eaccce"
+  },
+  {
+    "directory": "pyloudnorm-0.2.0.dist-info",
+    "name": "Name: pyloudnorm",
+    "version": "Version: 0.2.0",
+    "metadata_sha256": "403211cc9961454871bf8fa2650db26678e69bbffe765fb332b8ae79a80c006b"
+  },
+  {
+    "directory": "pynini-2.1.6.post1.dist-info",
+    "name": "Name: pynini",
+    "version": "Version: 2.1.6.post1",
+    "metadata_sha256": "cd186c7f70c8f603cc6d3afd8fe7c6f65cd456877cc91f18d16562f7752e6ba6"
+  },
+  {
+    "directory": "pyopenjtalk-0.4.1.dist-info",
+    "name": "Name: pyopenjtalk",
+    "version": "Version: 0.4.1",
+    "metadata_sha256": "254a4a539c336ab36019e8baa83062b8c6874bc51a8648a47e8995eae56bd2c6"
+  },
+  {
+    "directory": "pyparsing-3.3.3.dist-info",
+    "name": "Name: pyparsing",
+    "version": "Version: 3.3.3",
+    "metadata_sha256": "f2ca34052d720622d300023472ef8ae94fe5b57d69acbb28a8667f6dd0e13497"
+  },
+  {
+    "directory": "pyphen-0.18.1.dist-info",
+    "name": "Name: pyphen",
+    "version": "Version: 0.18.1",
+    "metadata_sha256": "753117dde38d9def74092fd62c9be625991482f6e71123e921d4e8daba8e1c49"
+  },
+  {
+    "directory": "pypinyin-0.55.0.dist-info",
+    "name": "Name: pypinyin",
+    "version": "Version: 0.55.0",
+    "metadata_sha256": "82ac94eb74fa0eb500355219bc585228716759ed255c385c5e32dd28ddbaf03f"
+  },
+  {
+    "directory": "pythainlp-5.4.0.dist-info",
+    "name": "Name: pythainlp",
+    "version": "Version: 5.4.0",
+    "metadata_sha256": "14f24488f7657d26b0792ddd23d6e9d0d724f98258e187bd310772b35dd05889"
+  },
+  {
+    "directory": "python_dateutil-2.9.0.post0.dist-info",
+    "name": "Name: python-dateutil",
+    "version": "Version: 2.9.0.post0",
+    "metadata_sha256": "a9d436da322be808332f98d88325998e87cb693a678a9969feb4cfad729a6e93"
+  },
+  {
+    "directory": "python_dotenv-1.2.4.dist-info",
+    "name": "Name: python-dotenv",
+    "version": "Version: 1.2.4",
+    "metadata_sha256": "87cfee6042412d48df1100ea7822684988c3f2b79de7a250f4717f4df3026d6f"
+  },
+  {
+    "directory": "python_mecab_ko_dic-2.1.1.post2.dist-info",
+    "name": "Name: python-mecab-ko-dic",
+    "version": "Version: 2.1.1.post2",
+    "metadata_sha256": "a17e4973997391fc4f39abde41cebb59813a28942f39e4a821d13521c0968fa3"
+  },
+  {
+    "directory": "python_mecab_ko-1.3.7.dist-info",
+    "name": "Name: python-mecab-ko",
+    "version": "Version: 1.3.7",
+    "metadata_sha256": "028b8dfbd19ad1e74567d89b46a7ddf30b44f052e42b91553ccc999beb5d83e1"
+  },
+  {
+    "directory": "pyyaml-6.0.3.dist-info",
+    "name": "Name: PyYAML",
+    "version": "Version: 6.0.3",
+    "metadata_sha256": "03c3b415ed38d09faedc49360e930769b40c58f68585e6de00e2e4916a858d34"
+  },
+  {
+    "directory": "regex-2026.9.29.dist-info",
+    "name": "Name: regex",
+    "version": "Version: 2026.9.29",
+    "metadata_sha256": "33859377dbf8dd38ee3de73fd97faebf4a63d50576e3cc1a9dfe44df08b0936a"
+  },
+  {
+    "directory": "requests-2.34.2.dist-info",
+    "name": "Name: requests",
+    "version": "Version: 2.34.2",
+    "metadata_sha256": "8c384ba3e979480faae2859d3c5e6c1276dd2c3616e322e124d52c8cfc556f27"
+  },
+  {
+    "directory": "rich-13.9.4.dist-info",
+    "name": "Name: rich",
+    "version": "Version: 13.9.4",
+    "metadata_sha256": "760dbd01312b9b05b786a3846c8b26596d98e227a1dfcc3df2bf65f0c7c8ac62"
+  },
+  {
+    "directory": "s3transfer-0.19.2.dist-info",
+    "name": "Name: s3transfer",
+    "version": "Version: 0.19.2",
+    "metadata_sha256": "8730b9a4c6d5e9104a664b610d2297176eb42444b5369b37486b668dc9e27471"
+  },
+  {
+    "directory": "sacremoses-0.2.0.dist-info",
+    "name": "Name: sacremoses",
+    "version": "Version: 0.2.0",
+    "metadata_sha256": "839f97e04244109a9546868600f5f5cfaaef0bc4c0866cdbc7fc48b6021fde3d"
+  },
+  {
+    "directory": "safetensors-0.8.0.dist-info",
+    "name": "Name: safetensors",
+    "version": "Version: 0.8.0",
+    "metadata_sha256": "645be7b8d55e91534f991d144dc9e279581ea8dbea1a8c5b0be14e529d01e345"
+  },
+  {
+    "directory": "scikit_learn-1.9.1.dist-info",
+    "name": "Name: scikit-learn",
+    "version": "Version: 1.9.1",
+    "metadata_sha256": "32e503c710a61e4e04be4edb450f9f8141233ac6af3f3db59a877667538fa4ec"
+  },
+  {
+    "directory": "scipy-1.17.1.dist-info",
+    "name": "Name: scipy",
+    "version": "Version: 1.17.1",
+    "metadata_sha256": "7cdd5544eb610b86e000b6f0a21e86f84423faf0aacbb99990f3d41f25e1f314"
+  },
+  {
+    "directory": "setuptools-69.5.1.dist-info",
+    "name": "Name: setuptools",
+    "version": "Version: 69.5.1",
+    "metadata_sha256": "dd1e1121e3fe31f74445b21f8c56ca37c259c8a2e215fae8910870f2f102cc66"
+  },
+  {
+    "directory": "simplejson-4.2.0.dist-info",
+    "name": "Name: simplejson",
+    "version": "Version: 4.2.0",
+    "metadata_sha256": "e4e8ef650327d417cc4956aca96d09eaa67c5f9fed45d2c11ca3df75919840a1"
+  },
+  {
+    "directory": "six-1.17.0.dist-info",
+    "name": "Name: six",
+    "version": "Version: 1.17.0",
+    "metadata_sha256": "562042078c2752549f6d8a7c86dbc5dd708088a7be6d80672ec7b07100b72468"
+  },
+  {
+    "directory": "sortedcontainers-2.4.0.dist-info",
+    "name": "Name: sortedcontainers",
+    "version": "Version: 2.4.0",
+    "metadata_sha256": "eedf115109e215001e904da0882851beae50b03c0b0161a8b9e74b7cfd679473"
+  },
+  {
+    "directory": "soundfile-0.14.0.dist-info",
+    "name": "Name: soundfile",
+    "version": "Version: 0.14.0",
+    "metadata_sha256": "266fbe4cb310c5222edd5216564149585c55395db7b29630f2e4b0ff8ac9cd47"
+  },
+  {
+    "directory": "soxr-0.5.0.post1.dist-info",
+    "name": "Name: soxr",
+    "version": "Version: 0.5.0.post1",
+    "metadata_sha256": "777202f28af32a0ae3be3e2c005f3738e2c2b8c87d4a9206cfc4afa54402e100"
+  },
+  {
+    "directory": "starlette-1.9.0.dist-info",
+    "name": "Name: starlette",
+    "version": "Version: 1.9.0",
+    "metadata_sha256": "f05a43e2910b63d149f0810e218987d38c7336c1dac930ebeff427ef2798692c"
+  },
+  {
+    "directory": "sympy-1.14.0.dist-info",
+    "name": "Name: sympy",
+    "version": "Version: 1.14.0",
+    "metadata_sha256": "b756c2fbfd5be05ac5bdb0ebca61f55618f30f633ed92d88a5687429313a7595"
+  },
+  {
+    "directory": "threadpoolctl-3.7.0.dist-info",
+    "name": "Name: threadpoolctl",
+    "version": "Version: 3.7.0",
+    "metadata_sha256": "09b19e721560cd12246402d44e53c1ede5194b8398ef60822f02cab86ccf8d1f"
+  },
+  {
+    "directory": "tokenizers-0.21.4.dist-info",
+    "name": "Name: tokenizers",
+    "version": "Version: 0.21.4",
+    "metadata_sha256": "ef1cc38a5ceceb768e2963515069bc1a6f539408fb0262443765caa8773e7123"
+  },
+  {
+    "directory": "torch-2.8.0+cu128.dist-info",
+    "name": "Name: torch",
+    "version": "Version: 2.8.0+cu128",
+    "metadata_sha256": "aad6db3dd1aeb1e9a59ab1143a372adba214646e6e8eb91c9e594d25b34c858c"
+  },
+  {
+    "directory": "torchaudio-2.8.0+cu128.dist-info",
+    "name": "Name: torchaudio",
+    "version": "Version: 2.8.0+cu128",
+    "metadata_sha256": "7471e9a3eebde6a256a06ce8b50add336d7d747c2c980fcbe2d4bbd9ced460e9"
+  },
+  {
+    "directory": "torchdiffeq-0.2.5.dist-info",
+    "name": "Name: torchdiffeq",
+    "version": "Version: 0.2.5",
+    "metadata_sha256": "99f93feeb7ab929443f2cc0fd2bd3696c873ed4a0140866e192e4b2b8333d0fa"
+  },
+  {
+    "directory": "tqdm-4.70.1.dist-info",
+    "name": "Name: tqdm",
+    "version": "Version: 4.70.1",
+    "metadata_sha256": "a5da70b966afea3a759716041bad7187f2ece02c22348cf9e7c0a512bbf15f57"
+  },
+  {
+    "directory": "transformers-4.48.3.dist-info",
+    "name": "Name: transformers",
+    "version": "Version: 4.48.3",
+    "metadata_sha256": "2e2780d2f5328a387fd8676aa6fb4d252acf551cb4d5d4eed490b443c5e5eaa6"
+  },
+  {
+    "directory": "triton-3.4.0.dist-info",
+    "name": "Name: triton",
+    "version": "Version: 3.4.0",
+    "metadata_sha256": "8496b57becd6f0fe732bf81570330383f25e2bc572a54bdec45671a23e1db189"
+  },
+  {
+    "directory": "typeguard-4.6.0.dist-info",
+    "name": "Name: typeguard",
+    "version": "Version: 4.6.0",
+    "metadata_sha256": "9548e2e34c3e9368f90c3034223c54085e0bf54db03cf425be974d18c0efea01"
+  },
+  {
+    "directory": "typing_extensions-4.16.0.dist-info",
+    "name": "Name: typing_extensions",
+    "version": "Version: 4.16.0",
+    "metadata_sha256": "b05084ca1d50879865178d9fff9fabeab61bdfb1f361bfbde95421ffc8f9be46"
+  },
+  {
+    "directory": "typing_inspection-0.4.4.dist-info",
+    "name": "Name: typing-inspection",
+    "version": "Version: 0.4.4",
+    "metadata_sha256": "bad3d9e6342ef6750cf5128ec942327b8bebdce0b6e4d6f67cb15b27ae5118da"
+  },
+  {
+    "directory": "urllib3-2.8.0.dist-info",
+    "name": "Name: urllib3",
+    "version": "Version: 2.8.0",
+    "metadata_sha256": "10898c620e8007c030e07fa5622b68358a43010025dfbd78a1cb797699de2bb4"
+  },
+  {
+    "directory": "uvicorn-0.54.0.dist-info",
+    "name": "Name: uvicorn",
+    "version": "Version: 0.54.0",
+    "metadata_sha256": "9399e5ddda3d26e842d6fb5420c38b0857aac568d53badbdc224b3a21339efa8"
+  },
+  {
+    "directory": "uvloop-0.23.0.dist-info",
+    "name": "Name: uvloop",
+    "version": "Version: 0.23.0",
+    "metadata_sha256": "fe11a50198ffd4d9f1cb20922dc638ad459d5e63e6c615b0c1c69448d3362977"
+  },
+  {
+    "directory": "vocos-0.1.0.dist-info",
+    "name": "Name: vocos",
+    "version": "Version: 0.1.0",
+    "metadata_sha256": "f49ed66b1862848d3712b432f0ff99ee31fabbef6a2bcb6d3eb5d7c827ea3410"
+  },
+  {
+    "directory": "watchfiles-1.3.0.dist-info",
+    "name": "Name: watchfiles",
+    "version": "Version: 1.3.0",
+    "metadata_sha256": "1fba87d08d66f10f7515e4817abd4ac7f27abf3300cb33b7ad3f79762987a502"
+  },
+  {
+    "directory": "websockets-15.0.1.dist-info",
+    "name": "Name: websockets",
+    "version": "Version: 15.0.1",
+    "metadata_sha256": "551e4ae9e806fcfa49dbe190e21c9df8293581e22544c2d0a6f841e6a7e71254"
+  },
+  {
+    "directory": "wget-3.2.dist-info",
+    "name": "Name: wget",
+    "version": "Version: 3.2",
+    "metadata_sha256": "b6f51d8060127c28c284fc78b704cbc5611b83e9afc4ee87406e067bdcb08526"
+  },
+  {
+    "directory": "wheel-0.48.0.dist-info",
+    "name": "Name: wheel",
+    "version": "Version: 0.48.0",
+    "metadata_sha256": "e702fede719fefbb8accad64c01c78efe8d7efea27a7dcef3423f83ffaadfc48"
+  },
+  {
+    "directory": "wrapt-2.5.1.dist-info",
+    "name": "Name: wrapt",
+    "version": "Version: 2.5.1",
+    "metadata_sha256": "166ca07d308c14c3e9dfe028c6389bf1a439027fe7b389d33eedb7d002e8bafb"
+  },
+  {
+    "directory": "x_transformers-1.31.14.dist-info",
+    "name": "Name: x-transformers",
+    "version": "Version: 1.31.14",
+    "metadata_sha256": "423e72471841985f3b1ed61e5ae1538a261565ff9e0dd5da6e15bf3f931c43bc"
+  },
+  {
+    "directory": "xxhash-4.0.1.dist-info",
+    "name": "Name: xxhash",
+    "version": "Version: 4.0.1",
+    "metadata_sha256": "c09b864a32b9501a18e6c0e88cf5ee34c8ff304475c59e6d825812f136f3cb38"
+  },
+  {
+    "directory": "yarl-1.25.1.dist-info",
+    "name": "Name: yarl",
+    "version": "Version: 1.25.1",
+    "metadata_sha256": "fd6baa258a11c4d7e7008272a69180d4d34aa04a6a5afda36ac5e55aa0aa4f41"
+  }
+]

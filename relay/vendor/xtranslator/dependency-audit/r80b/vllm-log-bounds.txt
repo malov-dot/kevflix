@@ -1,0 +1,25 @@
+    Examples: 127.0.0.1:8000, [::1]:8000, localhost:1234. Or `demo` for demo
+    purpose."""
+    log_config_file: str | None = envs.VLLM_LOGGING_CONFIG_PATH
+    """Path to logging config JSON file for both vllm and uvicorn"""
+    max_log_len: int | None = None
+    """Max number of prompt characters or prompt ID numbers being printed in
+    log. The default of None means unlimited."""
+    disable_fastapi_docs: bool = False
+    """Disable FastAPI's OpenAPI schema, Swagger UI, and ReDoc endpoint."""
+    enable_prompt_tokens_details: bool = False
+    """If set to True, enable prompt_tokens_details in usage."""
+    enable_server_load_tracking: bool = False
+    """If set to True, enable tracking server_load_metrics in the app state."""
+    enable_force_include_usage: bool = False
+    """If set to True, including usage on every request."""
+    enable_tokenizer_info_endpoint: bool = False
+    """Enable the `/tokenizer_info` endpoint. May expose chat
+    templates and other tokenizer configuration."""
+    enable_log_outputs: bool = False
+    """If set to True, log model outputs (generations).
+    Requires --enable-log-requests."""
+    enable_log_deltas: bool = True
+    """If set to False, output deltas will not be logged. Relevant only if 
+    --enable-log-outputs is set.
+    """

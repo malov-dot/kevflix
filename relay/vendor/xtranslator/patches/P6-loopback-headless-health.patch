@@ -1,0 +1,57 @@
+diff --git a/translator/server/qwen3asr/qwen3asr_server.py b/translator/server/qwen3asr/qwen3asr_server.py
+index de60804..aaafb99 100644
+--- a/translator/server/qwen3asr/qwen3asr_server.py
++++ b/translator/server/qwen3asr/qwen3asr_server.py
+@@ -19,6 +19,13 @@ logger = logging.getLogger("Qwen3ASR")
+ app = FastAPI(title="Qwen3 ASR Service")
+ 
+ model = None
++
++@app.get("/healthz")
++async def healthz():
++    if model is None:
++        raise HTTPException(status_code=503, detail="Qwen3-ASR is not loaded")
++    return {"status": "ok", "backend": "qwen3-asr-vllm", "device": "cuda"}
++
+ session_cache = {}
+ gpu_lock = Lock()
+ executor = ThreadPoolExecutor(max_workers=10)
+@@ -247,6 +254,8 @@ def main():
+     global model
+     parser = argparse.ArgumentParser(description="Qwen3 ASR服务器")
+     parser.add_argument("--model", type=str, default="Qwen/Qwen3-ASR-1.7B")
++    parser.add_argument("--host", type=str, default="127.0.0.1")
++    parser.add_argument("--port", type=int, default=8001)
+     parser.add_argument("--gpu-memory-utilization", type=float, default=0.6)
+     parser.add_argument("--max-model-len", type=int, default=8192)
+     args = parser.parse_args()
+@@ -258,7 +267,9 @@ def main():
+         max_new_tokens=32,
+         trust_remote_code=True
+     )
+-    uvicorn.run(app, host="0.0.0.0", port=8001, workers=1)
++    if args.host != "127.0.0.1":
++        raise RuntimeError("Qwen3-ASR may bind only to loopback")
++    uvicorn.run(app, host=args.host, port=args.port, workers=1)
+ 
+ if __name__ == "__main__":
+     main()
+diff --git a/translator/backend/app.py b/translator/backend/app.py
+index ed14de5..145aa5b 100644
+--- a/translator/backend/app.py
++++ b/translator/backend/app.py
+@@ -37,10 +37,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
+     app.state.shared_zipformer_postprocessor = None
+     app.state.visit_counter = VisitCounter(app_settings.visit_counter_path)
+ 
+-    app.mount("/static", NoCacheStaticFiles(directory=str(frontend_dir)), name="static")
++    if frontend_dir.is_dir():
++        app.mount("/static", NoCacheStaticFiles(directory=str(frontend_dir)), name="static")
+ 
+     @app.get("/")
+     async def index() -> FileResponse:
++        if not frontend_dir.is_dir():
++            return JSONResponse({"service": "KevFLIX X-Translator", "transport": "/ws"})
+         app.state.visit_counter.increment()
+         return FileResponse(
+             frontend_dir / "index.html",

@@ -1,0 +1,11 @@
+r62 bounded source fix, 2026-10-18.
+
+Installed ASR environment transformers-4.57.6.dist-info/METADATA confirms version4.57.6. Source tokenization_utils_base.py:2166-2201 reads tokenizer_config.json then gives independent chat template files priority: chat_template.jinja becomes the default, overriding a JSON default. Source was read through Ubuntu UNC; no Python import or model was executed.
+
+gguf_header.py now mirrors this default selection: existing chat_template.jinja first, otherwise tokenizer_config.json chat_template (string or named default). Selected content must be a nonempty string. The receipt records the exact selected source path, storage kind, source-file SHA256, decoded template text SHA256 and existing tokenizer_config SHA256. Empty external files fail rather than silently selecting a different JSON template.
+
+Manifest binding remains the existing supervisor sequence: verify_assets validates the original LMT directory's exact file set, size and streaming SHA256 before verify_gguf_header. Root owns provision patterns and the pinned Jinja download/manifest update. No model/runtime/budget changes in this fix.
+
+Evidence: source reads, baseline copy, diff and hashes only. No tests/imports/build/models/servers. A successful header/runtime pass is still unverified by this worker.
+
+r62 receipt addendum: chat_template_identity records {source:file|tokenizer_config,path,bytes,sha256,git_blob_sha1} for the selected SOURCE FILE, using SHA1("blob <byte count>\0" + exact file bytes). The existing decoded-template-content SHA256 remains separate. Source constant confirmed in installed transformers/utils/hub.py:75-76: chat_template.jinja and additional_chat_templates. tokenization_utils_base.py:2183-2201 loads the independent default first, then adds named extra templates; those become a template dictionary when present. This model uses its pinned root default file; no selection feature or override was added. Root verifies the pinned repository file inventory and sidecars. Receipt change does not modify or synthesize any template content.

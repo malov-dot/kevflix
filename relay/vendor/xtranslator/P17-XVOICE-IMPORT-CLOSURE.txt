@@ -1,0 +1,23 @@
+r72 bounded XVoice startup dependency audit, 2026-10-18.
+
+Root runtime evidence T190019Z: ASR and Q8 MT reached healthy/loaded; XVoice failed at missing epitran. This report does not claim TTS or playback success. Missing package was our minimal requirements omission despite upstream xvoice/pyproject.toml declaring epitran.
+
+Package plan for the existing BACKEND environment only:
+  epitran==1.35.3
+  panphon==0.22.2
+  marisa-trie==1.4.1
+  unicodecsv==0.14.1
+  munkres==1.1.4
+Keep installed pandas3.0.6, bounded pandas>=2.1,<4 because Panphon0.22.2 featuretable.py:92 uses DataFrame.map. Epitran1.35.3 requires Python>=3.10; backend is3.12. Its declared runtime closure is regex,panphon>=.20,marisa-trie,requests,jamo. Panphon declares setuptools,unicodecsv,PyYAML,regex,numpy>=1.20.2,editdistance,munkres,pandas. All except the five additions have installed metadata; numpy1.26.4/torch2.8cu128/transformers4.48.3 constraints stay unchanged. marisa-trie1.4.1 publishes a CPython3.12 manylinuxx86_64 wheel. Munkres1.1.4 preserves the conventional API without selecting its new3.x major. No training stack/Whisper/DeepFilterNet added.
+
+Primary PyPI JSON metadata and SHA-verified Epitran/Panphon wheel SOURCE snapshots are in dependency-audit/r72. These were read as ZIP/text, not imported/installed. installed-backend-metadata.json records distribution metadata identities/hashes. Epitran wheel contains tha-Thai map/pre/post data; PyThaiNLP initializes this SimpleEpitran language at import using packaged data, not a fetched model. Panphon's actual DataFrame.map call is present in installed pandas source. This is source/metadata compatibility evidence, not an import or runtime pass.
+
+Bounded source audit covered:
+- utils_infer.py imports matplotlib,numpy,torch,torchaudio,tqdm,cached_path,huggingface_hub,omegaconf,pydub,transformers,Vocos and local CFM/CFM_SFT/SpeedPredictor/model-utils/IPA-v3/v6. Their third-party imports have installed distribution metadata. fastlid stays behind the existing disabled auto-language branch; DeepFilterNet remains behind the existing disabled denoise branch; no newly enabled optional route.
+- ipa_v6_tokenizer.py imports phonemizer,regex,jieba,pypinyin,pythainlp,pyopenjtalk,g2pk. IPA-v3 uses the same installed basic tokenizer packages. The missing dependency is the unconditional pythainlp.transliterate.ipa:15 -> epitran, whose declared closure is above.
+- local model/modules/SRP/syllable helpers use already installed torch,torchaudio,torchdiffeq,einops,librosa,x-transformers,pyphen,pykakasi,FinnSyll. English normalization imports existing nemo_text_processing and num2words (plus installed pynini); Chinese/Bulgarian/Portuguese/Estonian optional normalizers are outside this fixed English route.
+- NEXT CONCRETE BLOCKER found before another run: installed g2pk/g2pk.py:15-18 unconditionally checks corpora/cmudict.zip and otherwise calls nltk.download. No zip exists in all eight installed NLTK default Unix search locations checked (home, backend prefix/share/lib, /usr/share,/usr/local/share,/usr/lib,/usr/local/lib). Runtime has no custom NLTK_DATA yet. Offline guard remains strict. pyopenjtalk's dictionary downloader is inside _lazy_init, not its initial import; Japanese synthesis is not selected here.
+
+Approved corpus contract: root provisions unmodified official nltk/nltk_data commit550b6625bcef1f2abff2ff770a5a0d272c9c6b2a packages/corpora/cmudict.zip into /root/kevflix-xt/models/nltk/corpora/cmudict.zip. Size896069; Gitblob48f1d64a431c474142969a793dfcffe3a2fc877b; official pinned index SHA256d07cca47fd72ad32ea9d8ad1219f85301eeaf4568f8b6b73747506a71fb5afd6. Full API/index evidence saved in nltk-cmudict-source.json. No extraction is needed for nltk.data.find of that zip. Root sets xt_nltk_data and a model-manifest record repo=nltk/nltk_data, revision above, folder=models/nltk, file=corpora/cmudict.zip. Services passes NLTK_DATA; supervisor binds the configured folder and requires that corpus file in the manifest before normal exact-file-set/size/streamed-SHA verification. No offline-network relaxation or runtime corpus downloader was added.
+
+Implementation/config files owned here changed: runtime-requirements.txt, runtime-constraints.txt, relay/xt_services.py (required corpus path/env), linux_supervisor.py (manifest binding). Root owns actual pip install/corpus provisioning/config/receipts. Source baselines and P17-xvoice-import-closure.patch saved. No tests, Python imports, builds, applications, servers, GPU probes or model runs by this worker. C-extension compatibility, package installation and successful full XVoice startup remain unverified until root's authorized steps.

@@ -1,0 +1,32 @@
+diff --git a/translator/server/qwen3asr/qwen3asr_server.py b/translator/server/qwen3asr/qwen3asr_server.py
+index aaafb99..d393bbc 100644
+--- a/translator/server/qwen3asr/qwen3asr_server.py
++++ b/translator/server/qwen3asr/qwen3asr_server.py
+@@ -256,14 +256,26 @@ def main():
+     parser.add_argument("--model", type=str, default="Qwen/Qwen3-ASR-1.7B")
+     parser.add_argument("--host", type=str, default="127.0.0.1")
+     parser.add_argument("--port", type=int, default=8001)
+-    parser.add_argument("--gpu-memory-utilization", type=float, default=0.6)
++    parser.add_argument("--gpu-memory-utilization", type=float, required=True)
+     parser.add_argument("--max-model-len", type=int, default=8192)
++    parser.add_argument("--kv-cache-memory-bytes", type=int, default=1024 * 1024 * 1024)
++    parser.add_argument("--max-num-seqs", type=int, default=1)
++    parser.add_argument("--max-num-batched-tokens", type=int, default=8192)
++    parser.add_argument("--enforce-eager", action="store_true")
++    parser.add_argument("--dtype", choices=["bfloat16"], default="bfloat16")
+     args = parser.parse_args()
++    if args.max_num_seqs != 1 or not args.enforce_eager or args.max_num_batched_tokens != args.max_model_len:
++        raise ValueError("XT ASR requires one eager BF16 request chain with batched-token cap equal to max_model_len")
+     
+     model = Qwen3ASRModel.LLM(
+         model=args.model,
+         gpu_memory_utilization=args.gpu_memory_utilization,
+         max_model_len=args.max_model_len,
++        kv_cache_memory_bytes=args.kv_cache_memory_bytes,
++        max_num_seqs=args.max_num_seqs,
++        max_num_batched_tokens=args.max_num_batched_tokens,
++        enforce_eager=args.enforce_eager,
++        dtype=args.dtype,
+         max_new_tokens=32,
+         trust_remote_code=True
+     )

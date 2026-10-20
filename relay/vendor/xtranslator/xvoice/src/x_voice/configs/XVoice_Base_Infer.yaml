@@ -1,0 +1,21 @@
+datasets:
+  name: XVoice_Dataset # dataset name
+  batch_size_per_gpu: 57600
+  batch_size_type: frame  # frame | sample
+  max_samples: 64  # max sequences per batch if use frame-wise batch_size. we set 32 for small models, 64 for base models
+  num_workers: 16
+
+source:
+  expname: XVoice_Base_Stage1
+  ckptstep: 600000
+
+infer:
+  nfe_step: 32
+  cfg_strength: 2.0
+  sway_sampling_coef: -1.0
+  gen_root: null # Output root for generated results; null disables saving.
+  save_wav: False # Whether to save generated wav files.
+
+attn:
+  attn_backend: flash_attn # flash_attn | torch
+  attn_mask_enabled: True # True | False

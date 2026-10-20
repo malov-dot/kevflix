@@ -1,0 +1,23 @@
+{
+  "name": "vocos",
+  "version": "0.1.0",
+  "requires_python": "",
+  "requires_dist": [
+    "torch",
+    "torchaudio",
+    "numpy",
+    "scipy",
+    "einops",
+    "pyyaml",
+    "huggingface-hub",
+    "encodec ==0.1.1",
+    "pytorch-lightning ==1.8.6 ; extra == 'train'",
+    "jsonargparse[signatures] ; extra == 'train'",
+    "transformers ; extra == 'train'",
+    "matplotlib ; extra == 'train'",
+    "torchcrepe ; extra == 'train'",
+    "pesq ; extra == 'train'",
+    "fairseq ; extra == 'train'"
+  ],
+  "source_url": "https://pypi.org/pypi/vocos/0.1.0/json"
+}

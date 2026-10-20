@@ -1,0 +1,154 @@
+[
+  {
+    "path": "modelscope/models/audio/sv/speaker_change_locator.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "4926196e6ce2ac1e3d7690300f50a1b3dad0b6da",
+    "size": 12338,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/4926196e6ce2ac1e3d7690300f50a1b3dad0b6da"
+  },
+  {
+    "path": "modelscope/models/audio/sv/speaker_change_locator_xvector.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "72e7b3d01431332aec273611b31bac1da4bbc05b",
+    "size": 12395,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/72e7b3d01431332aec273611b31bac1da4bbc05b"
+  },
+  {
+    "path": "modelscope/models/audio/sv/speaker_diarization_dialogue_detection.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "e1aaafb58d9acd8e2d1a67d3e605931308b5c48e",
+    "size": 3519,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/e1aaafb58d9acd8e2d1a67d3e605931308b5c48e"
+  },
+  {
+    "path": "modelscope/models/audio/sv/speaker_diarization_semantic_speaker_turn_detection.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "b7b14b08b960b183ca9ecf1b4bb92dcd87e74a48",
+    "size": 5170,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/b7b14b08b960b183ca9ecf1b4bb92dcd87e74a48"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_change_locating_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "b6bdbfb21ac9eee89d8b016259c906ce3b9a7f79",
+    "size": 4829,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/b6bdbfb21ac9eee89d8b016259c906ce3b9a7f79"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_diarization_dialogue_detection_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "a3a7eed35d3b26bef1bd5cfcfcdf7f04ae74e873",
+    "size": 6038,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/a3a7eed35d3b26bef1bd5cfcfcdf7f04ae74e873"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_diarization_semantic_speaker_turn_detection_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "075bc64e72049365b12667e22ceeafd58a727a20",
+    "size": 4246,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/075bc64e72049365b12667e22ceeafd58a727a20"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_verification_eres2net_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "507e761dffc65b7084379d23107fd7023499c2fa",
+    "size": 5997,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/507e761dffc65b7084379d23107fd7023499c2fa"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_verification_eres2netv2_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "edac144464322f15e0ef57cccacb83dc4103e305",
+    "size": 6001,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/edac144464322f15e0ef57cccacb83dc4103e305"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_verification_light_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "7bfc79648e44d8018d0e3bd18e59700eed12e23d",
+    "size": 6037,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/7bfc79648e44d8018d0e3bd18e59700eed12e23d"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_verification_rdino_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "dd08ccf414102dd92907e6e4629f247cecfc29fc",
+    "size": 4072,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/dd08ccf414102dd92907e6e4629f247cecfc29fc"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_verification_res2net_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "308190601bd0e80e48a4015967df54e50a0147a6",
+    "size": 5995,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/308190601bd0e80e48a4015967df54e50a0147a6"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_verification_resnet_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "8b2b59dbab2a7142c0d685aab7dd43114e4a64bb",
+    "size": 5994,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/8b2b59dbab2a7142c0d685aab7dd43114e4a64bb"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_verification_sdpn_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "352d448bac69b3c8302513cd9016dca6452de630",
+    "size": 4069,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/352d448bac69b3c8302513cd9016dca6452de630"
+  },
+  {
+    "path": "modelscope/pipelines/audio/speaker_verification_tdnn_pipeline.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "4c8a6f321dde700584208ab39056a32630d0d0ba",
+    "size": 6007,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/4c8a6f321dde700584208ab39056a32630d0d0ba"
+  },
+  {
+    "path": "modelscope/preprocessors/speaker.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "e89bdb621fd6a7aebcc55e0dcd350a2c9267043f",
+    "size": 13735,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/e89bdb621fd6a7aebcc55e0dcd350a2c9267043f"
+  },
+  {
+    "path": "tests/pipelines/test_speaker_diarization_dialogue_detection.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "c7a6a9055a85c3f1bcb073b6327b7f92e305f2c3",
+    "size": 2390,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/c7a6a9055a85c3f1bcb073b6327b7f92e305f2c3"
+  },
+  {
+    "path": "tests/pipelines/test_speaker_diarization_semantic_speaker_turn_detection.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "6bcf7437f46c61698427b12baf8caa99de62be73",
+    "size": 2574,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/6bcf7437f46c61698427b12baf8caa99de62be73"
+  },
+  {
+    "path": "tests/pipelines/test_speaker_verification.py",
+    "mode": "100644",
+    "type": "blob",
+    "sha": "42eeb139c28f0969bc45190afbde155468b18e64",
+    "size": 14314,
+    "url": "https://api.github.com/repos/modelscope/modelscope/git/blobs/42eeb139c28f0969bc45190afbde155468b18e64"
+  }
+]

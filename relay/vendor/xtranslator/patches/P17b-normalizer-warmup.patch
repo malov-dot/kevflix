@@ -1,0 +1,48 @@
+diff --git a/translator/server/xvoice/server.py b/translator/server/xvoice/server.py
+index 79229a0..6f233ae 100644
+--- a/translator/server/xvoice/server.py
++++ b/translator/server/xvoice/server.py
+@@ -219,6 +219,7 @@ class XVoiceRuntime:
+             load_model_sft,
+             load_srp_model,
+             load_vocoder,
++            normalize_text_for_lang,
+             resolve_cached_path,
+             resolve_ckpt_path,
+         )
+@@ -300,6 +301,25 @@ class XVoiceRuntime:
+             parameters = list(module.parameters())
+             if not parameters or any(parameter.device.type != "cuda" for parameter in parameters):
+                 raise RuntimeError(name + " actual parameters are not on CUDA")
++        # Warm the same text-normalizer/cache used by synthesis before readiness.
++        # This creates no PCM and is never a movie-segment outcome.
++        normalizer_lang = cfg.gen_lang or "en"
++        warmup_started = time.perf_counter()
++        try:
++            normalized = normalize_text_for_lang("warm up", normalizer_lang, self.normalizer_cache)
++            normalizer = self.normalizer_cache.get(normalizer_lang)
++            if not isinstance(normalized, str) or not normalized.strip():
++                raise RuntimeError("Text normalizer warmup returned an unexpected empty result")
++        except Exception:
++            logger.exception("X-Voice normalizer startup failed language=%s seconds=%.3f",
++                             normalizer_lang, time.perf_counter() - warmup_started)
++            raise
++        self.normalizer_warmup = {"language": normalizer_lang, "seconds": time.perf_counter() - warmup_started,
++                                  "call_completed": True, "normalizer_available": normalizer is not None,
++                                  "compiled": getattr(normalizer, "processor", None) is not None,
++                                  "fallback_used": getattr(normalizer, "processor", None) is None,
++                                  "scope": "text-normalization-only", "audio_generated": False}
++        logger.info("X-Voice normalizer startup warmup %s", self.normalizer_warmup)
+         logger.info(
+             "X-Voice loaded stage=%s model=%s ckpt=%s device=%s sample_rate=%s",
+             cfg.stage,
+@@ -529,7 +549,8 @@ async def healthz() -> dict:
+     runtime = getattr(app.state, "runtime", None)
+     if runtime is None:
+         return {"status": "loading"}
+-    return {"status": "ok", "stage": runtime.config.stage, "sample_rate": 24000}
++    return {"status": "ok", "stage": runtime.config.stage, "sample_rate": 24000,
++            "normalizer_warmup": runtime.normalizer_warmup}
+ 
+ 
+ @app.post("/synthesize")

@@ -1,0 +1,48 @@
+
+import csv
+import os.path
+from importlib import resources
+
+
+class StripDiacritics:
+    def __init__(self, code: str) -> None:
+        """Constructs object to strip specified diacritics from text
+
+        Args:
+            code (str): ISO 639-3 code and ISO 15924 code joined with a hyphen
+        """
+        self.diacritics = self._read_diacritics(code)
+
+    def _read_diacritics(self, code: str) -> list[str]:
+        diacritics = []
+        fn = os.path.join('data', 'strip', code + '.csv')
+        try:
+            resource_path = resources.files(__package__).joinpath(fn)
+            if resource_path.is_file():
+                with resource_path.open('r', encoding='utf-8') as f:
+                    reader = csv.reader(f)
+                    for [diacritic] in reader:
+                        diacritics.append(diacritic)
+        except (KeyError, FileNotFoundError):
+            pass
+        return diacritics
+
+    def strip_specified_diacritics(self, word: str) -> str:
+        """Remove language-specific diacritics from an input string.
+
+        Strips only the diacritics specified in the language's strip file,
+        leaving all other characters (including other diacritics) untouched.
+
+        Args:
+            word (str): Unicode IPA string
+
+        Returns:
+            str: Unicode IPA string with specified diacritics removed
+        """
+        word = ''.join(filter(lambda x: x not in self.diacritics, word))
+        return word
+
+    # Backward-compatible alias
+    def process(self, word: str) -> str:
+        """Deprecated: Use strip_specified_diacritics() instead."""
+        return self.strip_specified_diacritics(word)

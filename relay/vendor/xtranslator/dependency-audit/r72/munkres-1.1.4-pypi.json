@@ -1,0 +1,107 @@
+{
+  "info": {
+    "author": "Brian Clapper",
+    "author_email": "bmc@clapper.org",
+    "bugtrack_url": null,
+    "classifiers": [
+      "Intended Audience :: Developers",
+      "Intended Audience :: Science/Research",
+      "License :: OSI Approved :: Apache Software License",
+      "Operating System :: OS Independent",
+      "Programming Language :: Python",
+      "Topic :: Scientific/Engineering :: Mathematics",
+      "Topic :: Software Development :: Libraries :: Python Modules"
+    ],
+    "description": "\nIntroduction\n============\n\nThe Munkres module provides an implementation of the Munkres algorithm\n(also called the Hungarian algorithm or the Kuhn-Munkres algorithm),\nuseful for solving the Assignment Problem.\n\nFor complete usage documentation, see: https://software.clapper.org/munkres/\n\n\n",
+    "description_content_type": "text/markdown",
+    "docs_url": null,
+    "download_url": "",
+    "downloads": {
+      "last_day": -1,
+      "last_month": -1,
+      "last_week": -1
+    },
+    "dynamic": null,
+    "home_page": "https://software.clapper.org/munkres/",
+    "keywords": "",
+    "license": "Apache Software License",
+    "license_expression": null,
+    "license_files": null,
+    "maintainer": "",
+    "maintainer_email": "",
+    "name": "munkres",
+    "package_url": "https://pypi.org/project/munkres/",
+    "platform": "",
+    "project_url": "https://pypi.org/project/munkres/",
+    "project_urls": {
+      "Homepage": "https://software.clapper.org/munkres/"
+    },
+    "provides_extra": null,
+    "release_url": "https://pypi.org/project/munkres/1.1.4/",
+    "requires_dist": null,
+    "requires_python": "",
+    "summary": "Munkres (Hungarian) algorithm for the Assignment Problem",
+    "version": "1.1.4",
+    "yanked": false,
+    "yanked_reason": null
+  },
+  "last_serial": 42399305,
+  "ownership": {
+    "organization": null,
+    "roles": [
+      {
+        "role": "Owner",
+        "user": "iameishit"
+      }
+    ]
+  },
+  "urls": [
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "f2afbf2cfc182e56cb1f5b431d1621b9c893eb97c316fe48aac4eb8d1b68e6ed"
+      },
+      "digests": {
+        "blake2b_256": "90ab0301c945a704218bc9435f0e3c88884f6b19ef234d8899fb47ce1ccfd0c9",
+        "md5": "1b3345d165a7ef35736f5e7b54265d86",
+        "sha256": "6b01867d4a8480d865aea2326e4b8f7c46431e9e55b4a2e32d989307d7bced2a"
+      },
+      "downloads": -1,
+      "filename": "munkres-1.1.4-py2.py3-none-any.whl",
+      "has_sig": false,
+      "md5_digest": "1b3345d165a7ef35736f5e7b54265d86",
+      "packagetype": "bdist_wheel",
+      "python_version": "py2.py3",
+      "requires_python": null,
+      "size": 7015,
+      "upload_time": "2020-09-15T15:12:19",
+      "upload_time_iso_8601": "2020-09-15T15:12:19.627355Z",
+      "url": "https://files.pythonhosted.org/packages/90/ab/0301c945a704218bc9435f0e3c88884f6b19ef234d8899fb47ce1ccfd0c9/munkres-1.1.4-py2.py3-none-any.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": false,
+      "digests": {
+        "blake2b_256": "fd416a3d0ef908f47d07c31e5d1c2504388c27c39b10b8cf610175b5a789a5c1",
+        "md5": "98c185e5e7b290c91a754dde9a7da6e7",
+        "sha256": "fc44bf3c3979dada4b6b633ddeeb8ffbe8388ee9409e4d4e8310c2da1792db03"
+      },
+      "downloads": -1,
+      "filename": "munkres-1.1.4.tar.gz",
+      "has_sig": false,
+      "md5_digest": "98c185e5e7b290c91a754dde9a7da6e7",
+      "packagetype": "sdist",
+      "python_version": "source",
+      "requires_python": null,
+      "size": 14047,
+      "upload_time": "2020-09-15T15:12:20",
+      "upload_time_iso_8601": "2020-09-15T15:12:20.956794Z",
+      "url": "https://files.pythonhosted.org/packages/fd/41/6a3d0ef908f47d07c31e5d1c2504388c27c39b10b8cf610175b5a789a5c1/munkres-1.1.4.tar.gz",
+      "yanked": false,
+      "yanked_reason": null
+    }
+  ],
+  "vulnerabilities": []
+}

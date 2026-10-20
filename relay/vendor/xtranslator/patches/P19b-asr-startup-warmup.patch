@@ -1,0 +1,174 @@
+diff --git a/translator/server/qwen3asr/qwen3asr_server.py b/translator/server/qwen3asr/qwen3asr_server.py
+index 014f8ac..7565bf3 100644
+--- a/translator/server/qwen3asr/qwen3asr_server.py
++++ b/translator/server/qwen3asr/qwen3asr_server.py
+@@ -20,21 +20,34 @@ logger = logging.getLogger("Qwen3ASR")
+ app = FastAPI(title="Qwen3 ASR Service")
+ 
+ model = None
++startup_warmup = None
+ 
+ @app.get("/healthz")
+ async def healthz():
+-    if model is None:
+-        raise HTTPException(status_code=503, detail="Qwen3-ASR is not loaded")
+-    return {"status": "ok", "backend": "qwen3-asr-vllm", "device": "cuda"}
++    if model is None or startup_warmup is None:
++        raise HTTPException(status_code=503, detail="Qwen3-ASR is not loaded and warmed")
++    return {"status": "ok", "backend": "qwen3-asr-vllm", "device": "cuda", "startup_warmup": startup_warmup}
+ 
+ session_cache = {}
+ gpu_lock = Lock()
++poison_lock = Lock()
++poisoned_session_ids = set()  # separate from mutable contexts touched by executor threads
+ executor = ThreadPoolExecutor(max_workers=10)
+ 
+ MAX_SESSION_STEPS = 60
+ OVERLAP_CHUNKS = 4
+ VAD_THRESHOLD = 0.001
+-ASR_REQUEST_TIMEOUT_SECONDS = 90.0  # bounded cold decode; client read deadline is 100s
++ASR_REQUEST_TIMEOUT_SECONDS = 90.0  # client read deadline is this value +15s
++
++
++class SessionPoisonedError(RuntimeError):
++    pass
++
++
++def reject_poisoned_session(session_id):
++    with poison_lock:
++        if session_id is not None and session_id in poisoned_session_ids:
++            raise SessionPoisonedError('A prior request timed out; this session cannot be reused')
+ 
+ # Native Qwen names only; an unmappable label remains unknown, never guessed.
+ NATIVE_LANGUAGE_CODES = dict(zip(
+@@ -137,6 +150,7 @@ def run_inference(request: RecognitionRequest, audio_data: np.ndarray):
+     
+     with gpu_lock:
+         try:
++            reject_poisoned_session(request.session_id)
+             if request.session_id:
+                 # 初始化 Session
+                 if request.session_id not in session_cache:
+@@ -232,6 +246,7 @@ async def recognize(request: RecognitionRequest):
+     started = time.perf_counter()
+     stage = 'decode_audio'
+     try:
++        reject_poisoned_session(request.session_id)
+         if not request.audio.startswith("data:audio/wav;base64,"):
+             raise ValueError("不支持的音频格式")
+         
+@@ -272,19 +287,30 @@ async def recognize(request: RecognitionRequest):
+         return {**result, "session_id": request.session_id, "is_final": request.is_final}
+         
+     except Exception as e:
++        timed_out = isinstance(e, TimeoutError) and stage == 'executor_inference_wait'
++        if timed_out and request.session_id is not None:
++            with poison_lock:
++                poisoned_session_ids.add(request.session_id)
++        bad_request = stage == 'decode_audio' and isinstance(e, (ValueError, wave.Error, EOFError))
++        status_code = (409 if isinstance(e, SessionPoisonedError) else 504 if timed_out
++                       else 400 if bad_request else 500)
+         detail = {'error_type': type(e).__name__, 'stage': stage,
++                  'phase': 'inference' if stage == 'executor_inference_wait' else stage,
+                   'elapsed_seconds': round(time.perf_counter() - started, 3),
+                   'timeout_seconds': ASR_REQUEST_TIMEOUT_SECONDS,
+                   'session_id': request.session_id, 'is_final': request.is_final,
+                   'message': str(e) or type(e).__name__,
+-                  'executor_may_still_be_running': isinstance(e, TimeoutError) and stage == 'executor_inference_wait'}
++                  'executor_may_still_be_running': timed_out,
++                  'session_poisoned': timed_out or isinstance(e, SessionPoisonedError)}
++        if isinstance(e, SessionPoisonedError):
++            detail['error_type'] = 'SessionPoisoned'
+         logger.exception("Recognition failed: %s", detail)
+         # wait_for cancellation cannot stop an already running executor thread.
+         # The caller receives a terminal HTTP error; do not retry inference here.
+-        raise HTTPException(status_code=400, detail=detail) from e
++        raise HTTPException(status_code=status_code, detail=detail) from e
+ 
+ def main():
+-    global model
++    global model, ASR_REQUEST_TIMEOUT_SECONDS, startup_warmup
+     parser = argparse.ArgumentParser(description="Qwen3 ASR服务器")
+     parser.add_argument("--model", type=str, default="Qwen/Qwen3-ASR-1.7B")
+     parser.add_argument("--host", type=str, default="127.0.0.1")
+@@ -296,7 +322,11 @@ def main():
+     parser.add_argument("--max-num-batched-tokens", type=int, default=8192)
+     parser.add_argument("--enforce-eager", action="store_true")
+     parser.add_argument("--dtype", choices=["bfloat16"], default="bfloat16")
++    parser.add_argument("--request-timeout-seconds", type=float, default=90.)
+     args = parser.parse_args()
++    if not 30. <= args.request_timeout_seconds <= 90.:
++        raise ValueError('ASR request timeout must be30..90 seconds')
++    ASR_REQUEST_TIMEOUT_SECONDS = args.request_timeout_seconds
+     if args.max_num_seqs != 1 or not args.enforce_eager or args.max_num_batched_tokens != args.max_model_len:
+         raise ValueError("XT ASR requires one eager BF16 request chain with batched-token cap equal to max_model_len")
+     
+@@ -314,6 +344,20 @@ def main():
+     )
+     if args.host != "127.0.0.1":
+         raise RuntimeError("Qwen3-ASR may bind only to loopback")
++    # One synthetic startup decode, within the existing supervisor startup
++    # deadline. Never insert this state into session_cache or publish its text.
++    warmup_started = time.perf_counter()
++    try:
++        warm_state = model.init_streaming_state(unfixed_chunk_num=2, unfixed_token_num=5, chunk_size_sec=.6)
++        model.streaming_transcribe(np.zeros(2 * 16000, dtype=np.float32), warm_state)
++        model.finish_streaming_transcribe(warm_state)
++        del warm_state
++    except Exception:
++        logger.exception('Synthetic ASR startup warmup failed elapsed_seconds=%.3f', time.perf_counter() - warmup_started)
++        raise
++    startup_warmup = {'kind': 'synthetic-startup', 'input_seconds': 2., 'sample_rate': 16000,
++                      'seconds': time.perf_counter() - warmup_started, 'output_discarded': True, 'movie_credit': False}
++    logger.info('Synthetic ASR startup warmup completed: %s', startup_warmup)
+     uvicorn.run(app, host=args.host, port=args.port, workers=1)
+ 
+ if __name__ == "__main__":
+diff --git a/translator/backend/services.py b/translator/backend/services.py
+index c8a2f06..8f91b01 100644
+--- a/translator/backend/services.py
++++ b/translator/backend/services.py
+@@ -243,6 +243,9 @@ class Qwen3ASRService:
+         self.sample_rate = sample_rate
+         self.chunk_seconds = chunk_seconds
+         self.session = requests.Session()
++        self.request_timeout_seconds = float(os.environ.get('XTRANSLATE_ASR_REQUEST_TIMEOUT_SECONDS', '90'))
++        if not 30. <= self.request_timeout_seconds <= 90.:
++            raise ValueError('ASR request timeout must be30..90 seconds')
+ 
+     def recognize_stream(
+         self,
+@@ -267,9 +270,8 @@ class Qwen3ASRService:
+         start_time = time.perf_counter()
+         response = None
+         try:
+-            # Server's bounded cold-decode wait is90s; retain room for its error
+-            # response below the controller's120s no-progress deadline.
+-            response = self.session.post(self.base_url, json=payload, timeout=(5, 100))
++            # Keep15s for the server's structured error, below the120s barrier.
++            response = self.session.post(self.base_url, json=payload, timeout=(5, self.request_timeout_seconds + 15.))
+             if not response.ok:
+                 raise requests.HTTPError('Qwen recognition HTTP %s: %s' %
+                                          (response.status_code, response.text[:4096]), response=response)
+diff --git a/relay/xt_services.py b/relay/xt_services.py
+index 67edeac..701b16b 100644
+--- a/relay/xt_services.py
++++ b/relay/xt_services.py
+@@ -291,6 +291,7 @@ class XTServices:
+                'XTRANSLATE_HOST': '127.0.0.1', 'XTRANSLATE_PORT': str(ports['app']),
+                'XTRANSLATE_LOG_DIR': linux_folder + '/backend-logs',
+                'XTRANSLATE_REQUEST_TIMEOUT_SECONDS': str(float(self._value('xt_request_timeout_seconds', 900))),
++               'XTRANSLATE_ASR_REQUEST_TIMEOUT_SECONDS': str(float(self._value('xt_asr_request_timeout_seconds', 90))),
+                'XTRANSLATE_VISIT_COUNTER_PATH': linux_folder + '/visit-stats.json',
+                'XVOICE_ROOT': linux_vendor + '/xvoice', 'XVOICE_DEVICE': 'cuda', 'XVOICE_STAGE': '2',
+                'XVOICE_CKPT_FILE': paths['xt_xvoice_ckpt'], 'XVOICE_SRP_CKPT_FILE': paths['xt_rate_ckpt'],
+@@ -308,7 +309,8 @@ class XTServices:
+                      '--host', '127.0.0.1', '--port', str(ports['asr']), '--model', paths['xt_asr_model'],
+                      '--gpu-memory-utilization', str(asr['gpu_memory_utilization']), '--max-model-len', '8192',
+                      '--kv-cache-memory-bytes', str(asr['kv_cache_bytes']), '--max-num-seqs', '1',
+-                     '--max-num-batched-tokens', '8192', '--enforce-eager', '--dtype', 'bfloat16'],
++                     '--max-num-batched-tokens', '8192', '--enforce-eager', '--dtype', 'bfloat16',
++                     '--request-timeout-seconds', str(float(self._value('xt_asr_request_timeout_seconds', 90)))],
+              linux_folder, '/healthz')
+         spec('mt', [mt_python, '-m', 'vllm.entrypoints.openai.api_server', '--host', '127.0.0.1',
+                     '--port', str(ports['mt']), '--model', paths['xt_mt_model'], '--trust-remote-code',

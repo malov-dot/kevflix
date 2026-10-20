@@ -1,0 +1,33 @@
+diff --git a/translator/backend/speaker_prompt.py b/translator/backend/speaker_prompt.py
+index a35d1be..4cfd2ee 100644
+--- a/translator/backend/speaker_prompt.py
++++ b/translator/backend/speaker_prompt.py
+@@ -248,14 +248,12 @@ class SpeakerPromptTracker:
+                 )
+             except Exception as exc:
+                 logger.warning(
+-                    "speaker embedding failed id=%s backend=%s err=%s; fallback=spectral",
++                    "speaker embedding failed id=%s backend=%s err=%s; no fallback",
+                     self.session_id,
+                     self.embedding_backend.name,
+                     exc,
+                 )
+-                self.embedding_backend = SpectralSpeakerEmbeddingBackend()
+-                samples = np.frombuffer(window_bytes, dtype=np.int16).astype(np.float32) / 32768.0
+-                embedding = self.embedding_backend.embed(samples, self.sample_rate)
++                raise RuntimeError("CAM++ embedding failed; no spectral fallback") from exc
+             async with self._lock:
+                 event = self._handle_embedding(embedding, window_bytes, start_ms, end_ms)
+                 if event is not None:
+@@ -839,10 +837,7 @@ def _create_embedding_backend(provider: str, model: str) -> SpeakerEmbeddingBack
+     normalized = (provider or "").strip().lower()
+     if normalized in {"modelscope_campplus", "campplus", "modelscope"}:
+         return ModelScopeSpeakerEmbeddingBackend(model)
+-    if normalized in {"spectral", "fallback", "none"}:
+-        return SpectralSpeakerEmbeddingBackend()
+-    logger.warning("unknown speaker embedding provider=%s; fallback=spectral", provider)
+-    return SpectralSpeakerEmbeddingBackend()
++    raise ValueError("Only CUDA ModelScope CAM++ is allowed; no spectral speaker fallback")
+ 
+ 
+ def _timestamp_label() -> str:

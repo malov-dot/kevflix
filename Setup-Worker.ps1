@@ -1,5 +1,9 @@
 [CmdletBinding()]
-param([string]$PythonLauncher = 'py', [string]$PythonExecutable = '', [switch]$DownloadModels, [switch]$AcceptModelTerms)
+param([string]$PythonLauncher = 'py', [string]$PythonExecutable = '', [switch]$DownloadModels, [switch]$AcceptModelTerms,
+      # Vox actor engine (explicit): an existing folder holding voxcpm2-actor-q4_k.gguf, and a folder holding
+      # audiocpp.dll + the approved ggml/CUDA/MSVC DLLs. Every sha256 is verified; files are copied into the
+      # KevFLIX profile unless -VoxReferenceInPlace. Nothing is downloaded and nothing is taken from Sem's folders.
+      [string]$VoxModelSource = '', [string]$VoxRuntimeSource = '', [switch]$VoxReferenceInPlace)
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
 $env:PYTHONUTF8 = '1'
@@ -25,5 +29,13 @@ if ($DownloadModels) {
     if (-not $AcceptModelTerms) { throw 'Read THIRD-PARTY.md and accept the model licenses/gated repository terms before using -AcceptModelTerms.' }
     & $venvPython (Join-Path $PSScriptRoot 'scripts\provision_models.py') --accept-model-terms
     if ($LASTEXITCODE -ne 0) { throw 'Model provisioning failed; resume it after correcting the reported issue.' }
+}
+if ($VoxModelSource -or $VoxRuntimeSource) {
+    $voxArgs = @((Join-Path $PSScriptRoot 'scripts\provision_vox.py'))
+    if ($VoxModelSource) { $voxArgs += @('--model-source', $VoxModelSource) }
+    if ($VoxRuntimeSource) { $voxArgs += @('--runtime-source', $VoxRuntimeSource) }
+    if ($VoxReferenceInPlace) { $voxArgs += '--reference-in-place' }
+    & $venvPython @voxArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Vox actor engine provisioning failed (see the message above); dubbing cannot use Vox until it succeeds.' }
 }
 Write-Output 'Dependencies prepared. No tests, inference, Sem changes or services were started.'

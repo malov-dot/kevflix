@@ -1,0 +1,384 @@
+diff --git a/linux_supervisor.py b/linux_supervisor.py
+index f57e58c..5a4b1bd 100644
+--- a/linux_supervisor.py
++++ b/linux_supervisor.py
+@@ -9,8 +9,10 @@ from __future__ import annotations
+ 
+ import argparse
+ import ctypes
++import errno
+ import hashlib
+ import json
++import math
+ import os
+ from pathlib import Path
+ import signal
+@@ -21,13 +23,84 @@ import tempfile
+ import time
+ import urllib.request
+ import urllib.parse
++import uuid
++
++
++class SharedJSONWriteFailed(RuntimeError):
++    def __init__(self, path, error):
++        detail = json.dumps({'path': str(path), 'error_type': type(error).__name__, 'error': str(error),
++                             'errno': error.errno, 'attempts': getattr(error, 'xt_io_attempts', 1)})
++        super().__init__(detail)
++        self.fault = {'code': 'xt_monitor_failed', 'detail': detail, 'fatal': True,
++                      'recoverable': False, 'stage': 'shared_json_write'}
++
++
++def sharing_retry(operation, deadline):
++    delay, attempts = .025, 0
++    while True:
++        try:
++            attempts += 1
++            return operation()
++        except OSError as error:
++            remaining = deadline - time.monotonic()
++            transient = error.errno in (errno.EACCES, errno.EPERM, errno.EBUSY, errno.ETXTBSY)
++            if not transient or remaining <= 0:
++                error.xt_io_attempts = attempts
++                raise
++            time.sleep(min(delay, remaining))
++            delay = min(.2, delay * 2)
+ 
+ 
+ def atomic_json(path, value):
+     path = Path(path)
+-    temporary = path.with_name(path.name + '.%d.tmp' % os.getpid())
+-    temporary.write_text(json.dumps(value, sort_keys=True), encoding='utf-8')
+-    os.replace(temporary, path)
++    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
++    payload = json.dumps(value, sort_keys=True)
++    deadline, failure = time.monotonic() + 2., None
++    try:
++        sharing_retry(lambda: temporary.write_text(payload, encoding='utf-8'), deadline)
++        sharing_retry(lambda: os.replace(temporary, path), deadline)
++    except OSError as error:
++        failure = SharedJSONWriteFailed(path, error)
++        print(json.dumps({'fault': failure.fault}), flush=True)
++        raise failure from error
++    finally:
++        try:
++            sharing_retry(lambda: temporary.unlink(missing_ok=True), deadline)
++        except OSError as error:
++            if failure is None:
++                raise SharedJSONWriteFailed(temporary, error) from error
++            failure.add_note('Own temporary cleanup failed: %s: %s' % (temporary, error))
++
++
++class MonitorFailed(RuntimeError):
++    def __init__(self, detail):
++        super().__init__(detail)
++        self.fault = {'code': 'xt_monitor_failed', 'detail': detail, 'fatal': True,
++                      'recoverable': False, 'stage': 'heartbeat_read'}
++
++
++def read_heartbeat(path, token, previous):
++    """A read miss never renews a previously validated absolute deadline."""
++    initial_deadline = time.monotonic() + 2.
++    while True:
++        try:
++            heartbeat = json.loads(Path(path).read_text())
++        except (OSError, ValueError) as error:
++            if isinstance(error, OSError) and not isinstance(error, FileNotFoundError) \
++                    and error.errno not in (errno.EACCES, errno.EPERM, errno.EBUSY, errno.ETXTBSY):
++                raise MonitorFailed('Heartbeat read failed: ' + str(error)) from error
++            if previous is not None:
++                return previous
++            if time.monotonic() >= initial_deadline:
++                raise MonitorFailed('No valid initial heartbeat within bounded read window: ' + str(error)) from error
++            time.sleep(.025)
++            continue
++        if not isinstance(heartbeat, dict) or heartbeat.get('token') != token:
++            raise MonitorFailed('Heartbeat token/schema mismatch')
++        expiry = heartbeat.get('expires_unix')
++        if not isinstance(expiry, (int, float)) or not math.isfinite(expiry):
++            raise MonitorFailed('Heartbeat expiry is not a finite timestamp')
++        return heartbeat
+ 
+ 
+ def create_short_temp(token):
+@@ -383,14 +456,16 @@ def main():
+              'supervisor_pid': os.getpid(), 'processes': [], 'services': {},
+              'gpu_budget': manifest['gpu_budget'],
+              'reference_denoising': 'Demucs upstream; DeepFilterNet disabled'}
++    last_valid_heartbeat = None
+     def check(*, admission=False):
++        nonlocal last_valid_heartbeat
+         if stopping:
+             raise RuntimeError(stopping[0])
+         stop = Path(manifest['stop_path'])
+         if stop.exists() and json.loads(stop.read_text()).get('token') == manifest['token']:
+             raise RuntimeError('stop_requested')
+-        heartbeat = json.loads(Path(manifest['heartbeat_path']).read_text())
+-        if heartbeat.get('token') != manifest['token'] or time.time() > float(heartbeat.get('expires_unix', 0)):
++        last_valid_heartbeat = read_heartbeat(manifest['heartbeat_path'], manifest['token'], last_valid_heartbeat)
++        if time.time() > float(last_valid_heartbeat['expires_unix']):
+             raise RuntimeError('resource:Windows lease heartbeat expired')
+         owned = owned_processes(manifest['token'], known)
+         state['processes'] = list(owned.values())
+@@ -489,7 +564,7 @@ def main():
+             time.sleep(1.0)
+     except BaseException as error:
+         reason = '%s: %s' % (type(error).__name__, error)
+-        if isinstance(error, (GPUBudgetInsufficient, MTGGUFUnsupported, IPCPathTooLong)):
++        if isinstance(error, (GPUBudgetInsufficient, MTGGUFUnsupported, IPCPathTooLong, SharedJSONWriteFailed, MonitorFailed)):
+             state['fault'] = error.fault
+     finally:
+         confirmed, processes, gpu = cleanup(manifest, known)
+diff --git a/relay/xt_services.py b/relay/xt_services.py
+index 221ad5e..6c32a56 100644
+--- a/relay/xt_services.py
++++ b/relay/xt_services.py
+@@ -30,11 +30,40 @@ def _linux_path(path):
+     return '/mnt/' + value[0].lower() + value[2:]
+ 
+ 
++def _sharing_retry(operation, deadline):
++    delay, attempts = .025, 0
++    while True:
++        try:
++            attempts += 1
++            return operation()
++        except OSError as error:
++            remaining = deadline - time.monotonic()
++            transient = getattr(error, 'winerror', None) in (5, 32, 33)
++            if not transient or remaining <= 0:
++                error.xt_io_attempts = attempts
++                raise
++            time.sleep(min(delay, remaining))
++            delay = min(.2, delay * 2)
++
++
+ def _write_json(path, value):
+     path = Path(path)
+     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+-    temporary.write_text(json.dumps(value, sort_keys=True), encoding='utf-8')
+-    os.replace(temporary, path)
++    payload = json.dumps(value, sort_keys=True)
++    deadline, failure = time.monotonic() + 2., None
++    try:
++        _sharing_retry(lambda: temporary.write_text(payload, encoding='utf-8'), deadline)
++        _sharing_retry(lambda: os.replace(temporary, path), deadline)
++    except BaseException as error:
++        failure = error
++        raise
++    finally:
++        try:
++            _sharing_retry(lambda: temporary.unlink(missing_ok=True), deadline)
++        except OSError as error:
++            if failure is None:
++                raise
++            failure.add_note('Own temporary cleanup failed: %s: %s' % (temporary, error))
+ 
+ 
+ class XTServices:
+@@ -78,9 +107,19 @@ class XTServices:
+     def _status(self, run):
+         try:
+             data = json.loads(run['status'].read_text(encoding='utf-8'))
+-        except (OSError, ValueError):
+-            return {}
+-        return data if data.get('token') == run['token'] else {}
++        except OSError as error:
++            if not isinstance(error, FileNotFoundError) and getattr(error, 'winerror', None) not in (5, 32, 33):
++                raise MovieConfigurationError('xt_monitor_failed', 'Supervisor status read: ' + str(error)) from error
++            return dict(run.get('last_valid_status', {}))
++        except ValueError:
++            return dict(run.get('last_valid_status', {}))
++        if not isinstance(data, dict) or data.get('token') != run['token']:
++            raise MovieConfigurationError('xt_monitor_failed', 'Supervisor status token/schema mismatch')
++        updated = data.get('updated_unix')
++        if not isinstance(updated, (int, float)) or not math.isfinite(updated):
++            raise MovieConfigurationError('xt_monitor_failed', 'Supervisor status timestamp is invalid')
++        run['last_valid_status'] = data
++        return dict(data)
+ 
+     def health(self):
+         """Read-only status; never starts WSL, queries a model or refreshes a heartbeat."""
+@@ -293,13 +332,39 @@ class XTServices:
+         return manifest, endpoints, python, linux_vendor
+ 
+     def _heartbeat(self, run):
+-        run['view'].check()
+-        _write_json(run['heartbeat'], {'token': run['token'], 'expires_unix': time.time() + 10.0})
++        try:
++            run['view'].check()
++        except MovieFault:
++            raise
++        except Exception as error:
++            # Only the actual lease-check boundary may classify its named ended
++            # exceptions as resource loss; arbitrary monitor exceptions are fatal.
++            if type(error).__name__ in ('ViewEnded', 'LeasePreempted') and getattr(error, 'event', None) is not None:
++                raise MovieResourceWait('xt_lease_ended', str(error)) from error
++            raise MovieConfigurationError('xt_monitor_failed', 'lease check: %s: %s' % (type(error).__name__, error)) from error
++        try:
++            _write_json(run['heartbeat'], {'token': run['token'], 'expires_unix': time.time() + 10.0})
++        except OSError as error:
++            raise MovieConfigurationError('xt_heartbeat_write_failed', json.dumps({
++                'path': str(run['heartbeat']), 'error': str(error), 'errno': error.errno,
++                'winerror': getattr(error, 'winerror', None), 'attempts': getattr(error, 'xt_io_attempts', 1),
++                'notes': getattr(error, '__notes__', [])})) from error
+ 
+     def ensure(self, owner):
+         with self._lock:
+             if self._closed:
+                 raise MovieConfigurationError('xt_services_closed', 'XTServices is closed')
++            if self._run is not None and self._failure is not None:
++                previous = self._run
++                try:
++                    self._cleanup(previous, 'previous_generation_failed')
++                except BaseException as error:
++                    if not previous['released']:
++                        self._failure = MovieConfigurationError('xt_previous_generation_unconfirmed', str(error))
++                        raise self._failure from error
++                if self._run is not None or not previous['released']:
++                    self._failure = MovieConfigurationError('xt_previous_generation_unconfirmed', 'Prior Linux generation is not confirmed cleaned')
++                    raise self._failure
+             if self._failure:
+                 if isinstance(self._failure, MovieResourceWait) and self._run is None:
+                     self._failure = None  # prior Linux generation was confirmed cleaned
+@@ -323,7 +388,8 @@ class XTServices:
+                 run = {'token': token, 'folder': folder, 'status': folder / 'status.json',
+                        'heartbeat': folder / 'heartbeat.json', 'manifest': manifest_path, 'endpoints': endpoints,
+                        'python': python, 'vendor': vendor, 'view': view, 'popen': None, 'released': False,
+-                       'stop_monitor': threading.Event(), 'log': None, 'owner': owner}
++                       'stop_monitor': threading.Event(), 'log': None, 'owner': owner,
++                       'started_unix': time.time(), 'last_valid_status': {}}
+                 self._run = run
+                 try:
+                     self._heartbeat(run)
+@@ -337,8 +403,14 @@ class XTServices:
+                     if hasattr(view, 'report_resident'):
+                         view.report_resident(run['popen'].pid, None)
+                     threading.Thread(target=self._monitor, args=(run,), daemon=True, name='xt-lease-watchdog').start()
+-                except BaseException:
+-                    self._cleanup(run, 'startup_failed')
++                except BaseException as error:
++                    try:
++                        self._cleanup(run, 'startup_failed')
++                    except BaseException as cleanup_error:
++                        if isinstance(error, MovieFault) and error.fault_kind == 'fatal':
++                            error.add_note('Cleanup remains unconfirmed: ' + str(cleanup_error))
++                        else:
++                            raise self._failure or cleanup_error
+                     raise
+         deadline = time.monotonic() + 4 * float(self._value('xt_start_timeout_seconds', 600)) + 30
+         try:
+@@ -353,7 +425,7 @@ class XTServices:
+                     return dict(run['endpoints'])
+                 if status.get('phase') == 'stopped' or (run['popen'] and run['popen'].poll() is not None):
+                     fault = status.get('fault') or {}
+-                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long'):
++                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long', 'xt_monitor_failed'):
+                         raise MovieConfigurationError(fault['code'], fault['detail'])
+                     reason = status.get('reason', 'Linux supervisor exited without ready')
+                     if 'resource:' in reason:
+@@ -362,8 +434,14 @@ class XTServices:
+                 if time.monotonic() >= deadline:
+                     raise MovieConfigurationError('xt_startup_timeout', 'XT services did not become healthy in the bounded load window')
+                 run['stop_monitor'].wait(.2)
+-        except BaseException:
+-            self._cleanup(run, 'ensure_failed_or_cancelled')
++        except BaseException as error:
++            try:
++                self._cleanup(run, 'ensure_failed_or_cancelled')
++            except BaseException as cleanup_error:
++                if isinstance(error, MovieFault) and error.fault_kind == 'fatal':
++                    error.add_note('Cleanup remains unconfirmed: ' + str(cleanup_error))
++                else:
++                    raise self._failure or cleanup_error
+             raise
+ 
+     def _monitor(self, run):
+@@ -379,23 +457,49 @@ class XTServices:
+                 if status.get('phase') == 'stopped':
+                     reason = status.get('reason', 'XT Linux services stopped')
+                     fault = status.get('fault') or {}
+-                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long'):
++                    if fault.get('code') in ('xt_gpu_budget_insufficient', 'xt_mt_gguf_unsupported', 'xt_ipc_path_too_long', 'xt_monitor_failed'):
+                         self._failure = MovieConfigurationError(fault['code'], fault['detail'])
+                     else:
+                         self._failure = MovieResourceWait('xt_resource_yield', reason) if 'resource:' in reason \
+                             else MovieConfigurationError('xt_service_failed', reason)
+                     self._cleanup(run, 'service_stopped')
+                     return
+-                if status and time.time() - float(status.get('updated_unix', 0)) > 15:
+-                    raise MovieResourceWait('xt_supervisor_stale', 'Linux supervisor status heartbeat is stale')
++                valid_status = dict(run['last_valid_status'])
++                has_status = bool(valid_status)
++                status_limit = 15. if has_status else float(self._value('xt_supervisor_first_status_seconds', 90))
++                status_age = time.time() - float(valid_status['updated_unix'] if has_status else run['started_unix'])
++                if status_age > status_limit:
++                    raise MovieConfigurationError('xt_monitor_failed', json.dumps({
++                        'phase': 'stale' if has_status else 'first_status',
++                        'age_seconds': status_age, 'limit_seconds': status_limit,
++                        'detail': 'Linux supervisor status deadline exceeded; no evidence of lease preemption'}))
+                 if hasattr(run['view'], 'report_resident') and run['popen']:
+                     run['view'].report_resident(run['popen'].pid, (status.get('gpu') or {}).get('owned_mib'))
+             except BaseException as error:
+-                self._failure = error if isinstance(error, MovieFault) else MovieResourceWait('xt_lease_ended', str(error))
++                self._failure = error if isinstance(error, MovieFault) else MovieConfigurationError(
++                    'xt_monitor_failed', '%s: %s' % (type(error).__name__, error))
++                original_failure = self._failure
++                diagnostic = {'token': run['token'], 'unix': time.time(), 'fault': original_failure.record(),
++                              'exception': type(error).__name__, 'notes': getattr(error, '__notes__', [])}
++                try:
++                    _write_json(run['folder'] / 'monitor-failure.json', diagnostic)
++                except Exception as receipt_error:
++                    original_failure.add_note('Monitor failure receipt could not be written: ' + str(receipt_error))
++                    if run.get('log'):
++                        try:
++                            run['log'].write((json.dumps(diagnostic) + '\n').encode('utf-8'))
++                        except (OSError, ValueError):
++                            pass
+                 try:
+                     self._cleanup(run, 'lease_or_supervisor_yield')
+                 except BaseException as cleanup_error:
+-                    self._failure = cleanup_error
++                    if self._failure.fault_kind == 'fatal':
++                        self._failure.add_note('Cleanup remains unconfirmed: ' + str(cleanup_error))
++                    elif original_failure.fault_kind == 'fatal':
++                        original_failure.add_note('Cleanup remains unconfirmed: ' + str(cleanup_error))
++                    else:
++                        self._failure = cleanup_error if isinstance(cleanup_error, MovieFault) else MovieConfigurationError(
++                            'xt_monitor_failed', 'cleanup: ' + str(cleanup_error))
+                 return
+ 
+     def _cleanup(self, run, reason):
+@@ -403,8 +507,21 @@ class XTServices:
+             if run['released']:
+                 return
+             run['stop_monitor'].set()
+-            _write_json(run['folder'] / 'stop.json', {'token': run['token'], 'reason': reason})
+-            deadline = time.monotonic() + 25
++            stop_error = None
++            try:
++                _write_json(run['folder'] / 'stop.json', {'token': run['token'], 'reason': reason})
++            except Exception as error:
++                stop_error = MovieConfigurationError('xt_monitor_failed', 'stop.json write failed: ' + str(error))
++                run['stop_write_failure'] = stop_error.record()
++                if self._failure is None or self._failure.fault_kind != 'fatal':
++                    self._failure = stop_error
++                if run.get('log'):
++                    try:
++                        run['log'].write((json.dumps({'token': run['token'], 'stop_write_failure': stop_error.record()}) + '\n').encode('utf-8'))
++                    except (OSError, ValueError):
++                        pass
++            # A stop-file I/O failure must still reach explicit owned cleanup.
++            deadline = time.monotonic() + (0 if stop_error else 25)
+             while time.monotonic() < deadline:
+                 status = self._status(run)
+                 if status.get('cleanup_confirmed') is True and (run['popen'] is None or run['popen'].poll() is not None):
+@@ -436,6 +553,8 @@ class XTServices:
+                 run['log'].close()
+             if self._run is run:
+                 self._run = None
++            if stop_error:
++                raise self._failure
+ 
+     def idle_check(self):
+         with self._lock:

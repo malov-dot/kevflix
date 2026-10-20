@@ -21,6 +21,8 @@ from .quality import separation_report
 from .speakers import SpeakerBank, cue_speaker, diarize
 from .speech import Speech
 from .store import Store
+from . import actor_beta_hook as _beta
+from . import demucs_bed_parent as _bed
 
 
 def cue_id(cue):
@@ -45,7 +47,38 @@ def pcm_write(path, data, frames):
     return gain
 
 
-def process_chunk(config, store, job_id, index, owner):
+def context_seconds(config):
+    """Observed context around each chunk; finite and non-negative.
+
+    Natural-short eligibility already demands continuation-gap context at
+    every analysis edge, so a small value only makes keeps rarer.
+    """
+    value = config["context_seconds"]
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+        raise ValueError("context_seconds must be a finite non-negative number of seconds")
+    return float(value)
+
+
+def legacy_refusal(config, store, job_id, spec):
+    """Why the whole-window Demucs path must not process this job, or None.
+
+    That path downmixes with -ac 2, removes every vocal and never reads
+    kept-original decisions, so it must never touch cinematic actor work,
+    independently of the engine fingerprint.
+    """
+    if spec.get("speech_engine", config["speech_engine"]) == "actor":
+        return "A cinematic actor job cannot use the legacy separation path"
+    if store.protected_originals(job_id, -1e18, 1e18):
+        return "Job has kept-original decisions; the legacy separation path cannot honour them"
+    if any(row["payload"].get("ledger_version") is not None
+           for row in store.utterances(job_id, -1e18, 1e18)):
+        return "Job has canonical actor takes; the legacy separation path cannot reuse them"
+    return None
+
+
+def process_chunk(config, store, job_id, index, owner, actor_pipeline=None):
+    if config['speech_engine'] == 'actor':
+        return process_actor_chunk(config,store,job_id,index,owner,actor_pipeline)
     import numpy as np
     import soundfile as sf
     started = time.monotonic()
@@ -53,6 +86,10 @@ def process_chunk(config, store, job_id, index, owner):
     if not job or job["state"] == "cancelled":
         raise Cancelled("Job is cancelled")
     spec = job["payload"]
+    refusal = legacy_refusal(config, store, job_id, spec)
+    if refusal:
+        raise ValueError(refusal)
+    context = context_seconds(config)
     if fingerprint(spec["source"]) != spec["source_fingerprint"]:
         raise ValueError("Source media changed; create a new job")
     if config.engine_fingerprint() != spec["engine_fingerprint"]:
@@ -61,8 +98,8 @@ def process_chunk(config, store, job_id, index, owner):
         raise ValueError("Subtitle file changed; create a new job")
     chunk = store.chunk(job_id, index)["payload"]
     begin, end = chunk["start"], chunk["end"]
-    origin = max(0.0, begin - float(config["context_seconds"]))
-    stop = min(spec["duration"], end + float(config["context_seconds"]))
+    origin = max(0.0, begin - context)
+    stop = min(spec["duration"], end + context)
     directory = config.cache / job_id / f"chunk-{index:06d}"
     directory.mkdir(parents=True, exist_ok=True)
     revision = int(spec.get("revision", 1))
@@ -94,7 +131,9 @@ def process_chunk(config, store, job_id, index, owner):
     original, rate = sf.read(str(original_path), dtype="float32", always_2d=True)
     if rate != RATE or original.shape[1] != CHANNELS:
         raise ValueError("Decoded source format differs from the streaming contract")
-    device = choose_device(config)
+    # Recognition, separation and translation remain CPU-only. Actor cloning
+    # has its own separately admitted native GPU session.
+    device = 'cpu'
     tools = LanguageTools(config, device)
     progress("recognizing-language")
     transcription, spoken = tools.speech(original_path)
@@ -264,6 +303,110 @@ def process_chunk(config, store, job_id, index, owner):
               "cues": cues, "utterances": rendered, "quality": quality, "issues": issues,
               "mode": "English-dub", "output_gain": gain, "device": device}
     return checkpoint(result, "needs_review" if issues else "ready")
+
+
+def final_chunk(spec,index):
+    """True for the job's last chunk (index chunks_total-1), whose render range ends at the container duration."""
+    total=spec.get('chunks_total')
+    return isinstance(total,int) and not isinstance(total,bool) and total>0 and int(index)==total-1
+
+
+def rendered_end(chunk,result,final):
+    """End of the render range ActorPipeline used: chunk['end'], or on the final chunk only the exact decoded audio
+    end it reported (render_start < report render_end < chunk end). Anything else keeps chunk['end']."""
+    value=result.get('render_end') if final else None
+    if isinstance(value,(int,float)) and not isinstance(value,bool) and chunk['start']<value<chunk['end']:
+        return float(value)
+    return chunk['end']
+
+
+def process_actor_chunk(config,store,job_id,index,owner,pipeline=None):
+    """Keep the original channel layout until cinematic dialogue replacement."""
+    from .actor_pipeline import ActorPipeline
+    job=store.job(job_id)
+    if not job or job['state']=='cancelled':raise Cancelled('Job is cancelled')
+    spec=job['payload'];chunk=store.chunk(job_id,index)['payload']
+    # Jobs created before the engine was recorded fall back to the fingerprint check.
+    if spec.get('speech_engine','actor')!='actor':
+        raise ValueError('This job was created for another speech engine; create a new job')
+    context=context_seconds(config)
+    if fingerprint(spec['source'])!=spec['source_fingerprint'] or config.engine_fingerprint()!=spec['engine_fingerprint']:
+        raise ValueError('Source or engine changed; create a new job')
+    if spec.get('subtitles') and fingerprint(spec['subtitles'])!=spec.get('subtitle_fingerprint'):
+        raise ValueError('Subtitles changed; create a new job')
+    origin=max(0,chunk['start']-context)
+    end=min(spec['duration'],chunk['end']+context)
+    directory=config.cache/job_id/f'chunk-{index:06d}'
+    directory.mkdir(parents=True,exist_ok=True)
+    # The ffprobe stream the job selected supplies the source layout evidence;
+    # ActorPipeline also checks the decoded WAV header against it.
+    audio_stream=next((s for s in spec['media']['streams'] if s.get('index')==spec['audio_index']),None)
+    if audio_stream is None or audio_stream.get('codec_type','audio')!='audio':
+        raise ValueError('The selected audio stream is missing from the probed media')
+    channels=int(audio_stream.get('channels',0))
+    if channels not in (1,2,6) or (channels==6 and audio_stream.get('channel_layout') not in ('5.1','5.1(side)')):
+        raise ValueError('The actor path requires a known mono, stereo or 5.1 layout')
+    original=directory/'original-layout.wav'
+    store.event(job_id,'stage',chunk=index,stage='cinematic-actor-dubbing')
+    # Preserve the selected stream's own channel order: a forced -ac 6 would
+    # remap 5.1(side) to the 5.1 default. extract_audio verifies the WAV mask.
+    layout=audio_stream['channel_layout'] if channels==6 else {1:'mono',2:'stereo'}[channels]
+    extract_audio(config,owner,spec['source'],spec['audio_index'],origin,end-origin,original,
+                  channels=channels,preserve_layout=layout)
+    # Window-bounded captions with provenance (captions.subtitle_source); caption_source keeps its legacy string.
+    from .embedded_subtitles import chunk_captions, spec_choice
+    captions,caption_source=chunk_captions(config,owner,spec,origin,end,directory)
+    # firstpass-runtime-glue-v2: B caption targets receive the job's subtitle choice; flag off keeps the old call.
+    _caption=(config.data if hasattr(config,'data') else config).get('actor_beta')
+    caption_kwargs=({'subtitle_choice':spec_choice(spec)} if isinstance(_caption,dict) and _caption.get('enabled') is True
+                    and _caption.get('caption_targets') is True else {})
+    owned=pipeline is None
+    if owned:pipeline=ActorPipeline(config)
+    # The movie's last chunk: ActorPipeline may end its render range at the exact decoded audio end.
+    final=final_chunk(spec,index)
+    try:
+        result=pipeline.process(original,origin,captions,directory,store,job_id,owner,
+                                render_start=chunk['start'],render_end=chunk['end'],revision=spec.get('revision',1),
+                                source_channel_layout=dict(audio_stream),
+                                source_identity={'source_fingerprint':spec['source_fingerprint'],
+                                                 'audio_index':spec['audio_index']},final_window=final,**caption_kwargs)
+    finally:
+        if owned:pipeline.close()
+    owner.check()
+    current=store.job(job_id)
+    if current['state']=='cancelled' or current['payload'].get('revision',1)!=spec.get('revision',1):
+        raise Cancelled('Job changed during actor processing')
+    # The chunk's recorded timeline is the render range the pipeline actually used: chunk['end'], or on the final
+    # chunk only, the exact decoded audio end it reported. english.wav, the receipt and the store agree on it.
+    chunk_end=rendered_end(chunk,result,final)
+    result=_beta.unattended_window(config,result,original)
+    if result.get('audio'):
+        ready=directory/'english.wav'
+        owner.run([config['ffmpeg'],'-hide_banner','-loglevel','error','-nostdin','-ss',str(chunk['start']-origin),
+            '-i',result['audio'],'-t',str(chunk_end-chunk['start']),'-ar',RATE,'-ac',CHANNELS,'-c:a','pcm_s16le','-y',ready])
+        result.update(audio=str(ready),sha256=file_hash(ready))
+        # firstpass-runtime-glue-v1: never Demucs twice; stdlib check before the post-ready cleanup.
+        _demucs=(config.data if hasattr(config,'data') else config).get('actor_beta')
+        if (isinstance(_demucs,dict) and _demucs.get('enabled') is True and _demucs.get('demucs_first_pass') is True
+                and _demucs.get('demucs_mix_bed') is True):
+            raise ValueError('actor_beta.demucs_first_pass and demucs_mix_bed are mutually exclusive')
+        # Opt-in actor_beta.demucs_mix_bed: owned child remixes the bed only; flag off returns result unchanged.
+        result=_bed.after_ready(config,result,original,directory,ready,owner,store=store,job_id=job_id,
+                                revision=spec.get('revision',1))
+    result.update(revision=spec.get('revision',1),chunk=index,start=chunk['start'],end=chunk_end,
+                  source_fingerprint=spec['source_fingerprint'],subtitle_source=caption_source,
+                  mode=result.get('mode','actor-English-candidate'))
+    # Construction does not establish dialogue removal or actor fidelity.
+    passthrough=result.get('state')=='ready' and result.get('mode')=='no-dialogue'
+    result['quality']={'machine_checks_passed':passthrough,'issues':result['issues'],
+                       'human_listening_acceptance':False,'scope':'Cinematic actor candidate pending real-scene acceptance'}
+    result['pipeline_state']=result.pop('state','needs_review')
+    state='ready' if passthrough else 'waiting_resources' if result['pipeline_state']=='waiting_resources' else 'needs_review'
+    state=_beta.unattended_state(config,result,state)
+    atomic_json(directory/'receipt.json',result)
+    store.update_chunk(job_id,index,state,**result)
+    store.event(job_id,'chunk',chunk=index,state=state)
+    return result
 
 
 def main():

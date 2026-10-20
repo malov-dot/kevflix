@@ -1,0 +1,9 @@
+r73 bounded startup text-normalizer warmup, 2026-10-18.
+
+Only translator/server/xvoice/server.py implementation changed. XVoiceRuntime._load_models imports the actual normalize_text_for_lang symbol from utils_infer and, after the existing model/CUDA checks, calls normalize_text_for_lang('warm up', cfg.gen_lang or 'en', self.normalizer_cache). It uses the same in-memory cache as normal synthesis. Startup duration and language are logged and included in health's normalizer_warmup with scope=text-normalization-only and audio_generated=false. Lifespan assigns app.state.runtime only after this completes.
+
+The existing helper can use fallback after a missing TextNormalizer import, and TextNormalizer._init_language_processor can return None after a caught exception. Those upstream fallbacks remain accepted. Health truthfully records call_completed, normalizer_available, compiled and fallback_used; processor=None means compiled=false/fallback_used=true. Actual raised exceptions propagate after timed logging, and an unexpected empty/non-string result fails startup. No extra processor/cache readiness gate remains. No persistent cache/config was added, and no TTS synthesis/output/journal credit is created.
+
+Root's CPU diagnostic must retain production XVOICE_AUTO_DETECT_LANG=0. A full utils_infer import intentionally asserts CUDA after its dependencies; a GPU-disabled check can report dependency coverage and the expected guard separately, never full-import success. This worker did not run that diagnostic or change the guard.
+
+Baseline r73-xvoice-server.py.txt and P17b-normalizer-warmup.patch saved; provenance refreshed. No tests/imports/builds/apps/models or warmup executed by this worker. Actual startup warmup duration/pass remains unverified until root runs the authorized application.

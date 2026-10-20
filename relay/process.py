@@ -50,6 +50,16 @@ class ProcessOwner:
         for child in children:
             self.terminate(child)
 
+    def register(self,child):
+        """Register an interactive owned worker for the same cancellation tree."""
+        with self._lock:self._children.add(child)
+        if self.cancelled.is_set():
+            self.terminate(child)
+            self.check()
+
+    def unregister(self,child):
+        with self._lock:self._children.discard(child)
+
     def run(self, argv, *, timeout=1800, input_data=None, env=None, cwd=None):
         self.check()
         kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}

@@ -1,0 +1,10 @@
+{
+  "name": "x-transformers",
+  "version": "1.31.14",
+  "requires_python": null,
+  "requires_dist": [
+    "torch>=2.0",
+    "einops>=0.8.0"
+  ],
+  "source_url": "https://pypi.org/pypi/x-transformers/1.31.14/json"
+}

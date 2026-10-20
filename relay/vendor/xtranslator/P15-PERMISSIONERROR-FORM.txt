@@ -1,0 +1,7 @@
+r68 / 0.4.25 bounded source correction, 2026-10-18.
+
+Root reports T184730Z stopped before translation when Path.read_text(status.json) raised PermissionError(errno13) without winerror. The prior intended transient-read policy recognized only Windows winerror forms and therefore incorrectly made this immediate xt_monitor_failed. Existing evidence remains unchanged; no new test is authorized or run here.
+
+Only relay/xt_services.py implementation changes: shared _sharing_error predicate recognizes WinError5/32/33 OR, only when winerror is absent, PermissionError with errno EACCES/EPERM. Both _status's cached-read fallback and _sharing_retry's bounded file-write/replace/unlink operations use this exact predicate. Other OSError types/codes remain fatal. Persistent status failure still reaches the existing first-status90s or subsequent15s fatal deadline; cached timestamps never advance on read failure. Writes retain the same2s retry cap, original10s heartbeat expiry, unique-temp cleanup and typed fatal exhaustion.
+
+No supervisor/model/controller/port/budget/deadline changes. Baseline r68-xt_services.py.txt and P15-permissionerror-form.patch saved; provenance refreshed. Source reads/diff/hashes only, no tests/imports/build/apps/models.

@@ -1,0 +1,9 @@
+{
+  "repository": "https://github.com/nltk/nltk_data",
+  "revision": "550b6625bcef1f2abff2ff770a5a0d272c9c6b2a",
+  "path": "packages/corpora/cmudict.zip",
+  "bytes": 896069,
+  "git_blob_sha1": "48f1d64a431c474142969a793dfcffe3a2fc877b",
+  "download_url": "https://raw.githubusercontent.com/nltk/nltk_data/550b6625bcef1f2abff2ff770a5a0d272c9c6b2a/packages/corpora/cmudict.zip",
+  "index_record": "<package id=\"cmudict\" name=\"The Carnegie Mellon Pronouncing Dictionary (0.6)\" webpage=\"ftp://ftp.cs.cmu.edu/project/speech/dict/\" copyright=\"Copyright 1998 Carnegie Mellon University\" license=\"Use of this dictionary, for any research or commercial purpose, is completely unrestricted.  If you use or redistribute this material, we would appreciate acknowlegement of its origin.\" unzip=\"1\" unzipped_size=\"3824638\" size=\"896069\" checksum=\"58f743ff818b983b89ef9302b509fc41\" sha256_checksum=\"d07cca47fd72ad32ea9d8ad1219f85301eeaf4568f8b6b73747506a71fb5afd6\" subdir=\"corpora\" url=\"https://raw.githubusercontent.com/nltk/nltk_data/gh-pages/packages/corpora/cmudict.zip\" />"
+}

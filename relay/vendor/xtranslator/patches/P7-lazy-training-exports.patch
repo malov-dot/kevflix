@@ -1,0 +1,42 @@
+diff --git a/xvoice/src/x_voice/model/__init__.py b/xvoice/src/x_voice/model/__init__.py
+index fc3a9d2..71b4d6e 100644
+--- a/xvoice/src/x_voice/model/__init__.py
++++ b/xvoice/src/x_voice/model/__init__.py
+@@ -3,7 +3,17 @@ from x_voice.model.backbones.mmdit import MMDiT
+ from x_voice.model.backbones.unett import UNetT
+ from x_voice.model.cfm import CFM
+ from x_voice.model.cfm_sft import CFM_SFT
+-from x_voice.model.trainer import Trainer
+-from x_voice.model.trainer_sft import Trainer_SFT
+ 
+ __all__ = ["CFM", "CFM_SFT", "UNetT", "DiT", "MMDiT", "Trainer", "Trainer_SFT"]
++
++
++def __getattr__(name):
++    # Inference must not import training-only datasets/wandb/accelerate. Preserve
++    # the upstream trainer API for callers that explicitly request training.
++    if name == "Trainer":
++        from x_voice.model.trainer import Trainer
++        return Trainer
++    if name == "Trainer_SFT":
++        from x_voice.model.trainer_sft import Trainer_SFT
++        return Trainer_SFT
++    raise AttributeError(name)
+diff --git a/xvoice/src/rate_pred/model/__init__.py b/xvoice/src/rate_pred/model/__init__.py
+index dfb28bb..815caff 100644
+--- a/xvoice/src/rate_pred/model/__init__.py
++++ b/xvoice/src/rate_pred/model/__init__.py
+@@ -1,4 +1,10 @@
+ from .speed_predictor import SpeedPredictor
+-from .trainer import Trainer
+ 
+-__all__ = ["Trainer", "SpeedPredictor"]
+\ No newline at end of file
++__all__ = ["Trainer", "SpeedPredictor"]
++
++
++def __getattr__(name):
++    if name == "Trainer":
++        from .trainer import Trainer
++        return Trainer
++    raise AttributeError(name)

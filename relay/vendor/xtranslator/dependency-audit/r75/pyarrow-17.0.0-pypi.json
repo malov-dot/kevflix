@@ -1,0 +1,997 @@
+{
+  "info": {
+    "author": null,
+    "author_email": null,
+    "bugtrack_url": null,
+    "classifiers": [
+      "License :: OSI Approved :: Apache Software License",
+      "Programming Language :: Python :: 3.10",
+      "Programming Language :: Python :: 3.11",
+      "Programming Language :: Python :: 3.12",
+      "Programming Language :: Python :: 3.8",
+      "Programming Language :: Python :: 3.9"
+    ],
+    "description": "<!---\n  Licensed to the Apache Software Foundation (ASF) under one\n  or more contributor license agreements.  See the NOTICE file\n  distributed with this work for additional information\n  regarding copyright ownership.  The ASF licenses this file\n  to you under the Apache License, Version 2.0 (the\n  \"License\"); you may not use this file except in compliance\n  with the License.  You may obtain a copy of the License at\n\n    http://www.apache.org/licenses/LICENSE-2.0\n\n  Unless required by applicable law or agreed to in writing,\n  software distributed under the License is distributed on an\n  \"AS IS\" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY\n  KIND, either express or implied.  See the License for the\n  specific language governing permissions and limitations\n  under the License.\n-->\n\n## Python library for Apache Arrow\n\n[![pypi](https://img.shields.io/pypi/v/pyarrow.svg)](https://pypi.org/project/pyarrow/) [![conda-forge](https://img.shields.io/conda/vn/conda-forge/pyarrow.svg)](https://anaconda.org/conda-forge/pyarrow)\n\nThis library provides a Python API for functionality provided by the Arrow C++\nlibraries, along with tools for Arrow integration and interoperability with\npandas, NumPy, and other software in the Python ecosystem.\n\n## Installing\n\nAcross platforms, you can install a recent version of pyarrow with the conda\npackage manager:\n\n```shell\nconda install pyarrow -c conda-forge\n```\n\nOn Linux, macOS, and Windows, you can also install binary wheels from PyPI with\npip:\n\n```shell\npip install pyarrow\n```\n\nIf you encounter any issues importing the pip wheels on Windows, you may need\nto install the [Visual C++ Redistributable for Visual Studio 2015][6].\n\n## Development\n\nSee [Python Development][2] in the documentation subproject.\n\n### Building the documentation\n\nSee [documentation build instructions][1] in the documentation subproject.\n\n[1]: https://github.com/apache/arrow/blob/main/docs/source/developers/documentation.rst\n[2]: https://github.com/apache/arrow/blob/main/docs/source/developers/python.rst\n[3]: https://github.com/pandas-dev/pandas\n[5]: https://arrow.apache.org/docs/latest/python/benchmarks.html\n[6]: https://www.microsoft.com/en-us/download/details.aspx?id=48145\n",
+    "description_content_type": "text/markdown",
+    "docs_url": null,
+    "download_url": null,
+    "downloads": {
+      "last_day": -1,
+      "last_month": -1,
+      "last_week": -1
+    },
+    "dynamic": null,
+    "home_page": null,
+    "keywords": null,
+    "license": "Apache Software License",
+    "license_expression": null,
+    "license_files": null,
+    "maintainer": null,
+    "maintainer_email": "Apache Arrow Developers <dev@arrow.apache.org>",
+    "name": "pyarrow",
+    "package_url": "https://pypi.org/project/pyarrow/",
+    "platform": null,
+    "project_url": "https://pypi.org/project/pyarrow/",
+    "project_urls": {
+      "Documentation": "https://arrow.apache.org/docs/python",
+      "Homepage": "https://arrow.apache.org/",
+      "Issues": "https://github.com/apache/arrow/issues",
+      "Repository": "https://github.com/apache/arrow"
+    },
+    "provides_extra": [
+      "test"
+    ],
+    "release_url": "https://pypi.org/project/pyarrow/17.0.0/",
+    "requires_dist": [
+      "numpy>=1.16.6",
+      "pytest; extra == \"test\"",
+      "hypothesis; extra == \"test\"",
+      "cffi; extra == \"test\"",
+      "pytz; extra == \"test\"",
+      "pandas; extra == \"test\""
+    ],
+    "requires_python": ">=3.8",
+    "summary": "Python library for Apache Arrow",
+    "version": "17.0.0",
+    "yanked": false,
+    "yanked_reason": null
+  },
+  "last_serial": 42008971,
+  "ownership": {
+    "organization": "arrow",
+    "roles": [
+      {
+        "role": "Owner",
+        "user": "Charles.Cloud"
+      },
+      {
+        "role": "Owner",
+        "user": "brycemecum"
+      },
+      {
+        "role": "Owner",
+        "user": "jorgecarleitao"
+      },
+      {
+        "role": "Owner",
+        "user": "jorisvandenbossche"
+      },
+      {
+        "role": "Owner",
+        "user": "kszucs"
+      },
+      {
+        "role": "Owner",
+        "user": "wesm"
+      },
+      {
+        "role": "Owner",
+        "user": "xhochy"
+      },
+      {
+        "role": "Maintainer",
+        "user": "cutlerb"
+      },
+      {
+        "role": "Maintainer",
+        "user": "raulcd"
+      }
+    ]
+  },
+  "urls": [
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "395d78d4b040bc5ff2fc6c3d03e80fca396b742f6c125b8af06bcf7427f931bc",
+        "md5": "4deb625fd03a6833d976164a3c2ada6a",
+        "sha256": "a5c8b238d47e48812ee577ee20c9a2779e6a5904f1708ae240f53ecbee7c9f07"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp310-cp310-macosx_10_15_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "4deb625fd03a6833d976164a3c2ada6a",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.8",
+      "size": 28994846,
+      "upload_time": "2024-07-16T10:29:13",
+      "upload_time_iso_8601": "2024-07-16T10:29:13.082939Z",
+      "url": "https://files.pythonhosted.org/packages/39/5d/78d4b040bc5ff2fc6c3d03e80fca396b742f6c125b8af06bcf7427f931bc/pyarrow-17.0.0-cp310-cp310-macosx_10_15_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "3b738ed168db7642e91180330e4ea9f3ff8bab404678f00d32d7df0871a4933b",
+        "md5": "b5b351ffbcf1869215ccba9eba8105de",
+        "sha256": "db023dc4c6cae1015de9e198d41250688383c3f9af8f565370ab2b4cb5f62655"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp310-cp310-macosx_11_0_arm64.whl",
+      "has_sig": false,
+      "md5_digest": "b5b351ffbcf1869215ccba9eba8105de",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.8",
+      "size": 27165908,
+      "upload_time": "2024-07-16T10:29:20",
+      "upload_time_iso_8601": "2024-07-16T10:29:20.362609Z",
+      "url": "https://files.pythonhosted.org/packages/3b/73/8ed168db7642e91180330e4ea9f3ff8bab404678f00d32d7df0871a4933b/pyarrow-17.0.0-cp310-cp310-macosx_11_0_arm64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "8136e78c24be99242063f6d0590ef68c857ea07bdea470242c361e9a15bd57a4",
+        "md5": "cc76b1f67c5479042c9f275e7a0eeea2",
+        "sha256": "da1e060b3876faa11cee287839f9cc7cdc00649f475714b8680a05fd9071d545"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "cc76b1f67c5479042c9f275e7a0eeea2",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.8",
+      "size": 39264209,
+      "upload_time": "2024-07-16T10:29:27",
+      "upload_time_iso_8601": "2024-07-16T10:29:27.621083Z",
+      "url": "https://files.pythonhosted.org/packages/81/36/e78c24be99242063f6d0590ef68c857ea07bdea470242c361e9a15bd57a4/pyarrow-17.0.0-cp310-cp310-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "184c3db637d7578f683b0a8fb8999b436bdbedd6e3517bd4f90c70853cf3ad20",
+        "md5": "452ce3643cf60788294ca7795cd93c03",
+        "sha256": "75c06d4624c0ad6674364bb46ef38c3132768139ddec1c56582dbac54f2663e2"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "452ce3643cf60788294ca7795cd93c03",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.8",
+      "size": 39862883,
+      "upload_time": "2024-07-16T10:29:34",
+      "upload_time_iso_8601": "2024-07-16T10:29:34.340043Z",
+      "url": "https://files.pythonhosted.org/packages/18/4c/3db637d7578f683b0a8fb8999b436bdbedd6e3517bd4f90c70853cf3ad20/pyarrow-17.0.0-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "813c0580626896c842614a523e66b351181ed5bb14e5dfc263cd68cea2c46d90",
+        "md5": "140b0c92ad388f320bd6c32d7af814c8",
+        "sha256": "fa3c246cc58cb5a4a5cb407a18f193354ea47dd0648194e6265bd24177982fe8"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp310-cp310-manylinux_2_28_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "140b0c92ad388f320bd6c32d7af814c8",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.8",
+      "size": 38723009,
+      "upload_time": "2024-07-16T10:29:41",
+      "upload_time_iso_8601": "2024-07-16T10:29:41.123437Z",
+      "url": "https://files.pythonhosted.org/packages/81/3c/0580626896c842614a523e66b351181ed5bb14e5dfc263cd68cea2c46d90/pyarrow-17.0.0-cp310-cp310-manylinux_2_28_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "eefbc1b47f0ada36d856a352da261a44d7344d8f22e2f7db3945f8c3b81be5dd",
+        "md5": "49180ca573dea99b039b320f1e451fee",
+        "sha256": "f7ae2de664e0b158d1607699a16a488de3d008ba99b3a7aa5de1cbc13574d047"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp310-cp310-manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "49180ca573dea99b039b320f1e451fee",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.8",
+      "size": 39855626,
+      "upload_time": "2024-07-16T10:29:49",
+      "upload_time_iso_8601": "2024-07-16T10:29:49.004463Z",
+      "url": "https://files.pythonhosted.org/packages/ee/fb/c1b47f0ada36d856a352da261a44d7344d8f22e2f7db3945f8c3b81be5dd/pyarrow-17.0.0-cp310-cp310-manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "9f033768655b213afecc4ac81c6c406898f480d1cc12fd89ca2df1ed486d7221"
+      },
+      "digests": {
+        "blake2b_256": "1909b0a02908180a25d57312ab5919069c39fddf30602568980419f4b02393f6",
+        "md5": "fdbb3f1da28729bcce056b82ecdfd516",
+        "sha256": "5984f416552eea15fd9cee03da53542bf4cddaef5afecefb9aa8d1010c335087"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp310-cp310-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "fdbb3f1da28729bcce056b82ecdfd516",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.8",
+      "size": 25147242,
+      "upload_time": "2024-07-16T10:29:56",
+      "upload_time_iso_8601": "2024-07-16T10:29:56.195886Z",
+      "url": "https://files.pythonhosted.org/packages/19/09/b0a02908180a25d57312ab5919069c39fddf30602568980419f4b02393f6/pyarrow-17.0.0-cp310-cp310-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "f946ce89f87c2936f5bb9d879473b9663ce7a4b1f4359acc2f0eb39865eaa1af",
+        "md5": "66cac1bc11d6a3475e5155945e7ef35a",
+        "sha256": "1c8856e2ef09eb87ecf937104aacfa0708f22dfeb039c363ec99735190ffb977"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp311-cp311-macosx_10_15_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "66cac1bc11d6a3475e5155945e7ef35a",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.8",
+      "size": 29028748,
+      "upload_time": "2024-07-16T10:30:02",
+      "upload_time_iso_8601": "2024-07-16T10:30:02.609465Z",
+      "url": "https://files.pythonhosted.org/packages/f9/46/ce89f87c2936f5bb9d879473b9663ce7a4b1f4359acc2f0eb39865eaa1af/pyarrow-17.0.0-cp311-cp311-macosx_10_15_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "8d8ece2e9b2146de422f6638333c01903140e9ada244a2a477918a368306c64c",
+        "md5": "76c0fd6d2c78aadc8811970bdcde9fef",
+        "sha256": "2e19f569567efcbbd42084e87f948778eb371d308e137a0f97afe19bb860ccb3"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp311-cp311-macosx_11_0_arm64.whl",
+      "has_sig": false,
+      "md5_digest": "76c0fd6d2c78aadc8811970bdcde9fef",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.8",
+      "size": 27190965,
+      "upload_time": "2024-07-16T10:30:10",
+      "upload_time_iso_8601": "2024-07-16T10:30:10.718652Z",
+      "url": "https://files.pythonhosted.org/packages/8d/8e/ce2e9b2146de422f6638333c01903140e9ada244a2a477918a368306c64c/pyarrow-17.0.0-cp311-cp311-macosx_11_0_arm64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "3bc85675719570eb1acd809481c6d64e2136ffb340bc387f4ca62dce79516cea",
+        "md5": "c06bcaeb88f3b7a7ad369dc2846ddecf",
+        "sha256": "6b244dc8e08a23b3e352899a006a26ae7b4d0da7bb636872fa8f5884e70acf15"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "c06bcaeb88f3b7a7ad369dc2846ddecf",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.8",
+      "size": 39269081,
+      "upload_time": "2024-07-16T10:30:18",
+      "upload_time_iso_8601": "2024-07-16T10:30:18.878145Z",
+      "url": "https://files.pythonhosted.org/packages/3b/c8/5675719570eb1acd809481c6d64e2136ffb340bc387f4ca62dce79516cea/pyarrow-17.0.0-cp311-cp311-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "5e783931194f16ab681ebb87ad252e7b8d2c8b23dad49706cadc865dff4a1dd3",
+        "md5": "5a23853c1136dedd94d149a27d46b786",
+        "sha256": "0b72e87fe3e1db343995562f7fff8aee354b55ee83d13afba65400c178ab2597"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "5a23853c1136dedd94d149a27d46b786",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.8",
+      "size": 39864921,
+      "upload_time": "2024-07-16T10:30:27",
+      "upload_time_iso_8601": "2024-07-16T10:30:27.008483Z",
+      "url": "https://files.pythonhosted.org/packages/5e/78/3931194f16ab681ebb87ad252e7b8d2c8b23dad49706cadc865dff4a1dd3/pyarrow-17.0.0-cp311-cp311-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "d88169b6606093363f55a2a574c018901c40952d4e902e670656d18213c71ad7",
+        "md5": "37ecf0b02f3c82148c94d683c3a9d092",
+        "sha256": "dc5c31c37409dfbc5d014047817cb4ccd8c1ea25d19576acf1a001fe07f5b420"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp311-cp311-manylinux_2_28_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "37ecf0b02f3c82148c94d683c3a9d092",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.8",
+      "size": 38740798,
+      "upload_time": "2024-07-16T10:30:34",
+      "upload_time_iso_8601": "2024-07-16T10:30:34.814807Z",
+      "url": "https://files.pythonhosted.org/packages/d8/81/69b6606093363f55a2a574c018901c40952d4e902e670656d18213c71ad7/pyarrow-17.0.0-cp311-cp311-manylinux_2_28_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "4c219ca93b84b92ef927814cb7ba37f0774a484c849d58f0b692b16af8eebcfb",
+        "md5": "72844391d91752113c82b94dd01041bc",
+        "sha256": "e3343cb1e88bc2ea605986d4b94948716edc7a8d14afd4e2c097232f729758b4"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp311-cp311-manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "72844391d91752113c82b94dd01041bc",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.8",
+      "size": 39871877,
+      "upload_time": "2024-07-16T10:30:42",
+      "upload_time_iso_8601": "2024-07-16T10:30:42.672881Z",
+      "url": "https://files.pythonhosted.org/packages/4c/21/9ca93b84b92ef927814cb7ba37f0774a484c849d58f0b692b16af8eebcfb/pyarrow-17.0.0-cp311-cp311-manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "9f033768655b213afecc4ac81c6c406898f480d1cc12fd89ca2df1ed486d7221"
+      },
+      "digests": {
+        "blake2b_256": "30d163a7c248432c71c7d3ee803e706590a0b81ce1a8d2b2ae49677774b813bb",
+        "md5": "fb133f751cb7c25d37e04baa9f76dad9",
+        "sha256": "a27532c38f3de9eb3e90ecab63dfda948a8ca859a66e3a47f5f42d1e403c4d03"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp311-cp311-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "fb133f751cb7c25d37e04baa9f76dad9",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.8",
+      "size": 25151089,
+      "upload_time": "2024-07-16T10:30:49",
+      "upload_time_iso_8601": "2024-07-16T10:30:49.279645Z",
+      "url": "https://files.pythonhosted.org/packages/30/d1/63a7c248432c71c7d3ee803e706590a0b81ce1a8d2b2ae49677774b813bb/pyarrow-17.0.0-cp311-cp311-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "d462ce6ac1275a432b4a27c55fe96c58147f111d8ba1ad800a112d31859fae2f",
+        "md5": "76c8d35f13acd0ad71ea2bae67ee3a03",
+        "sha256": "9b8a823cea605221e61f34859dcc03207e52e409ccf6354634143e23af7c8d22"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp312-cp312-macosx_10_15_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "76c8d35f13acd0ad71ea2bae67ee3a03",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.8",
+      "size": 29019418,
+      "upload_time": "2024-07-16T10:30:55",
+      "upload_time_iso_8601": "2024-07-16T10:30:55.573848Z",
+      "url": "https://files.pythonhosted.org/packages/d4/62/ce6ac1275a432b4a27c55fe96c58147f111d8ba1ad800a112d31859fae2f/pyarrow-17.0.0-cp312-cp312-macosx_10_15_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "8e0adbd0c134e7a0c30bea439675cc120012337202e5fac7163ba839aa3691d2",
+        "md5": "454464f9eb514b9ce9aa1a64e984836b",
+        "sha256": "f1e70de6cb5790a50b01d2b686d54aaf73da01266850b05e3af2a1bc89e16053"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp312-cp312-macosx_11_0_arm64.whl",
+      "has_sig": false,
+      "md5_digest": "454464f9eb514b9ce9aa1a64e984836b",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.8",
+      "size": 27152197,
+      "upload_time": "2024-07-16T10:31:02",
+      "upload_time_iso_8601": "2024-07-16T10:31:02.036922Z",
+      "url": "https://files.pythonhosted.org/packages/8e/0a/dbd0c134e7a0c30bea439675cc120012337202e5fac7163ba839aa3691d2/pyarrow-17.0.0-cp312-cp312-macosx_11_0_arm64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "cb053f4a16498349db79090767620d6dc23c1ec0c658a668d61d76b87706c65d",
+        "md5": "064464461a9af1c01409e9c552a96ac9",
+        "sha256": "0071ce35788c6f9077ff9ecba4858108eebe2ea5a3f7cf2cf55ebc1dbc6ee24a"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "064464461a9af1c01409e9c552a96ac9",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.8",
+      "size": 39263026,
+      "upload_time": "2024-07-16T10:31:10",
+      "upload_time_iso_8601": "2024-07-16T10:31:10.351548Z",
+      "url": "https://files.pythonhosted.org/packages/cb/05/3f4a16498349db79090767620d6dc23c1ec0c658a668d61d76b87706c65d/pyarrow-17.0.0-cp312-cp312-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "c20cea2107236740be8fa0e0d4a293a095c9f43546a2465bb7df34eee9126b09",
+        "md5": "69b308f6b109a7d3855f852a9dbcaaa3",
+        "sha256": "757074882f844411fcca735e39aae74248a1531367a7c80799b4266390ae51cc"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "69b308f6b109a7d3855f852a9dbcaaa3",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.8",
+      "size": 39880798,
+      "upload_time": "2024-07-16T10:31:17",
+      "upload_time_iso_8601": "2024-07-16T10:31:17.66078Z",
+      "url": "https://files.pythonhosted.org/packages/c2/0c/ea2107236740be8fa0e0d4a293a095c9f43546a2465bb7df34eee9126b09/pyarrow-17.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "f6b0b9164a8bc495083c10c281cc65064553ec87b7537d6f742a89d5953a2a3e",
+        "md5": "ad84654184bf596d04b4e1beb4ecbc00",
+        "sha256": "9ba11c4f16976e89146781a83833df7f82077cdab7dc6232c897789343f7891a"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp312-cp312-manylinux_2_28_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "ad84654184bf596d04b4e1beb4ecbc00",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.8",
+      "size": 38715172,
+      "upload_time": "2024-07-16T10:31:25",
+      "upload_time_iso_8601": "2024-07-16T10:31:25.965061Z",
+      "url": "https://files.pythonhosted.org/packages/f6/b0/b9164a8bc495083c10c281cc65064553ec87b7537d6f742a89d5953a2a3e/pyarrow-17.0.0-cp312-cp312-manylinux_2_28_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "f1c49625418a1413005e486c006e56675334929fad864347c5ae7c1b2e7fe639",
+        "md5": "0653e27f9386e0530a646e1b04934e31",
+        "sha256": "b0c6ac301093b42d34410b187bba560b17c0330f64907bfa4f7f7f2444b0cf9b"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp312-cp312-manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "0653e27f9386e0530a646e1b04934e31",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.8",
+      "size": 39874508,
+      "upload_time": "2024-07-16T10:31:33",
+      "upload_time_iso_8601": "2024-07-16T10:31:33.721664Z",
+      "url": "https://files.pythonhosted.org/packages/f1/c4/9625418a1413005e486c006e56675334929fad864347c5ae7c1b2e7fe639/pyarrow-17.0.0-cp312-cp312-manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "9f033768655b213afecc4ac81c6c406898f480d1cc12fd89ca2df1ed486d7221"
+      },
+      "digests": {
+        "blake2b_256": "ae49baafe2a964f663413be3bd1cf5c45ed98c5e42e804e2328e18f4570027c1",
+        "md5": "efd5fbb25622e976fd2fd52979e0d25a",
+        "sha256": "392bc9feabc647338e6c89267635e111d71edad5fcffba204425a7c8d13610d7"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp312-cp312-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "efd5fbb25622e976fd2fd52979e0d25a",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.8",
+      "size": 25099235,
+      "upload_time": "2024-07-16T10:31:40",
+      "upload_time_iso_8601": "2024-07-16T10:31:40.893509Z",
+      "url": "https://files.pythonhosted.org/packages/ae/49/baafe2a964f663413be3bd1cf5c45ed98c5e42e804e2328e18f4570027c1/pyarrow-17.0.0-cp312-cp312-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "8dbd8f52c1d7b430260f80a349cffa2df351750a737b5336313d56dcadeb9ae1",
+        "md5": "ab052896183aca7e3fc89cf0acc82db6",
+        "sha256": "af5ff82a04b2171415f1410cff7ebb79861afc5dae50be73ce06d6e870615204"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp38-cp38-macosx_10_15_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "ab052896183aca7e3fc89cf0acc82db6",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp38",
+      "requires_python": ">=3.8",
+      "size": 28999345,
+      "upload_time": "2024-07-16T10:31:47",
+      "upload_time_iso_8601": "2024-07-16T10:31:47.495304Z",
+      "url": "https://files.pythonhosted.org/packages/8d/bd/8f52c1d7b430260f80a349cffa2df351750a737b5336313d56dcadeb9ae1/pyarrow-17.0.0-cp38-cp38-macosx_10_15_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "64d951e35550f2f18b8815a2ab25948f735434db32000c0e91eba3a32634782a",
+        "md5": "1ea20a950cb83eec2de17cdcebc35f82",
+        "sha256": "edca18eaca89cd6382dfbcff3dd2d87633433043650c07375d095cd3517561d8"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp38-cp38-macosx_11_0_arm64.whl",
+      "has_sig": false,
+      "md5_digest": "1ea20a950cb83eec2de17cdcebc35f82",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp38",
+      "requires_python": ">=3.8",
+      "size": 27168441,
+      "upload_time": "2024-07-16T10:31:53",
+      "upload_time_iso_8601": "2024-07-16T10:31:53.877881Z",
+      "url": "https://files.pythonhosted.org/packages/64/d9/51e35550f2f18b8815a2ab25948f735434db32000c0e91eba3a32634782a/pyarrow-17.0.0-cp38-cp38-macosx_11_0_arm64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "18d87161d87d07ea51be70c49f615004c1446d5723622a18b2681f7e4b71bf6e",
+        "md5": "4d974503f8a8cd72accbf0fb0bb23b6c",
+        "sha256": "7c7916bff914ac5d4a8fe25b7a25e432ff921e72f6f2b7547d1e325c1ad9d155"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "4d974503f8a8cd72accbf0fb0bb23b6c",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp38",
+      "requires_python": ">=3.8",
+      "size": 39363163,
+      "upload_time": "2024-07-17T10:40:01",
+      "upload_time_iso_8601": "2024-07-17T10:40:01.548775Z",
+      "url": "https://files.pythonhosted.org/packages/18/d8/7161d87d07ea51be70c49f615004c1446d5723622a18b2681f7e4b71bf6e/pyarrow-17.0.0-cp38-cp38-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "3f08bc497130789833de09e345e3ce4647e3ce86517c4f70f2144f0367ca378b",
+        "md5": "7aa73d560c185bd122d0fe1240717a09",
+        "sha256": "f553ca691b9e94b202ff741bdd40f6ccb70cdd5fbf65c187af132f1317de6145"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "7aa73d560c185bd122d0fe1240717a09",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp38",
+      "requires_python": ">=3.8",
+      "size": 39965253,
+      "upload_time": "2024-07-17T10:40:10",
+      "upload_time_iso_8601": "2024-07-17T10:40:10.850699Z",
+      "url": "https://files.pythonhosted.org/packages/3f/08/bc497130789833de09e345e3ce4647e3ce86517c4f70f2144f0367ca378b/pyarrow-17.0.0-cp38-cp38-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "d32e493dd7db889402b4c7871ca7dfdd20f2c5deedbff802d3eb8576359930f9",
+        "md5": "a81fe9bc5b2156b2abc320e34ed577e9",
+        "sha256": "0cdb0e627c86c373205a2f94a510ac4376fdc523f8bb36beab2e7f204416163c"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp38-cp38-manylinux_2_28_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "a81fe9bc5b2156b2abc320e34ed577e9",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp38",
+      "requires_python": ">=3.8",
+      "size": 38805378,
+      "upload_time": "2024-07-17T10:40:17",
+      "upload_time_iso_8601": "2024-07-17T10:40:17.442465Z",
+      "url": "https://files.pythonhosted.org/packages/d3/2e/493dd7db889402b4c7871ca7dfdd20f2c5deedbff802d3eb8576359930f9/pyarrow-17.0.0-cp38-cp38-manylinux_2_28_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "e6c14c6bcdf7a820034aa91a8b4d25fef38809be79b42ca7aaa16d4680b0bbac",
+        "md5": "88e4b62cd1cb8df1a484998a283dee30",
+        "sha256": "d7d192305d9d8bc9082d10f361fc70a73590a4c65cf31c3e6926cd72b76bc35c"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp38-cp38-manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "88e4b62cd1cb8df1a484998a283dee30",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp38",
+      "requires_python": ">=3.8",
+      "size": 39958364,
+      "upload_time": "2024-07-17T10:40:25",
+      "upload_time_iso_8601": "2024-07-17T10:40:25.369085Z",
+      "url": "https://files.pythonhosted.org/packages/e6/c1/4c6bcdf7a820034aa91a8b4d25fef38809be79b42ca7aaa16d4680b0bbac/pyarrow-17.0.0-cp38-cp38-manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "9f033768655b213afecc4ac81c6c406898f480d1cc12fd89ca2df1ed486d7221"
+      },
+      "digests": {
+        "blake2b_256": "d1db42ac644453cfdfc60fe002b46d647fe7a6dfad753ef7b28e99b4c936ad5d",
+        "md5": "57e8dc71001dd790c9b2e37adc3d9cfd",
+        "sha256": "02dae06ce212d8b3244dd3e7d12d9c4d3046945a5933d28026598e9dbbda1fca"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp38-cp38-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "57e8dc71001dd790c9b2e37adc3d9cfd",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp38",
+      "requires_python": ">=3.8",
+      "size": 25229211,
+      "upload_time": "2024-07-17T10:40:32",
+      "upload_time_iso_8601": "2024-07-17T10:40:32.315423Z",
+      "url": "https://files.pythonhosted.org/packages/d1/db/42ac644453cfdfc60fe002b46d647fe7a6dfad753ef7b28e99b4c936ad5d/pyarrow-17.0.0-cp38-cp38-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "43e0a898096d35be240aa61fb2d54db58b86d664b10e1e51256f9300f47565e8",
+        "md5": "8a2c8b525d8b879daeb2534130bc7609",
+        "sha256": "13d7a460b412f31e4c0efa1148e1d29bdf18ad1411eb6757d38f8fbdcc8645fb"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp39-cp39-macosx_10_15_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "8a2c8b525d8b879daeb2534130bc7609",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp39",
+      "requires_python": ">=3.8",
+      "size": 29007881,
+      "upload_time": "2024-07-17T10:40:37",
+      "upload_time_iso_8601": "2024-07-17T10:40:37.927653Z",
+      "url": "https://files.pythonhosted.org/packages/43/e0/a898096d35be240aa61fb2d54db58b86d664b10e1e51256f9300f47565e8/pyarrow-17.0.0-cp39-cp39-macosx_10_15_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "5922f7d14907ed0697b5dd488d393129f2738629fa5bcba863e00931b7975946",
+        "md5": "8633c9ac87d667b6100634d92789364c",
+        "sha256": "9b564a51fbccfab5a04a80453e5ac6c9954a9c5ef2890d1bcf63741909c3f8df"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp39-cp39-macosx_11_0_arm64.whl",
+      "has_sig": false,
+      "md5_digest": "8633c9ac87d667b6100634d92789364c",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp39",
+      "requires_python": ">=3.8",
+      "size": 27178117,
+      "upload_time": "2024-07-17T10:40:43",
+      "upload_time_iso_8601": "2024-07-17T10:40:43.964233Z",
+      "url": "https://files.pythonhosted.org/packages/59/22/f7d14907ed0697b5dd488d393129f2738629fa5bcba863e00931b7975946/pyarrow-17.0.0-cp39-cp39-macosx_11_0_arm64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "bfee661211feac0ed48467b1d5c57298c91403809ec3ab78b1d175e1d6ad03cf",
+        "md5": "735adf524e2c1f86f3524ba01e5bbc61",
+        "sha256": "32503827abbc5aadedfa235f5ece8c4f8f8b0a3cf01066bc8d29de7539532687"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "735adf524e2c1f86f3524ba01e5bbc61",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp39",
+      "requires_python": ">=3.8",
+      "size": 39273896,
+      "upload_time": "2024-07-17T10:40:51",
+      "upload_time_iso_8601": "2024-07-17T10:40:51.276916Z",
+      "url": "https://files.pythonhosted.org/packages/bf/ee/661211feac0ed48467b1d5c57298c91403809ec3ab78b1d175e1d6ad03cf/pyarrow-17.0.0-cp39-cp39-manylinux_2_17_aarch64.manylinux2014_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "af61bcd9b58e38ead6ad42b9ed00da33a3f862bc1d445e3d3164799c25550ac2",
+        "md5": "3f646e9839ec429a1a83d5e6b69b41dd",
+        "sha256": "a155acc7f154b9ffcc85497509bcd0d43efb80d6f733b0dc3bb14e281f131c8b"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "3f646e9839ec429a1a83d5e6b69b41dd",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp39",
+      "requires_python": ">=3.8",
+      "size": 39875438,
+      "upload_time": "2024-07-17T10:40:58",
+      "upload_time_iso_8601": "2024-07-17T10:40:58.500397Z",
+      "url": "https://files.pythonhosted.org/packages/af/61/bcd9b58e38ead6ad42b9ed00da33a3f862bc1d445e3d3164799c25550ac2/pyarrow-17.0.0-cp39-cp39-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "756329d1bfcc57af73cde3fc3baccab2f37548de512dbe0ab294b033cd203516",
+        "md5": "aafc1f72ead7935d89f867f4c62d6f88",
+        "sha256": "dec8d129254d0188a49f8a1fc99e0560dc1b85f60af729f47de4046015f9b0a5"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp39-cp39-manylinux_2_28_aarch64.whl",
+      "has_sig": false,
+      "md5_digest": "aafc1f72ead7935d89f867f4c62d6f88",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp39",
+      "requires_python": ">=3.8",
+      "size": 38735092,
+      "upload_time": "2024-07-17T10:41:06",
+      "upload_time_iso_8601": "2024-07-17T10:41:06.034177Z",
+      "url": "https://files.pythonhosted.org/packages/75/63/29d1bfcc57af73cde3fc3baccab2f37548de512dbe0ab294b033cd203516/pyarrow-17.0.0-cp39-cp39-manylinux_2_28_aarch64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "e30deaba38ba6c1bef6337f25a8ca7a0ce232b7f689bc4cb81467e2fe44d9989"
+      },
+      "digests": {
+        "blake2b_256": "39f490258b4de753df7cc61cefb0312f8abcf226672e96cc64996e66afce817a",
+        "md5": "bfc21aaf81bef4968ba680016820c8de",
+        "sha256": "a48ddf5c3c6a6c505904545c25a4ae13646ae1f8ba703c4df4a1bfe4f4006bda"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp39-cp39-manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "bfc21aaf81bef4968ba680016820c8de",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp39",
+      "requires_python": ">=3.8",
+      "size": 39867610,
+      "upload_time": "2024-07-17T10:41:13",
+      "upload_time_iso_8601": "2024-07-17T10:41:13.610291Z",
+      "url": "https://files.pythonhosted.org/packages/39/f4/90258b4de753df7cc61cefb0312f8abcf226672e96cc64996e66afce817a/pyarrow-17.0.0-cp39-cp39-manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": {
+        "sha256": "9f033768655b213afecc4ac81c6c406898f480d1cc12fd89ca2df1ed486d7221"
+      },
+      "digests": {
+        "blake2b_256": "e7f6b75d4816c32f1618ed31a005ee635dd1d91d8164495d94f2ea092f594661",
+        "md5": "c2be3fe2eb32b12a4ee3b9df9f64eedb",
+        "sha256": "42bf93249a083aca230ba7e2786c5f673507fa97bbd9725a1e2754715151a204"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0-cp39-cp39-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "c2be3fe2eb32b12a4ee3b9df9f64eedb",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp39",
+      "requires_python": ">=3.8",
+      "size": 25148611,
+      "upload_time": "2024-07-17T10:41:20",
+      "upload_time_iso_8601": "2024-07-17T10:41:20.698327Z",
+      "url": "https://files.pythonhosted.org/packages/e7/f6/b75d4816c32f1618ed31a005ee635dd1d91d8164495d94f2ea092f594661/pyarrow-17.0.0-cp39-cp39-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": "",
+      "core-metadata": false,
+      "digests": {
+        "blake2b_256": "274eea6d43f324169f8aec0e57569443a38bab4b398d09769ca64f7b4d467de3",
+        "md5": "cfff6318d2fd88bb404c14f234f911b8",
+        "sha256": "4beca9521ed2c0921c1023e68d097d0299b62c362639ea315572a58f3f50fd28"
+      },
+      "downloads": -1,
+      "filename": "pyarrow-17.0.0.tar.gz",
+      "has_sig": false,
+      "md5_digest": "cfff6318d2fd88bb404c14f234f911b8",
+      "packagetype": "sdist",
+      "python_version": "source",
+      "requires_python": ">=3.8",
+      "size": 1112479,
+      "upload_time": "2024-07-17T10:41:25",
+      "upload_time_iso_8601": "2024-07-17T10:41:25.092204Z",
+      "url": "https://files.pythonhosted.org/packages/27/4e/ea6d43f324169f8aec0e57569443a38bab4b398d09769ca64f7b4d467de3/pyarrow-17.0.0.tar.gz",
+      "yanked": false,
+      "yanked_reason": null
+    }
+  ],
+  "vulnerabilities": [
+    {
+      "aliases": [
+        "CVE-2026-25087",
+        "GHSA-rgxp-2hwp-jwgg"
+      ],
+      "details": "Use After Free vulnerability in Apache Arrow C++.\n\nThis issue affects Apache Arrow C++ from 15.0.0 through 23.0.0. It can be triggered when reading an Arrow IPC file (but not an IPC stream) with pre-buffering enabled, if the IPC file contains data with variadic buffers (such as Binary View and String View data). Depending on the number of variadic buffers in a record batch column and on the temporal sequence of multi-threaded IO, a write to a dangling pointer could occur. The value (a `std::shared_ptr<Buffer>` object) that is written to the dangling pointer is not under direct control of the attacker.\n\nPre-buffering is disabled by default but can be enabled using a specific C++ API call (`RecordBatchFileReader::PreBufferMetadata`). The functionality is not exposed in language bindings (Python, Ruby, C GLib), so these bindings are not vulnerable.\n\nThe most likely consequence of this issue would be random crashes or memory corruption when reading specific kinds of IPC files. If the application allows ingesting IPC files from untrusted sources, this could plausibly be exploited for denial of service. Inducing more targeted kinds of misbehavior (such as confidential data extraction from the running process) depends on memory allocation and multi-threaded IO temporal patterns that are unlikely to be easily controlled by an attacker.\n\nAdvice for users of Arrow C++:\n\n1. check whether you enable pre-buffering on the IPC file reader (using `RecordBatchFileReader::PreBufferMetadata`)\n \n2. if so, either disable pre-buffering (which may have adverse performance consequences), or switch to Arrow 23.0.1 which is not vulnerable",
+      "fixed_in": [
+        "23.0.1"
+      ],
+      "id": "PYSEC-2026-113",
+      "link": "https://osv.dev/vulnerability/PYSEC-2026-113",
+      "source": "osv",
+      "summary": null,
+      "withdrawn": null
+    },
+    {
+      "aliases": [
+        "CVE-2026-25087",
+        "PYSEC-2026-113"
+      ],
+      "details": "Use After Free vulnerability in Apache Arrow C++.\n\nThis issue affects Apache Arrow C++ from 15.0.0 through 23.0.0. It can be triggered when reading an Arrow IPC file (but not an IPC stream) with pre-buffering enabled, if the IPC file contains data with variadic buffers (such as Binary View and String View data). Depending on the number of variadic buffers in a record batch column and on the temporal sequence of multi-threaded IO, a write to a dangling pointer could occur. The value (a `std::shared_ptr<Buffer>` object) that is written to the dangling pointer is not under direct control of the attacker.\n\nPre-buffering is disabled by default but can be enabled using a specific C++ API call (`RecordBatchFileReader::PreBufferMetadata`). The functionality is not exposed in language bindings (Python, Ruby, C GLib), so these bindings are not vulnerable.\n\nThe most likely consequence of this issue would be random crashes or memory corruption when reading specific kinds of IPC files. If the application allows ingesting IPC files from untrusted sources, this could plausibly be exploited for denial of service. Inducing more targeted kinds of misbehavior (such as confidential data extraction from the running process) depends on memory allocation and multi-threaded IO temporal patterns that are unlikely to be easily controlled by an attacker.\n\nAdvice for users of Arrow C++:\n\n1. check whether you enable pre-buffering on the IPC file reader (using `RecordBatchFileReader::PreBufferMetadata`)\n\n2. if so, either disable pre-buffering (which may have adverse performance consequences), or switch to Arrow 23.0.1 which is not vulnerable",
+      "fixed_in": [
+        "23.0.1"
+      ],
+      "id": "GHSA-rgxp-2hwp-jwgg",
+      "link": "https://osv.dev/vulnerability/GHSA-rgxp-2hwp-jwgg",
+      "source": "osv",
+      "summary": null,
+      "withdrawn": null
+    }
+  ]
+}

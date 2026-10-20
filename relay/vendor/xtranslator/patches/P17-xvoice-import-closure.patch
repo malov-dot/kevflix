@@ -1,0 +1,73 @@
+diff --git a/runtime-requirements.txt b/runtime-requirements.txt
+index 1ecf688..ad58c41 100644
+--- a/runtime-requirements.txt
++++ b/runtime-requirements.txt
+@@ -34,6 +34,8 @@ jieba
+ pypinyin
+ pyphen
+ pythainlp
++# Imported unconditionally by pythainlp.transliterate.ipa during XVoice startup.
++epitran
+ pyopenjtalk
+ g2pk
+ pykakasi
+diff --git a/runtime-constraints.txt b/runtime-constraints.txt
+index df7db2c..177db50 100644
+--- a/runtime-constraints.txt
++++ b/runtime-constraints.txt
+@@ -16,3 +16,11 @@ hydra-core==1.3.2
+ omegaconf==2.3.0
+ pydantic>=2.11.10,<=2.12.4
+ librosa>=0.10.1,<0.11
++# Audited PyThaiNLP IPA import closure (r72); no torch/transformers changes.
++epitran==1.35.3
++panphon==0.22.2
++marisa-trie==1.4.1
++unicodecsv==0.14.1
++munkres==1.1.4
++# Panphon 0.22.2 uses DataFrame.map; installed pandas 3.0.6 already satisfies this.
++pandas>=2.1,<4
+diff --git a/linux_supervisor.py b/linux_supervisor.py
+index 5a4b1bd..ad1a2a0 100644
+--- a/linux_supervisor.py
++++ b/linux_supervisor.py
+@@ -332,6 +332,7 @@ def verify_assets(manifest, check):
+         'xt_campplus_model': ('iic/speech_campplus_sv_zh-cn_16k-common', None),
+         'xt_mt_model': ('mradermacher/LMT-60-8B-GGUF', 'LMT-60-8B.Q8_0.gguf'),
+         'xt_mt_tokenizer': ('NiuTrans/LMT-60-8B', None),
++        'xt_nltk_data': ('nltk/nltk_data', None),
+     }
+     for key, (repo, relative) in bindings.items():
+         record = by_repo.get(repo)
+@@ -343,6 +344,8 @@ def verify_assets(manifest, check):
+             raise RuntimeError('Configured model path differs from provisioned identity: ' + key)
+         if relative and relative not in {entry['path'] for entry in record['files']}:
+             raise RuntimeError('Required checkpoint/vocab missing from file manifest: ' + key)
++    if 'corpora/cmudict.zip' not in {entry['path'] for entry in by_repo['nltk/nltk_data']['files']}:
++        raise RuntimeError('Required offline CMU dictionary missing from file manifest')
+     deadline = time.monotonic() + float(manifest['start_timeout_seconds'])
+     last_guard = 0.0
+     files, total = 0, 0
+diff --git a/relay/xt_services.py b/relay/xt_services.py
+index 02f3841..9ac7846 100644
+--- a/relay/xt_services.py
++++ b/relay/xt_services.py
+@@ -250,7 +250,7 @@ class XTServices:
+                                            ('xt_asr_python', 'xt_mt_python', 'xt_tts_python')]
+         paths = {key: self._required_linux(key) for key in (
+             'xt_asr_model', 'xt_mt_model', 'xt_mt_tokenizer', 'xt_xvoice_ckpt', 'xt_rate_ckpt', 'xt_vocab',
+-            'xt_vocos_dir', 'xt_campplus_model', 'xt_espeak_library', 'xt_espeak_data')}
++            'xt_vocos_dir', 'xt_campplus_model', 'xt_espeak_library', 'xt_espeak_data', 'xt_nltk_data')}
+         model_manifest = Path(self.config.resolve(self._value('xt_model_manifest', ''))).resolve()
+         runtime_receipt = Path(self.config.resolve(self._value('xt_runtime_receipt', ''))).resolve()
+         if not model_manifest.is_file() or model_manifest.stat().st_size > 16 << 20 or not runtime_receipt.is_file():
+@@ -295,7 +295,8 @@ class XTServices:
+                'XVOICE_CKPT_FILE': paths['xt_xvoice_ckpt'], 'XVOICE_SRP_CKPT_FILE': paths['xt_rate_ckpt'],
+                'XVOICE_VOCAB_FILE': paths['xt_vocab'], 'XVOICE_VOCOS_DIR': paths['xt_vocos_dir'],
+                'XVOICE_AUTO_DETECT_LANG': '0', 'XVOICE_DENOISE_REF': '0',
+-               'PHONEMIZER_ESPEAK_LIBRARY': paths['xt_espeak_library'], 'ESPEAK_DATA_PATH': paths['xt_espeak_data']}
++               'PHONEMIZER_ESPEAK_LIBRARY': paths['xt_espeak_library'], 'ESPEAK_DATA_PATH': paths['xt_espeak_data'],
++               'NLTK_DATA': paths['xt_nltk_data']}
+         services = []
+         def spec(name, argv, cwd, health):
+             services.append({'name': name, 'argv': argv, 'cwd': cwd, 'host': '127.0.0.1',

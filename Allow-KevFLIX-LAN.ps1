@@ -1,7 +1,18 @@
 #Requires -RunAsAdministrator
 [CmdletBinding()]
-param([string]$ConfigPath = (Join-Path $PSScriptRoot 'relay-config.json'))
+param([string]$ConfigPath = '')
 $ErrorActionPreference = 'Stop'
+if (-not $ConfigPath) {
+    # The user's settings live in the KevFLIX profile (same rule as relay/app_runtime/paths.py).
+    if ($env:KEVFLIX_PROFILE) { $profileRoot = $env:KEVFLIX_PROFILE }
+    else {
+        $pointer = Join-Path $env:LOCALAPPDATA 'KevFLIX\profile-location.json'
+        if (Test-Path -LiteralPath $pointer) { $profileRoot = (Get-Content -LiteralPath $pointer -Raw | ConvertFrom-Json).profile_root }
+        else { $profileRoot = Join-Path $env:LOCALAPPDATA 'KevFLIX\profile' }
+    }
+    $ConfigPath = Join-Path $profileRoot 'relay-config.json'
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { $ConfigPath = Join-Path $PSScriptRoot 'relay-config.json' }
+}
 $cfg = Get-Content -LiteralPath $ConfigPath -Raw | ConvertFrom-Json
 $address = [Net.IPAddress]::Parse([string]$cfg.bind)
 $octets = $address.GetAddressBytes()
@@ -20,7 +31,7 @@ if ($profile.NetworkCategory.ToString() -ne 'Private') {
 $listener = @(Get-NetTCPConnection -LocalAddress $address.IPAddressToString -LocalPort $port -State Listen -ErrorAction Stop)
 if ($listener.Count -ne 1) { throw 'Start exactly one KevFLIX worker before configuring its firewall rule.' }
 $process = Get-CimInstance Win32_Process -Filter ('ProcessId='+$listener[0].OwningProcess)
-if ($process.CommandLine -notmatch '(?i)-m\s+relay\.server(?:\s|$)') {
+if ($process.CommandLine -notmatch '(?i)(-m\s+relay\.server(?:\s|$)|scripts[\\/]serve\.py)') {
     throw 'The listening process is not the KevFLIX relay; nothing changed.'
 }
 $program = [IO.Path]::GetFullPath([string]$process.ExecutablePath)

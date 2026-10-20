@@ -1,0 +1,438 @@
+diff --git a/translator/backend/session.py b/translator/backend/session.py
+index 17f1bd9..35c7283 100644
+--- a/translator/backend/session.py
++++ b/translator/backend/session.py
+@@ -3,6 +3,8 @@ from __future__ import annotations
+ import asyncio
+ import hashlib
+ import json
++import math
++import os
+ import re
+ import time
+ import uuid
+@@ -96,12 +98,20 @@ class TranslationSession:
+             target_lang=settings.target_lang,
+         )
+         self.sample_rate = settings.sample_rate
+-        self.translation_queue: asyncio.Queue[dict | str] = asyncio.Queue()
++        self.translation_queue: asyncio.Queue[dict | str] = asyncio.Queue(maxsize=128)
+         self._xt_next_uid = 0
+         self._xt_open: dict[int, dict] = {}
+         self._xt_progress = asyncio.Event()
+         self._xt_wire_lock = asyncio.Lock()
++        self._xt_asr_processed_bytes = 0
++        self._xt_asr_working_bytes = 0
++        self._xt_speaker_processed_bytes = 0
++        self._xt_draining = False
+         self._xt_failure: str | None = None
++        self._xt_failure_error: Exception | None = None
++        self._xt_failure_record: dict | None = None
++        self._xt_terminal_count = 0
++        self._xt_last_progress_at = time.monotonic()
+         self.audio_store = SessionAudioStore(
+             session_id=self.state.session_id,
+             output_dir=settings.session_audio_dir,
+@@ -132,7 +142,7 @@ class TranslationSession:
+         self._tts_task: Optional[asyncio.Task] = None
+         self._speaker_task: Optional[asyncio.Task] = None
+         self._speaker_audio_queue: asyncio.Queue[bytes | None] | None = (
+-            asyncio.Queue() if self.speaker_prompt_tracker is not None else None
++            asyncio.Queue(maxsize=128) if self.speaker_prompt_tracker is not None else None
+         )
+         self._closed = False
+         self._asr_flush_requested = False
+@@ -320,7 +330,10 @@ class TranslationSession:
+         self._closed = True
+ 
+         if self._speaker_audio_queue is not None:
+-            await self._speaker_audio_queue.put(None)
++            try:
++                self._speaker_audio_queue.put_nowait(None)
++            except asyncio.QueueFull:
++                pass
+         if self._speaker_task and not self._speaker_task.done():
+             self._speaker_task.cancel()
+             try:
+@@ -335,11 +348,16 @@ class TranslationSession:
+ 
+         if self._asr_task and not self._asr_task.done():
+             try:
+-                await self._asr_task
++                await asyncio.wait_for(self._asr_task, 5.0)
++            except asyncio.TimeoutError:
++                self._asr_task.cancel()
+             except asyncio.CancelledError:
+                 pass
+ 
+-        await self.translation_queue.put("")
++        try:
++            self.translation_queue.put_nowait("")
++        except asyncio.QueueFull:
++            pass
+         if self._tts_task and not self._tts_task.done():
+             self._tts_task.cancel()
+             try:
+@@ -375,7 +393,12 @@ class TranslationSession:
+ 
+         action = payload.get("action") or payload.get("type")
+         event = payload.get("event")
++        if action in {"drain", "xt_barrier"}:
++            await self._xt_drain(payload)
++            return
+         if action == "session_config":
++            if int(payload.get("sample_rate", 16000)) != 16000 or self._session_audio_bytes_total:
++                raise ValueError("session_config requires 16 kHz mono PCM16 before audio")
+             self.state.source_lang = payload.get("source_lang", self.state.source_lang)
+             self.state.target_lang = payload.get("target_lang", self.state.target_lang)
+             if hasattr(self.tts_service, "target_lang"):
+@@ -390,6 +413,9 @@ class TranslationSession:
+                 self.state.target_lang,
+                 self.sample_rate,
+             )
++            await self._send_json({"action": "session_configured", "data": {
++                "session_id": self.state.session_id, "source_lang": self.state.source_lang,
++                "target_lang": self.state.target_lang, "sample_rate": self.sample_rate}})
+             return
+ 
+         if event == "config_audio":
+@@ -415,15 +441,17 @@ class TranslationSession:
+         if not audio_bytes:
+             return
+ 
+-        audio_start_ms = self._session_audio_duration_ms()
++        if self._xt_failure:
++            raise RuntimeError(self._xt_failure)
++        if len(audio_bytes) % 2 or len(audio_bytes) > 1024 * 1024:
++            raise ValueError("PCM16 frame malformed or exceeds bounded ingress size")
+         self._session_audio_bytes_total += len(audio_bytes)
+         self._schedule_audio_store(audio_bytes)
+-
+-        if self.asr_recognizer is not None:
+-            await self._buffer_asr_audio_for_turn(audio_bytes, audio_start_ms)
+-
+         if self._speaker_audio_queue is not None:
+-            self._speaker_audio_queue.put_nowait(audio_bytes)
++            await self._speaker_audio_queue.put(audio_bytes)
++        elif self.asr_recognizer is not None:
++            self._xt_speaker_processed_bytes += len(audio_bytes)
++            await self._buffer_asr_audio(audio_bytes)
+ 
+         if self.asr_recognizer is not None:
+             return
+@@ -434,13 +462,25 @@ class TranslationSession:
+         try:
+             while True:
+                 audio_bytes = await self._speaker_audio_queue.get()
+-                if audio_bytes is None:
+-                    break
+-                speaker_change_events = await self.speaker_prompt_tracker.feed(audio_bytes)
+-                for event in speaker_change_events:
+-                    await self._handle_speaker_change_event(event)
++                try:
++                    if audio_bytes is None:
++                        break
++                    if isinstance(audio_bytes, asyncio.Future):
++                        if not audio_bytes.done():
++                            audio_bytes.set_result(None)
++                        continue
++                    speaker_change_events = await self.speaker_prompt_tracker.feed(audio_bytes)
++                    for event in speaker_change_events:
++                        await self._handle_speaker_change_event(event)
++                    await self._buffer_asr_audio(audio_bytes)
++                    self._xt_speaker_processed_bytes += len(audio_bytes)
++                    await self._xt_mark_progress("speaker")
++                finally:
++                    self._speaker_audio_queue.task_done()
+         except asyncio.CancelledError:
+             pass
++        except Exception as exc:
++            await self._xt_abort("speaker_failed", exc)
+ 
+     async def _buffer_asr_audio_for_turn(self, audio_bytes: bytes, audio_start_ms: float) -> None:
+         if not audio_bytes:
+@@ -515,6 +555,12 @@ class TranslationSession:
+             return
+         if self._asr_audio_lock is None or self._asr_audio_event is None:
+             return
++        while await self._pending_asr_audio_bytes() >= self._asr_chunk_bytes * 128:
++            if self._xt_failure:
++                raise RuntimeError(self._xt_failure)
++            self._xt_progress.clear()
++            if await self._pending_asr_audio_bytes() >= self._asr_chunk_bytes * 128:
++                await self._xt_progress.wait()
+         async with self._asr_audio_lock:
+             self._asr_pending_audio.extend(audio_bytes)
+         self._asr_audio_event.set()
+@@ -540,11 +586,16 @@ class TranslationSession:
+                             future.set_result(None)
+                     continue
+                 await self._process_asr_chunk(merged_audio)
++                self._xt_asr_processed_bytes += len(merged_audio)
++                await self._xt_mark_progress("asr")
++                await self._xt_emit_frontier()
+ 
+             if self._asr_flush_requested:
+                 await self._flush_asr_finalize()
+         except asyncio.CancelledError:
+             pass
++        except Exception as exc:
++            await self._xt_abort("asr_failed", exc)
+ 
+     async def _next_asr_chunk(self) -> bytes | None:
+         """读取当前累计音频块。"""
+@@ -569,22 +620,19 @@ class TranslationSession:
+                     self._asr_audio_event.set()
+                     return None
+ 
+-                dropped_bytes = 0
+                 if self.settings.asr_provider == "zipformer":
+                     max_step_bytes = self._asr_chunk_bytes
+-                    max_backlog_bytes = self._asr_chunk_bytes * 64
+                 else:
+                     max_step_bytes = self._asr_chunk_bytes
+-                    max_backlog_bytes = self._asr_chunk_bytes * 2
+ 
+-                if len(self._asr_pending_audio) > max_backlog_bytes:
+-                    dropped_bytes = len(self._asr_pending_audio) - max_backlog_bytes
+-                    del self._asr_pending_audio[:dropped_bytes]
++                # Movie input is lossless. Bounded ingress/backpressure replaces
++                # upstream's real-time stale-audio dropping policy.
+ 
+                 if (
+                     len(self._asr_pending_audio) < self._asr_chunk_bytes
+                     and not self._asr_flush_requested
+                     and not self._asr_boundary_flush_requested
++                    and not self._xt_draining
+                 ):
+                     self._asr_audio_event.clear()
+                     continue
+@@ -628,13 +676,6 @@ class TranslationSession:
+                 else:
+                     self._asr_audio_event.clear()
+             break
+-        if dropped_bytes:
+-            logger.warning(
+-                "asr backlog trimmed id=%s dropped_bytes=%s remaining_bytes=%s",
+-                self.state.session_id,
+-                dropped_bytes,
+-                remaining_bytes,
+-            )
+         logger.info(
+             "asr latest chunk id=%s bytes=%s remaining_bytes=%s",
+             self.state.session_id,
+@@ -648,6 +689,12 @@ class TranslationSession:
+         if self.asr_recognizer is None:
+             return
+ 
++        if self._current_audio_started_at is None:
++            self._current_audio_started_at = time.perf_counter()
++            self._current_turn_started_audio_ms = self._audio_ms_for_byte_offset(self._xt_asr_processed_bytes)
++        self._current_audio_bytes += len(audio_bytes)
++        self._xt_asr_working_bytes = self._xt_asr_processed_bytes + len(audio_bytes)
++
+         audio_float = pcm_bytes_to_float32(audio_bytes)
+         start_time = time.perf_counter()
+         outputs = await self._run_asr_feed(audio_float)
+@@ -687,12 +734,12 @@ class TranslationSession:
+         self._asr_stop_received = False
+ 
+     async def _run_asr_feed(self, audio_float):
+-        if self.settings.asr_provider == "zipformer":
++        if self.settings.asr_provider in {"zipformer", "qwen3"}:
+             return await asyncio.to_thread(self.asr_recognizer.feed_audio, audio_float)
+         return self.asr_recognizer.feed_audio(audio_float)
+ 
+     async def _run_asr_finalize(self):
+-        if self.settings.asr_provider == "zipformer":
++        if self.settings.asr_provider in {"zipformer", "qwen3"}:
+             return await asyncio.to_thread(self.asr_recognizer.finalize)
+         return self.asr_recognizer.finalize()
+ 
+@@ -1349,13 +1396,129 @@ class TranslationSession:
+     def _session_audio_duration_ms(self) -> float:
+         if self.sample_rate <= 0:
+             return 0.0
+-        return self._session_audio_bytes_total / (self.sample_rate * self._asr_bytes_per_sample) * 1000
++        return self._xt_asr_working_bytes / (self.sample_rate * self._asr_bytes_per_sample) * 1000
++
++    def _xt_frontier(self) -> float:
++        processed = self._audio_ms_for_byte_offset(min(self._xt_asr_processed_bytes, self._xt_speaker_processed_bytes))
++        if self._current_audio_started_at is not None:
++            return max(0.0, min(processed, self._current_turn_started_audio_ms))
++        return processed
++
++    async def _xt_emit_frontier(self) -> None:
++        await self._send_json({"action": "commit_frontier", "data": {
++            "ms": self._xt_frontier(),
++            "max_enqueued_uid": self._xt_next_uid,
++            "processed_audio_ms": self._audio_ms_for_byte_offset(self._xt_asr_processed_bytes)}})
++
++    async def _xt_mark_progress(self, stage: str) -> None:
++        """Only completed model/sample work or a delivered terminal outcome renews progress."""
++        self._xt_last_progress_at = time.monotonic()
++        self._xt_progress.set()
++        await self._send_json({"action": "xt_progress", "data": {
++            "stage": stage, "speaker_processed_ms": self._audio_ms_for_byte_offset(self._xt_speaker_processed_bytes),
++            "asr_processed_ms": self._audio_ms_for_byte_offset(self._xt_asr_processed_bytes),
++            "terminal_count": self._xt_terminal_count}})
++
++    @staticmethod
++    def _xt_transport_error(error: Exception) -> bool:
++        seen = set()
++        while error is not None and id(error) not in seen:
++            seen.add(id(error))
++            if isinstance(error, (ConnectionError, TimeoutError)):
++                return True
++            for cls in type(error).__mro__:
++                if cls.__module__.startswith(("requests.", "httpx.", "aiohttp.")) and cls.__name__ in {
++                        "ConnectionError", "Timeout", "ConnectTimeout", "ReadTimeout", "TimeoutException",
++                        "NetworkError", "ClientConnectionError", "ServerTimeoutError"}:
++                    return True
++            error = error.__cause__
++        return False
+ 
+     async def _xt_abort(self, status: str, error: Exception) -> None:
++        if self._xt_failure_record is not None:
++            return
++        recoverable = self._xt_transport_error(error)
+         self._xt_failure = "%s: %s" % (status, error)
++        self._xt_failure_error = error
++        self._xt_failure_record = {
++            "status": status, "code": "xt_transport_lost" if recoverable else "xt_" + status,
++            "stage": status, "fault_kind": "resource" if recoverable else "fatal",
++            "recoverable": recoverable, "fatal": not recoverable,
++            "message": "%s: %s" % (type(error).__name__, error)}
+         self._xt_progress.set()
+-        await self._send_json({"action": "error", "data": {
+-            "status": status, "fatal": True, "message": str(error)}})
++        await self._send_json({"action": "error", "data": self._xt_failure_record})
++
++    async def _xt_drain(self, payload: dict) -> None:
++        """Barrier: speaker work -> actual ASR work -> terminal MT/TTS outcomes.
++
++        Does not finalize/reset a turn. Client-supplied silence drives the original
++        controller's own commit policy. Received bytes are never a frontier.
++        """
++        barrier = str(payload.get("barrier_id", ""))
++        target = self._session_audio_bytes_total
++        target_ms = self._audio_ms_for_byte_offset(target)
++        async def drain():
++            if abs(float(payload.get("through_audio_ms", payload.get("through_ms", target_ms))) - target_ms) > 1000 / self.sample_rate:
++                raise ValueError("drain byte cursor differs from received audio")
++            if self._speaker_audio_queue is not None:
++                marker = asyncio.get_running_loop().create_future()
++                await self._speaker_audio_queue.put(marker)
++                await marker
++            self._xt_draining = True
++            self._asr_audio_event.set()
++            while self._xt_asr_processed_bytes < target:
++                if self._xt_failure or self._asr_task is None or self._asr_task.done():
++                    raise self._xt_failure_error or ConnectionError("ASR worker ended before drain")
++                self._xt_progress.clear()
++                if self._xt_asr_processed_bytes < target:
++                    await self._xt_progress.wait()
++            await self.translation_queue.join()
++            if self._xt_failure:
++                raise self._xt_failure_error or RuntimeError(self._xt_failure)
++            if self._xt_open:
++                raise RuntimeError("nonterminal segment after drain")
++            await self._send_json({"action": "barrier_done" if payload.get("action") == "xt_barrier" else "drain_complete", "data": {
++                "barrier_id": barrier, "through_ms": target_ms, "processed_audio_ms": target_ms,
++                "frontier_ms": self._xt_frontier(), "commit_frontier_ms": self._xt_frontier(),
++                "max_enqueued_uid": self._xt_next_uid, "open_seg_uids": []}})
++        try:
++            no_progress = float(payload.get("no_progress_timeout_seconds", payload.get("timeout_seconds", 120)))
++            maximum = float(os.environ.get("XTRANSLATE_REQUEST_TIMEOUT_SECONDS", "900"))
++            requested = float(payload.get("request_timeout_seconds", maximum))
++            if any(not math.isfinite(value) or value <= 0 for value in (no_progress, maximum, requested)):
++                raise ValueError("barrier deadline values must be positive finite seconds")
++            no_progress, overall = min(no_progress, 120.0), min(requested, maximum)
++            started = time.monotonic()
++            task = asyncio.create_task(drain())
++            try:
++                while not task.done():
++                    if self._xt_failure_error is not None:
++                        raise self._xt_failure_error
++                    now = time.monotonic()
++                    if now - started >= overall:
++                        raise TimeoutError("xt_request_timeout")
++                    if now - max(started, self._xt_last_progress_at) >= no_progress:
++                        raise TimeoutError("xt_barrier_stalled")
++                    await asyncio.wait({task}, timeout=min(1.0, overall - (now - started),
++                                       no_progress - (now - max(started, self._xt_last_progress_at))))
++                await task
++            finally:
++                if not task.done():
++                    task.cancel()
++                    await asyncio.gather(task, return_exceptions=True)
++        except Exception as exc:
++            timeout_code = str(exc) if isinstance(exc, TimeoutError) and str(exc) in {
++                "xt_request_timeout", "xt_barrier_stalled"} else None
++            recoverable = timeout_code is not None or self._xt_transport_error(exc)
++            record = dict(self._xt_failure_record) if exc is self._xt_failure_error and self._xt_failure_record else {
++                "code": timeout_code or ("xt_transport_lost" if recoverable else "xt_barrier_invalid"),
++                "stage": "barrier", "fault_kind": "resource" if recoverable else "fatal",
++                "recoverable": recoverable, "fatal": not recoverable,
++                "message": "%s: %s" % (type(exc).__name__, exc)}
++            await self._send_json({"action": "error", "data": {
++                **record, "status": "drain_failed", "barrier_id": barrier}})
++        finally:
++            self._xt_draining = False
+ 
+     async def _xt_terminal_error(self, item: dict, status: str, error: Exception | str) -> None:
+         sent = await self._send_json({"action": "error", "data": {
+@@ -1364,8 +1527,10 @@ class TranslationSession:
+             "source_text": item.get("source_text") or item.get("text", ""),
+             "status": status, "terminal": True, "message": str(error)}})
+         if not sent:
+-            raise RuntimeError("terminal outcome could not be delivered")
++            raise ConnectionError("terminal outcome could not be delivered")
+         self._xt_open.pop(item["seg_uid"], None)
++        self._xt_terminal_count += 1
++        await self._xt_mark_progress("terminal")
+ 
+     async def _tts_loop(self) -> None:
+         """Original serial MT -> speaker prompt -> X-Voice pipeline, with terminal accounting."""
+@@ -1386,6 +1551,8 @@ class TranslationSession:
+                 finally:
+                     self.translation_queue.task_done()
+                     self._xt_progress.set()
++                if self._xt_failure:
++                    return
+         except asyncio.CancelledError:
+             pass
+         except Exception as exc:
+@@ -1400,6 +1567,8 @@ class TranslationSession:
+                                                     self.state.source_lang, self.state.target_lang)
+         except Exception as exc:
+             await self._xt_terminal_error(item, "translation_failed", exc)
++            if self._xt_transport_error(exc):
++                await self._xt_abort("translation_transport", exc)
+             return
+         mt_ms = (time.perf_counter() - started) * 1000
+         if not isinstance(translated, str) or not translated.strip():
+@@ -1413,6 +1582,8 @@ class TranslationSession:
+             audio_bytes = await loop.run_in_executor(None, self.tts_service.synthesize, translated, clone_audio_path)
+         except Exception as exc:
+             await self._xt_terminal_error(item, "tts_failed", exc)
++            if self._xt_transport_error(exc):
++                await self._xt_abort("tts_transport", exc)
+             return
+         tts_ms = (time.perf_counter() - started) * 1000
+         if not audio_bytes or len(audio_bytes) % 2:
+@@ -1434,10 +1605,12 @@ class TranslationSession:
+                 "metrics": build_latency_metrics(item.get("asr_elapsed_ms", 0), mt_ms, tts_ms)}
+         async with self._xt_wire_lock:
+             if not await self._send_json_unlocked({"action": "translation_ready", "data": data}):
+-                raise RuntimeError("translation-ready message could not be delivered")
++                raise ConnectionError("translation-ready message could not be delivered")
+             if not await self._send_bytes_unlocked(audio_bytes):
+-                raise RuntimeError("full TTS binary frame could not be delivered")
++                raise ConnectionError("full TTS binary frame could not be delivered")
+         self._xt_open.pop(item["seg_uid"], None)
++        self._xt_terminal_count += 1
++        await self._xt_mark_progress("terminal")
+         await self._send_json({"action": "tts_finished", "data": {"seg_uid": item["seg_uid"], "text": translated}})
+ 
+     async def _send_json(self, payload: dict) -> bool:

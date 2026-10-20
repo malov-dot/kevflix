@@ -1,17 +1,11 @@
 @echo off
+rem Start KevFLIX in setup-only mode (settings, Plex linking and TV pairing; no media or model work).
 cd /d "%~dp0"
-if not exist ".venv\Scripts\python.exe" (
-  echo Run Setup-Worker.ps1 first.
+set "PY=runtime\python\python.exe"
+if not exist "%PY%" set "PY=.venv\Scripts\python.exe"
+if not exist "%PY%" (
+  echo KevFLIX is not installed in this folder. Run KevFLIX Setup.
   exit /b 1
 )
-if not exist "relay-config.json" (
-  echo Create and configure relay-config.json first.
-  exit /b 1
-)
-set PYTHONUTF8=1
-set HF_HUB_OFFLINE=1
-set TRANSFORMERS_OFFLINE=1
-set PYANNOTE_METRICS_ENABLED=0
-set HF_HUB_DISABLE_TELEMETRY=1
-set DO_NOT_TRACK=1
-".venv\Scripts\python.exe" -m relay.server --config relay-config.json --setup-only
+"%PY%" -I -B scripts\run_worker.py --setup-only
+exit /b %errorlevel%

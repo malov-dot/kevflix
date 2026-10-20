@@ -1,0 +1,12 @@
+r86 diagnostic-only compute-cache telemetry, 2026-10-18.
+
+Implementation changed ONLY linux_supervisor.py. Root's CUDA_CACHE_MAXSIZE=4294967296 in xt_services.py is left untouched and rebound by its current hash in provenance.
+status.compute_cache now records startup, mt_ready, and shutdown cache snapshots of existing ~/.nv/ComputeCache (file count and byte total). Explicit recovery --cleanup adds shutdown_cleanup while preserving earlier snapshots. Shutdown inspection happens AFTER owned process/GPU cleanup. Metadata traversal has a1second time budget, no symlink traversal or file-content reads; partial counts/errors are explicitly diagnostic, never a new run failure. Cache path/contents/permissions are not changed.
+For launched ASR/MT service children, child_environment records only CUDA_CACHE_MAXSIZE, PID and start_ticks. The PID must match the supervisor's known owned identity both before and after reading /proc/<pid>/environ. No other environment value is recorded. Missing/exited/malformed values are diagnostic, not startup refusal. This reads the actual service child's variable; it does not prove GPU-driver cache hits or accepted cache capacity.
+No extra GPU probe, model import, model run, test, build, app start or cache mutation. Existing guard probes and cleanup behavior remain.
+
+Before supervisor SHA256: c46657ca6f1e6bb0091d161aed0a2c9f530bc0f1a10d3c0465330467153c1cfb
+After supervisor SHA256: b5a85cdf87d1eae67096c6a5875e80cd29dc512fe77889767f3bb96b58a06351
+Baseline: patches/baselines/r86-linux_supervisor.py.txt
+Diff: patches/R86-compute-cache-telemetry.patch
+No source edits outside this owned supervisor; provenance also binds root's already-edited wrapper.

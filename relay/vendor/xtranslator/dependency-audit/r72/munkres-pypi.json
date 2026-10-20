@@ -1,0 +1,1634 @@
+{
+  "info": {
+    "author": "Eishit Nigam",
+    "author_email": "\"Brian M. Clapper\" <bmc@clapper.org>",
+    "bugtrack_url": null,
+    "classifiers": [
+      "Development Status :: 5 - Production/Stable",
+      "Intended Audience :: Developers",
+      "Intended Audience :: Science/Research",
+      "Operating System :: OS Independent",
+      "Programming Language :: Python :: 3",
+      "Programming Language :: Python :: 3 :: Only",
+      "Programming Language :: Python :: 3.10",
+      "Programming Language :: Python :: 3.11",
+      "Programming Language :: Python :: 3.12",
+      "Programming Language :: Python :: 3.13",
+      "Programming Language :: Python :: 3.14",
+      "Topic :: Scientific/Engineering :: Mathematics",
+      "Topic :: Software Development :: Libraries :: Python Modules",
+      "Typing :: Typed"
+    ],
+    "description": "<p align=\"center\">\n  <img src=\"https://raw.githubusercontent.com/iameishit/Paldita-munkres/main/assets/banner.jpg\" alt=\"Paldita Munkres V3: Faster. Smarter. More Robust.\" width=\"100%\">\n</p>\n\n<img src=\"https://raw.githubusercontent.com/iameishit/Paldita-munkres/main/assets/logo.png\" alt=\"Paldita Munkres V3 badge\" width=\"120\" align=\"left\">\n\n# munkres\n\n[![CI](https://github.com/iameishit/Paldita-munkres/actions/workflows/ci.yml/badge.svg)](https://github.com/iameishit/Paldita-munkres/actions/workflows/ci.yml)\n[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE.md)\n![Python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.14-3776AB)\n![Dependencies](https://img.shields.io/badge/runtime%20dependencies-0-brightgreen)\n![Typed](https://img.shields.io/badge/typing-strict-informational)\n![Release](https://img.shields.io/badge/release-v3.0.0-2f6fed)\n![Coverage](https://img.shields.io/badge/coverage-100%25-brightgreen)\n\nThe **Munkres (Hungarian) algorithm** for the *assignment problem*: given a cost\nfor every (worker, job) pair, find the one-to-one assignment with the lowest\ntotal cost. Pure Python, no dependencies, fully typed, thread-safe.\n\n```text\n            Job A  Job B  Job C\nWorker 0      4      1      3\nWorker 1      2      0      5        ->   0->B (1)   1->A (2)   2->C (2)   total 5\nWorker 2      3      2      2\n```\n\n## Install\n\n```bash\npip install munkres==3.0.0\npip install git+https://github.com/iameishit/Paldita-munkres\n```\n\nNeeds Python 3.10+. numpy and pandas are **optional**: if you have them, arrays\nand DataFrames are accepted as input.\n\n## Quick start\n\n```python\nfrom munkres import Munkres\n\ncost = [[4, 1, 3],\n        [2, 0, 5],\n        [3, 2, 2]]\n\npairs = Munkres().compute(cost)\nprint(pairs)                                   # [(0, 1), (1, 0), (2, 2)]\nprint(sum(cost[r][c] for r, c in pairs))       # 5\n```\n\n`compute` returns `(row, column)` pairs sorted by row. Rectangular matrices\nwork too: `min(rows, columns)` pairs are returned.\n\n### Forbidding a pairing\n\n```python\nfrom munkres import DISALLOWED, Munkres\n\ncost = [[4, DISALLOWED, 3],\n        [2, 0, DISALLOWED],\n        [3, 2, 2]]\nprint(Munkres().compute(cost))                 # [(0, 2), (1, 1), (2, 0)]\n```\n\n`float(\"inf\")` means the same as `DISALLOWED`.\n\n### Maximising profit instead of minimising cost\n\n```python\nfrom munkres import Munkres, make_cost_matrix\n\nprofit = [[5, 9, 1], [10, 3, 2], [8, 7, 4]]\npairs = Munkres().compute(make_cost_matrix(profit))\nprint(sum(profit[r][c] for r, c in pairs))     # 23\n```\n\n### When there is no valid assignment\n\nImpossible constraints raise immediately (they used to hang forever in 1.x), and\nthe exception tells you *why*:\n\n```python\nfrom munkres import DISALLOWED as D, Munkres, UnsolvableMatrix\n\ntry:\n    Munkres().compute([[1, D, D], [1, D, D], [1, 2, 3]])\nexcept UnsolvableMatrix as error:\n    print(error)       # No complete assignment exists: rows [0, 1] can only be matched to columns [0] ...\n    print(error.rows, error.cols)              # (0, 1) (0,)\n```\n\n### numpy and pandas\n\n```python\nimport numpy as np\nfrom munkres import Munkres\n\nprint(Munkres().compute(np.array([[4, 1, 3], [2, 0, 5], [3, 2, 2]])))\n```\n\nInputs are never modified. `Fraction` and `Decimal` costs work as well.\n\n## More than `compute()`\n\n### A richer result: `solve`\n\n```python\nfrom munkres import solve\n\nresult = solve([[4, 1, 3], [2, 0, 5]])         # 2 workers, 3 jobs\nprint(result.pairs)                            # ((0, 1), (1, 0))\nprint(result.total)                            # 3\nprint(result.unmatched_cols)                   # (2,)\n```\n\n`maximize=True` maximises (exactly, even for `Decimal`/`Fraction`).\n**Gating** (`max_cost=`, or `min_profit=` when maximising) refuses bad pairs and\nleaves rows unmatched instead, which is what object tracking needs:\n\n```python\nfrom munkres import solve\n\ncost = [[1, 9, 9], [9, 2, 9], [9, 9, 8]]\nprint(solve(cost, max_cost=3).pairs)           # ((0, 0), (1, 1))\nprofit = [[5, 9, 1], [10, 3, 2], [8, 7, 4]]\nprint(solve(profit, maximize=True).total)      # 23\n```\n\nWith a pandas DataFrame you get your labels back:\n\n```python\nimport pandas as pd\nfrom munkres import solve\n\nframe = pd.DataFrame([[4, 1], [2, 0]], index=[\"w1\", \"w2\"], columns=[\"jobA\", \"jobB\"])\nprint(solve(frame).labelled())                 # [('w1', 'jobB'), ('w2', 'jobA')]\n```\n\n### Why is there no answer? `diagnose`\n\n```python\nfrom munkres import DISALLOWED as D, diagnose\n\nproblem = diagnose([[1, D, D], [1, D, D], [1, 2, 3]])\nprint(problem.rows, problem.cols)              # (0, 1) (0,)\n```\n\n### Watch it think: `trace`\n\n```python\nfrom munkres import solve\n\ntrace = solve([[4, 1, 3], [2, 0, 5], [3, 2, 2]], trace=True).trace\nprint(trace.to_text().splitlines()[0])         # Hungarian algorithm on a 3x3 matrix (10 steps)\n```\n\n`trace.to_html()` gives a static page you can open or share.\n\n### Drop-in for SciPy, and a matrix builder\n\n```python\nfrom munkres import build_cost_matrix, linear_sum_assignment, solve\n\nrows, cols = linear_sum_assignment([[4, 1, 3], [2, 0, 5], [3, 2, 2]])\nprint(rows, cols)                              # [0, 1, 2] [1, 0, 2]\nworkers, jobs = [(0, 0), (5, 5)], [(1, 1), (6, 4)]\ncost = build_cost_matrix(workers, jobs, lambda w, j: abs(w[0] - j[0]) + abs(w[1] - j[1]))\nprint(solve(cost).pairs)                       # ((0, 0), (1, 1))\n```\n\n## Analysing a problem\n\n```python\nfrom munkres import bottleneck, counterfactual, k_best, shadow_prices, tolerance\n\nm = [[4, 1, 3], [2, 0, 5], [3, 2, 2]]\nprint(shadow_prices(m).total)                  # 5\nprint(counterfactual(m, 0, 0))                 # 1\nprint(tolerance(m, 0, 1))                      # 1\nprint([a.total for a in k_best(m, 3)])         # [5, 6, 6]\nprint(bottleneck([[1, 5], [5, 9]]).pairs)      # ((0, 1), (1, 0))\n```\n\n- `shadow_prices`: the LP duals, a certificate anyone can re-check that the answer is optimal.\n- `counterfactual(m, i, j)`: what forcing a pair would cost. `tolerance(m, i, j)`: how much a chosen pair's cost may rise before the answer changes.\n- `k_best(m, k)`: the k best assignments (Murty's algorithm).\n- `bottleneck(m)`: make the *worst single pair* as good as possible.\n\n## Related problems\n\n```python\nfrom munkres import soft_assignment, stable_matching, transport\n\nmen = {\"A\": [\"x\", \"y\", \"z\"], \"B\": [\"y\", \"x\", \"z\"], \"C\": [\"x\", \"y\", \"z\"]}\nwomen = {\"x\": [\"B\", \"A\", \"C\"], \"y\": [\"C\", \"A\", \"B\"], \"z\": [\"A\", \"B\", \"C\"]}\nprint(stable_matching(men, women))             # {'A': 'z', 'B': 'x', 'C': 'y'}\nplan = transport([3, 2], [2, 3], [[1, 5], [4, 2]])\nprint(plan.flows)                              # {(0, 0): 2, (0, 1): 1, (1, 1): 2}\nprint(plan.total_cost)                         # 11\nprint(round(soft_assignment([[0.0, 1.0, 1.0], [1.0, 0.0, 1.0], [1.0, 1.0, 0.0]], 0.05)[0][0], 3))  # 1.0\n```\n\n- `stable_matching`: preferences instead of costs (Gale-Shapley, proposer-optimal).\n- `transport`: ship quantities from suppliers to consumers at least cost.\n- `sinkhorn` / `soft_assignment`: entropic optimal transport, a soft, differentiable matching.\n\n## What is new in v3 (development)\n\nAn optional C kernel makes dense solves as fast as SciPy's from about 64x64 up, and much faster when you solve many small problems at once (`solve_batch`); without a compiler everything still works in pure Python. On top of the solver there is a layer you can trust and inspect:\n\n```python\nimport munkres as mk\n\ncost = [[4, 1, 3], [2, 0, 5], [3, 2, 2]]\n\nres = mk.solve_planned(cost, verify=True)            # plan, solve, then an independent exact proof\nprint(res.total, res.certificate.verify(cost).ok)    # 5 True\n\ntop = mk.topology(cost)                              # which cells are forced / optional across all optima\nprint(top.unique, top.n_optimal)                     # True 1\nprint(mk.canonical_optimum(cost))                    # ((0, 1), (1, 0), (2, 2))\nprint(mk.explain_edge(cost, 0, 1)[:40])              # cell (0, 1) is forced (in every optim...\n\nstate = mk.AssignmentState(cost)                     # costs change? repair instead of re-solving\nstate.update_cost(0, 0, 9)\nprint(state.objective, bool(state.verify()))         # 5 True\n\nprint(mk.solve_spec({\"cost\": [[1, 2], [2, None]], \"verify\": True})[\"total\"])   # 4\ntry:\n    mk.solve_limited(cost, mk.SolverLimits(max_cells=4))   # refuses before allocating anything\nexcept mk.ProblemTooLargeError as err:\n    print(err.code)                                  # CELLS_LIMIT\n```\n\nEverything above is exact (integers, fractions, or floats treated as the exact rationals they are) and is checked against brute force in the test-suite. The full list is in [`docs/api.md`](docs/api.md); the research ideas behind it, with an honest status for each of the 300, are in; the design and its limits are in [`docs/V3_ARCHITECTURE.md`](docs/V3_ARCHITECTURE.md). `munkres doctor` shows whether the native kernel is active.\n\nHonest limits: tiny matrices (about 10x10 and below) are slower than SciPy because of Python call overhead; heavily forbidden large matrices (90% forbidden at 256x256) are slower too; the exact tools (`topology`, `enumerate_optima`, `AssignmentState`, ...) are meant for small and medium problems; quantum/Ising helpers are classical simulations, not quantum hardware.\n\n## Production safety\n\nThe native accelerator is optional and can never break your program: if it is missing, rejected by its load-time\nself-test, or raises at runtime, the call finishes on the exact pure-Python solver and a circuit breaker switches\nthe kernel off after repeated failures. Check `munkres.native_status()` in your health checks; see\n[docs/production.md](docs/production.md).\n\n## SciPy-compatible functions\n\n`linear_sum_assignment(cost, maximize=False)` and `min_weight_full_bipartite_matching(biadjacency, maximize=False)`\nhave the same calls as their SciPy counterparts (when several optimal answers exist the one returned may differ; the\ntotal is always the same).\n\n## Command line\n\n```bash\nmunkres costs.csv --maximize --json\nprintf '4,1,3\\n2,0,5\\n3,2,2\\n' | munkres - --trace\n```\n\nMatrix files are comma- or space-separated; an empty cell, `D`, `x` or `inf` forbids a pairing.\n`python -m munkres` with no arguments runs a built-in self-check.\n\n## Input rules\n\n| input | result |\n|-------|--------|\n| ragged rows | `ValueError` |\n| `NaN`, `-inf` | `ValueError` |\n| a non-number cell | `TypeError` |\n| empty matrix (no rows or no columns) | `[]` |\n| `DISALLOWED`, `+inf` | pairing forbidden |\n| impossible constraints | `UnsolvableMatrix` (a `ValueError`) with a Hall's-theorem witness |\n\n## Performance\n\nOn NumPy input, munkres 3.0 runs at about the same speed as SciPy's `linear_sum_assignment` in this range (0.75x to 1.04x across 50x50 to 1000x1000 random matrices, same optimum).\nIt is competitive, not uniformly faster. The full table and method are in [docs/BENCHMARKS.md](docs/BENCHMARKS.md).\n\n![Benchmark: munkres 3.0 vs SciPy](https://raw.githubusercontent.com/iameishit/Paldita-munkres/main/assets/benchmark.png)\n\n## Migrating from 1.x\n\n2.0 keeps the `Munkres().compute()`, `make_cost_matrix`, `print_matrix`,\n`DISALLOWED` and `UnsolvableMatrix` API, and `Munkres().compute()` is **not** deprecated. What changed:\n\n- ragged matrices now raise `ValueError` (they used to be silently mis-solved);\n- `NaN` / `-inf` raise `ValueError` (they used to hang), `+inf` = `DISALLOWED`;\n- impossible matrices raise `UnsolvableMatrix` (they used to hang);\n- Python 3.10+ only; `setup.py` is gone (`pyproject.toml`).\n\nSee [CHANGELOG.md](CHANGELOG.md) for the full list.\n\n## What's new in 3.0.0\n\nThe first stable 3.x release: an optional native kernel with automatic fallback, exact certificates and an independent verifier, a planner that explains its choices, dynamic updates, and structure tools. Full details: [V3_RELEASE.txt](V3_RELEASE.txt) and [CHANGELOG.md](CHANGELOG.md).\n\n## Development\n\nSee [CONTRIBUTING.md](CONTRIBUTING.md). In short: `pip install -e .` and\n`tools/audit.sh`.\n\n## Credits and license\n\nCreated by [Brian M. Clapper](https://software.clapper.org/munkres/) (2008-2020);\nmaintained and extended since 2026 by Eishit Nigam. Licensed under the\n[Apache License 2.0](LICENSE.md); see [NOTICE](NOTICE).\n",
+    "description_content_type": "text/markdown",
+    "docs_url": null,
+    "download_url": null,
+    "downloads": {
+      "last_day": -1,
+      "last_month": -1,
+      "last_week": -1
+    },
+    "dynamic": [
+      "License-File"
+    ],
+    "home_page": null,
+    "keywords": "munkres, hungarian, kuhn-munkres, assignment problem, linear assignment, optimization, matching, operations research",
+    "license": null,
+    "license_expression": "Apache-2.0",
+    "license_files": [
+      "LICENSE.md",
+      "NOTICE"
+    ],
+    "maintainer": "Eishit Nigam",
+    "maintainer_email": null,
+    "name": "munkres",
+    "package_url": "https://pypi.org/project/munkres/",
+    "platform": null,
+    "project_url": "https://pypi.org/project/munkres/",
+    "project_urls": {
+      "Changelog": "https://github.com/iameishit/Paldita-munkres/blob/main/CHANGELOG.md",
+      "Documentation": "https://github.com/iameishit/Paldita-munkres#readme",
+      "Homepage": "https://github.com/iameishit/Paldita-munkres",
+      "Issues": "https://github.com/iameishit/Paldita-munkres/issues",
+      "Original project": "https://software.clapper.org/munkres/"
+    },
+    "provides_extra": null,
+    "release_url": "https://pypi.org/project/munkres/3.0.0/",
+    "requires_dist": null,
+    "requires_python": ">=3.10",
+    "summary": "The Munkres (Hungarian) algorithm for the assignment problem: fast, typed, dependency-free.",
+    "version": "3.0.0",
+    "yanked": false,
+    "yanked_reason": null
+  },
+  "last_serial": 42399305,
+  "ownership": {
+    "organization": null,
+    "roles": [
+      {
+        "role": "Owner",
+        "user": "iameishit"
+      }
+    ]
+  },
+  "releases": {
+    "1.0.10": [
+      {
+        "comment_text": "",
+        "core-metadata": {
+          "sha256": "88baa6e7af4706bc001ee3e0885fc8d0ac6c4cc62b738946e76287c8209f3b1d"
+        },
+        "digests": {
+          "blake2b_256": "11c3b28181712bbd9671e5083029fdd044d5f49ee74e841f71100fb19cf9b1f5",
+          "md5": "d35fbaba559e2c43b590fb273e9cdec0",
+          "sha256": "76772795345b98b2e6f9cd365a765f6161b29ab126ed1595aa0821b35e0d1cf9"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.10-py2.py3-none-any.whl",
+        "has_sig": false,
+        "md5_digest": "d35fbaba559e2c43b590fb273e9cdec0",
+        "packagetype": "bdist_wheel",
+        "python_version": "py2.py3",
+        "requires_python": null,
+        "size": 15272,
+        "upload_time": "2017-05-23T17:39:13",
+        "upload_time_iso_8601": "2017-05-23T17:39:13.622379Z",
+        "url": "https://files.pythonhosted.org/packages/11/c3/b28181712bbd9671e5083029fdd044d5f49ee74e841f71100fb19cf9b1f5/munkres-1.0.10-py2.py3-none-any.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "05ccf5b2e2aadda370fbf0d6981b8c3970db8edcd5d751a7e17a5f6196366c5a",
+          "md5": "db06af5239cee31c1c792f6b4ecbb3c4",
+          "sha256": "eb41e68e93be08ad8cb80fd470f8282f21cd2bac87b07da645e27cf9c6b014db"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.10.tar.gz",
+        "has_sig": false,
+        "md5_digest": "db06af5239cee31c1c792f6b4ecbb3c4",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 10352,
+        "upload_time": "2017-05-23T17:39:15",
+        "upload_time_iso_8601": "2017-05-23T17:39:15.249244Z",
+        "url": "https://files.pythonhosted.org/packages/05/cc/f5b2e2aadda370fbf0d6981b8c3970db8edcd5d751a7e17a5f6196366c5a/munkres-1.0.10.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.0.11": [
+      {
+        "comment_text": "",
+        "core-metadata": {
+          "sha256": "a75089616d25ed273b1049af50ac390b499113526679e2be9cea122a750ae8f6"
+        },
+        "digests": {
+          "blake2b_256": "7a84ed4bede6eb365e16dccb5a3318a7b7d67dd7fa7fdb560325f22b454c8301",
+          "md5": "b0af5834aceea2665aca9da77981937a",
+          "sha256": "a46b105d7c8c3318493f6ca06f29dda356249eea26b811c06f042f6a7c1c6a0c"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.11-py2.py3-none-any.whl",
+        "has_sig": false,
+        "md5_digest": "b0af5834aceea2665aca9da77981937a",
+        "packagetype": "bdist_wheel",
+        "python_version": "3.6",
+        "requires_python": null,
+        "size": 15432,
+        "upload_time": "2017-06-27T16:24:56",
+        "upload_time_iso_8601": "2017-06-27T16:24:56.499423Z",
+        "url": "https://files.pythonhosted.org/packages/7a/84/ed4bede6eb365e16dccb5a3318a7b7d67dd7fa7fdb560325f22b454c8301/munkres-1.0.11-py2.py3-none-any.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "53484a75f92b77a929834e978ad27f46b05dc1016355f0bb24d1f232497d7510",
+          "md5": "bbbf8f88381d0a13a9198df2c14ff79b",
+          "sha256": "7188f2ed6e8d3eb6c5ec4919200faa6194732b99707b058f7e9f068c588f7eca"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.11.tar.gz",
+        "has_sig": false,
+        "md5_digest": "bbbf8f88381d0a13a9198df2c14ff79b",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 11322,
+        "upload_time": "2017-06-27T16:24:43",
+        "upload_time_iso_8601": "2017-06-27T16:24:43.95708Z",
+        "url": "https://files.pythonhosted.org/packages/53/48/4a75f92b77a929834e978ad27f46b05dc1016355f0bb24d1f232497d7510/munkres-1.0.11.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.0.12": [
+      {
+        "comment_text": "",
+        "core-metadata": {
+          "sha256": "f4481b9df576d45c4575ca0601b661e05af01f8b4643201d9ad9e0755e1e0bcb"
+        },
+        "digests": {
+          "blake2b_256": "eaf321d3c23017ba987e77286c5f7b6334366777919ced67f6bb9d48f5f5936c",
+          "md5": "a70266f168ad8bc13b934e8510a097c0",
+          "sha256": "a269adeb960c494f5fcd7f92fcc2f48fbdf90fd14b5d45716c61adc10667fed6"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.12-py2.py3-none-any.whl",
+        "has_sig": false,
+        "md5_digest": "a70266f168ad8bc13b934e8510a097c0",
+        "packagetype": "bdist_wheel",
+        "python_version": "2.7",
+        "requires_python": null,
+        "size": 15672,
+        "upload_time": "2017-06-27T17:21:29",
+        "upload_time_iso_8601": "2017-06-27T17:21:29.666583Z",
+        "url": "https://files.pythonhosted.org/packages/ea/f3/21d3c23017ba987e77286c5f7b6334366777919ced67f6bb9d48f5f5936c/munkres-1.0.12-py2.py3-none-any.whl",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.0.5.2": [],
+    "1.0.5.3": [],
+    "1.0.5.4": [
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "1ff06f89027a4738e9a6c15860fa15043bfc82a93eca9fc69191f56ba753e1eb",
+          "md5": "cb9d114fb523428bab4742e88bc83696",
+          "sha256": "105adad30659dbdf82815d3e12a74d4c01a3e0741d5ccbce194ee2ad4e5338d2"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.5.4.tar.gz",
+        "has_sig": false,
+        "md5_digest": "cb9d114fb523428bab4742e88bc83696",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 43050,
+        "upload_time": "2010-06-25T22:53:45",
+        "upload_time_iso_8601": "2010-06-25T22:53:45.419792Z",
+        "url": "https://files.pythonhosted.org/packages/1f/f0/6f89027a4738e9a6c15860fa15043bfc82a93eca9fc69191f56ba753e1eb/munkres-1.0.5.4.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "c1bd85b1ec4abbc9c1e2720ed8b95019963d008f49093081d184b28c4e0da4b0",
+          "md5": "15a87463bad8b16335af96aba598fda7",
+          "sha256": "530fb18df3fc6736dfb7ca61a7e500fd433dd1a67cc9ed9a27ab6d3833033553"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.5.4.zip",
+        "has_sig": false,
+        "md5_digest": "15a87463bad8b16335af96aba598fda7",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 13805,
+        "upload_time": "2010-06-10T13:35:07",
+        "upload_time_iso_8601": "2010-06-10T13:35:07.457355Z",
+        "url": "https://files.pythonhosted.org/packages/c1/bd/85b1ec4abbc9c1e2720ed8b95019963d008f49093081d184b28c4e0da4b0/munkres-1.0.5.4.zip",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.0.6": [
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "a929e7589c86a09dff310616000c8b59ba6929bbe38eb188a8a08fc4fa80fe80",
+          "md5": "d7ba3b8c5001578ae229a2d5a655872f",
+          "sha256": "c78f803b9b776bfb20a25c9c7bb44adbf0f9202c2024d51aa5969d21e560208d"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.6.tar.gz",
+        "has_sig": false,
+        "md5_digest": "d7ba3b8c5001578ae229a2d5a655872f",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 9841,
+        "upload_time": "2013-11-03T14:44:34",
+        "upload_time_iso_8601": "2013-11-03T14:44:34.744627Z",
+        "url": "https://files.pythonhosted.org/packages/a9/29/e7589c86a09dff310616000c8b59ba6929bbe38eb188a8a08fc4fa80fe80/munkres-1.0.6.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "0c4d9989652823a8b2f1a637eef8a70e84689518ecaed5ac748fbbd0ec992efb",
+          "md5": "a9e9f81ca6d71c886557348d26653599",
+          "sha256": "e960bfa7ae5230484c496e610419ca4fa713bd22178bee1fcdf478e56913e099"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.6.zip",
+        "has_sig": false,
+        "md5_digest": "a9e9f81ca6d71c886557348d26653599",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 13770,
+        "upload_time": "2013-11-03T14:44:37",
+        "upload_time_iso_8601": "2013-11-03T14:44:37.374521Z",
+        "url": "https://files.pythonhosted.org/packages/0c/4d/9989652823a8b2f1a637eef8a70e84689518ecaed5ac748fbbd0ec992efb/munkres-1.0.6.zip",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.0.7": [
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "a14c3f575e4b861c602a201b38bcb4f5ccc473871cb0c684cabc713b9203ab58",
+          "md5": "d534612326f7c7cadcfa61d109f96289",
+          "sha256": "334a5d849bcefed3e4c32ecfbca4ee8dfc8ef5f2f181334d6f7f4e100b71d6c4"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.7.tar.gz",
+        "has_sig": false,
+        "md5_digest": "d534612326f7c7cadcfa61d109f96289",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 9652,
+        "upload_time": "2014-12-03T16:18:38",
+        "upload_time_iso_8601": "2014-12-03T16:18:38.302974Z",
+        "url": "https://files.pythonhosted.org/packages/a1/4c/3f575e4b861c602a201b38bcb4f5ccc473871cb0c684cabc713b9203ab58/munkres-1.0.7.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "774eda492763ac25ec28a2c6627f753538bfa2b3b52ef6956c095222bd038d20",
+          "md5": "ef5aefa39133c39b70fd41eb7be7b217",
+          "sha256": "ae0193f513e3a9f633dc61bb9218916a92b28048670e5d8b490e8f8399bad3d2"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.7.zip",
+        "has_sig": false,
+        "md5_digest": "ef5aefa39133c39b70fd41eb7be7b217",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 13975,
+        "upload_time": "2014-12-03T16:18:40",
+        "upload_time_iso_8601": "2014-12-03T16:18:40.635259Z",
+        "url": "https://files.pythonhosted.org/packages/77/4e/da492763ac25ec28a2c6627f753538bfa2b3b52ef6956c095222bd038d20/munkres-1.0.7.zip",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.0.8": [
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "07175debec658b151d39c7a29fcc830bbfb5cb22f18e7ff7d6537deab73943ab",
+          "md5": "8e93108d2cb0e532aabd5dc9e418328c",
+          "sha256": "185f1a9c4d2c31f2f19afa48bc2ec726c11e945eded4784d272da2fd49bf7a55"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.8.tar.gz",
+        "has_sig": false,
+        "md5_digest": "8e93108d2cb0e532aabd5dc9e418328c",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 9277,
+        "upload_time": "2016-06-22T13:25:18",
+        "upload_time_iso_8601": "2016-06-22T13:25:18.606191Z",
+        "url": "https://files.pythonhosted.org/packages/07/17/5debec658b151d39c7a29fcc830bbfb5cb22f18e7ff7d6537deab73943ab/munkres-1.0.8.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "427b2be0d924bedebaad5a3c477ae89ddd73002f34bb208027a72010f713ba04",
+          "md5": "76c83bbcedccdeb1efe29b19ad82f837",
+          "sha256": "fb41791fa11a81f3a12dee2684cdc4f0b43e06146b2a1c3f9b984e32117fae39"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.0.8.zip",
+        "has_sig": false,
+        "md5_digest": "76c83bbcedccdeb1efe29b19ad82f837",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 12435,
+        "upload_time": "2016-06-22T13:25:22",
+        "upload_time_iso_8601": "2016-06-22T13:25:22.600079Z",
+        "url": "https://files.pythonhosted.org/packages/42/7b/2be0d924bedebaad5a3c477ae89ddd73002f34bb208027a72010f713ba04/munkres-1.0.8.zip",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.0.9": [],
+    "1.1.1": [
+      {
+        "comment_text": "",
+        "core-metadata": {
+          "sha256": "373b100e14410f28e1e86159c04fa6959b4e454fe2be7b10f6ab01a762f9e7d0"
+        },
+        "digests": {
+          "blake2b_256": "3d44fcc36cb0bbd79159dddeda2ea8307718ad332243878ea3486ac33f748395",
+          "md5": "e4ebbcad044fde25095491cdd3e42376",
+          "sha256": "d5bb5a9deeb0be6a2c2f1acca04de6a23ae45b4ac74601a7d82aca18d04d1113"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.1.1-py2.py3-none-any.whl",
+        "has_sig": false,
+        "md5_digest": "e4ebbcad044fde25095491cdd3e42376",
+        "packagetype": "bdist_wheel",
+        "python_version": "py2.py3",
+        "requires_python": null,
+        "size": 6834,
+        "upload_time": "2019-02-12T18:33:28",
+        "upload_time_iso_8601": "2019-02-12T18:33:28.093653Z",
+        "url": "https://files.pythonhosted.org/packages/3d/44/fcc36cb0bbd79159dddeda2ea8307718ad332243878ea3486ac33f748395/munkres-1.1.1-py2.py3-none-any.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "e1cfa7c4275b165ae6d37fb5a784dcc3fb886ec53f8253a7062bf0cce4af63e1",
+          "md5": "6da609db2331e93f58c324e62190b0f1",
+          "sha256": "63f3e189261adecfd87048accdfa7bfb5f969c6d5d9e5b4ccd8a930b4f425fd4"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.1.1.tar.gz",
+        "has_sig": false,
+        "md5_digest": "6da609db2331e93f58c324e62190b0f1",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 10697,
+        "upload_time": "2019-02-12T18:33:29",
+        "upload_time_iso_8601": "2019-02-12T18:33:29.398436Z",
+        "url": "https://files.pythonhosted.org/packages/e1/cf/a7c4275b165ae6d37fb5a784dcc3fb886ec53f8253a7062bf0cce4af63e1/munkres-1.1.1.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.1.2": [
+      {
+        "comment_text": "",
+        "core-metadata": {
+          "sha256": "8186f02a7386f9f77d77cf31cb652a5d70f5b67c72bf0fa3c030c00a94f3a22a"
+        },
+        "digests": {
+          "blake2b_256": "649761ddc63578870e04db6eb1d3bee58ad4e727f682068a7c7405edb8b2cdeb",
+          "md5": "f0aa8b2187cf058b3bfc36edd1769f70",
+          "sha256": "c5276abb54aab946fc5eaac24405c53f145c5d51d779fa86c73fae68f9895d9c"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.1.2-py2.py3-none-any.whl",
+        "has_sig": false,
+        "md5_digest": "f0aa8b2187cf058b3bfc36edd1769f70",
+        "packagetype": "bdist_wheel",
+        "python_version": "py2.py3",
+        "requires_python": null,
+        "size": 6844,
+        "upload_time": "2019-02-15T18:26:04",
+        "upload_time_iso_8601": "2019-02-15T18:26:04.434231Z",
+        "url": "https://files.pythonhosted.org/packages/64/97/61ddc63578870e04db6eb1d3bee58ad4e727f682068a7c7405edb8b2cdeb/munkres-1.1.2-py2.py3-none-any.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "b1af366c2b607b6994aa542a9eefd7d4dc1b0abadba396ed84bbbbc17d8d257e",
+          "md5": "ca18ffae1bd6514677930773f1864a91",
+          "sha256": "81e9ced40c3d0ffc48be4b6da5cfdfaa49041faaaba8075b159974ec47926aea"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.1.2.tar.gz",
+        "has_sig": false,
+        "md5_digest": "ca18ffae1bd6514677930773f1864a91",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 10860,
+        "upload_time": "2019-02-15T18:26:06",
+        "upload_time_iso_8601": "2019-02-15T18:26:06.228563Z",
+        "url": "https://files.pythonhosted.org/packages/b1/af/366c2b607b6994aa542a9eefd7d4dc1b0abadba396ed84bbbbc17d8d257e/munkres-1.1.2.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "1.1.4": [
+      {
+        "comment_text": "",
+        "core-metadata": {
+          "sha256": "f2afbf2cfc182e56cb1f5b431d1621b9c893eb97c316fe48aac4eb8d1b68e6ed"
+        },
+        "digests": {
+          "blake2b_256": "90ab0301c945a704218bc9435f0e3c88884f6b19ef234d8899fb47ce1ccfd0c9",
+          "md5": "1b3345d165a7ef35736f5e7b54265d86",
+          "sha256": "6b01867d4a8480d865aea2326e4b8f7c46431e9e55b4a2e32d989307d7bced2a"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.1.4-py2.py3-none-any.whl",
+        "has_sig": false,
+        "md5_digest": "1b3345d165a7ef35736f5e7b54265d86",
+        "packagetype": "bdist_wheel",
+        "python_version": "py2.py3",
+        "requires_python": null,
+        "size": 7015,
+        "upload_time": "2020-09-15T15:12:19",
+        "upload_time_iso_8601": "2020-09-15T15:12:19.627355Z",
+        "url": "https://files.pythonhosted.org/packages/90/ab/0301c945a704218bc9435f0e3c88884f6b19ef234d8899fb47ce1ccfd0c9/munkres-1.1.4-py2.py3-none-any.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": "",
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "fd416a3d0ef908f47d07c31e5d1c2504388c27c39b10b8cf610175b5a789a5c1",
+          "md5": "98c185e5e7b290c91a754dde9a7da6e7",
+          "sha256": "fc44bf3c3979dada4b6b633ddeeb8ffbe8388ee9409e4d4e8310c2da1792db03"
+        },
+        "downloads": -1,
+        "filename": "munkres-1.1.4.tar.gz",
+        "has_sig": false,
+        "md5_digest": "98c185e5e7b290c91a754dde9a7da6e7",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": null,
+        "size": 14047,
+        "upload_time": "2020-09-15T15:12:20",
+        "upload_time_iso_8601": "2020-09-15T15:12:20.956794Z",
+        "url": "https://files.pythonhosted.org/packages/fd/41/6a3d0ef908f47d07c31e5d1c2504388c27c39b10b8cf610175b5a789a5c1/munkres-1.1.4.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "2.0.0": [
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "9852c3040ae66a4730c223751e08cad58dd287a704c8821b0773213f9a475935"
+        },
+        "digests": {
+          "blake2b_256": "b45bcfe60f5097558d8ca9093c02c43a32396cdaa70d0a97e2401ec92229a41f",
+          "md5": "a04f157aa04d01bb72f84de86c5e8eb4",
+          "sha256": "ac7235ceda92a684afb4ba7e50a912cd59f548b6709cd8087f2a0be3fc030517"
+        },
+        "downloads": -1,
+        "filename": "munkres-2.0.0-py3-none-any.whl",
+        "has_sig": false,
+        "md5_digest": "a04f157aa04d01bb72f84de86c5e8eb4",
+        "packagetype": "bdist_wheel",
+        "python_version": "py3",
+        "requires_python": ">=3.10",
+        "size": 29948,
+        "upload_time": "2026-10-06T10:03:11",
+        "upload_time_iso_8601": "2026-10-06T10:03:11.813075Z",
+        "url": "https://files.pythonhosted.org/packages/b4/5b/cfe60f5097558d8ca9093c02c43a32396cdaa70d0a97e2401ec92229a41f/munkres-2.0.0-py3-none-any.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "b3239252d24cade0b2140a884607ddb82a1f217b678040cacbaf64e3d0bbbf64",
+          "md5": "6bbaa599ad1682cd23ff8429de65b942",
+          "sha256": "1491851834cf47f41802c18df57540ed95f47faf92416c060103cca977177667"
+        },
+        "downloads": -1,
+        "filename": "munkres-2.0.0.tar.gz",
+        "has_sig": false,
+        "md5_digest": "6bbaa599ad1682cd23ff8429de65b942",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": ">=3.10",
+        "size": 104807,
+        "upload_time": "2026-10-06T10:03:13",
+        "upload_time_iso_8601": "2026-10-06T10:03:13.160877Z",
+        "url": "https://files.pythonhosted.org/packages/b3/23/9252d24cade0b2140a884607ddb82a1f217b678040cacbaf64e3d0bbbf64/munkres-2.0.0.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "2.0.0rc1": [
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "02aaa797421f542430dd9ff156e82327f8c16e3df06b5a833a8c0f6045004412"
+        },
+        "digests": {
+          "blake2b_256": "c883a7242621063cbf28fd8af23a4e780698380fe47c4d84c2f78adde8e790ba",
+          "md5": "d7c733280fc1fcc2120471a2ff812849",
+          "sha256": "68cff8b93b8bda20422de599c15344a6d0d2c47ff2e6efd08b0e67c25b63d758"
+        },
+        "downloads": -1,
+        "filename": "munkres-2.0.0rc1-py3-none-any.whl",
+        "has_sig": false,
+        "md5_digest": "d7c733280fc1fcc2120471a2ff812849",
+        "packagetype": "bdist_wheel",
+        "python_version": "py3",
+        "requires_python": ">=3.10",
+        "size": 29997,
+        "upload_time": "2026-10-06T09:08:32",
+        "upload_time_iso_8601": "2026-10-06T09:08:32.260634Z",
+        "url": "https://files.pythonhosted.org/packages/c8/83/a7242621063cbf28fd8af23a4e780698380fe47c4d84c2f78adde8e790ba/munkres-2.0.0rc1-py3-none-any.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "e340fa5a4e614babd51611e17bf200cf4c01042b37c5a2780db2df672c153d9f",
+          "md5": "d2a5380d0d6040714fcaf17bfa493a8c",
+          "sha256": "e50072280e9325d7381e02438ef3f591152811965927221fb8f9841a454163ab"
+        },
+        "downloads": -1,
+        "filename": "munkres-2.0.0rc1.tar.gz",
+        "has_sig": false,
+        "md5_digest": "d2a5380d0d6040714fcaf17bfa493a8c",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": ">=3.10",
+        "size": 104795,
+        "upload_time": "2026-10-06T09:08:33",
+        "upload_time_iso_8601": "2026-10-06T09:08:33.644063Z",
+        "url": "https://files.pythonhosted.org/packages/e3/40/fa5a4e614babd51611e17bf200cf4c01042b37c5a2780db2df672c153d9f/munkres-2.0.0rc1.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ],
+    "3.0.0": [
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "9a91d0975684e37c6e2554ff3e8854ab7976d0cca432ac09e62dbeeaeaeda6aa",
+          "md5": "d3a68f477c368fb330c7d9619158ad78",
+          "sha256": "bb7a6f7e825d95b19ceff434ab4d4003c9844dbf7a31ff8087b574cec12d0707"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp310-cp310-macosx_10_9_universal2.whl",
+        "has_sig": false,
+        "md5_digest": "d3a68f477c368fb330c7d9619158ad78",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp310",
+        "requires_python": ">=3.10",
+        "size": 144714,
+        "upload_time": "2026-10-18T13:46:28",
+        "upload_time_iso_8601": "2026-10-18T13:46:28.922238Z",
+        "url": "https://files.pythonhosted.org/packages/9a/91/d0975684e37c6e2554ff3e8854ab7976d0cca432ac09e62dbeeaeaeda6aa/munkres-3.0.0-cp310-cp310-macosx_10_9_universal2.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "bff914657fd0a9a2bc3d70680b057b71251d351f00e4428b644c63f9c433738c",
+          "md5": "404725c278502705e0c6a49948653d84",
+          "sha256": "1cf0a7c34f086695209db03ea7eed761f328c5df31964f87fda3b0057b8fb471"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "404725c278502705e0c6a49948653d84",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp310",
+        "requires_python": ">=3.10",
+        "size": 173981,
+        "upload_time": "2026-10-18T13:46:30",
+        "upload_time_iso_8601": "2026-10-18T13:46:30.566086Z",
+        "url": "https://files.pythonhosted.org/packages/bf/f9/14657fd0a9a2bc3d70680b057b71251d351f00e4428b644c63f9c433738c/munkres-3.0.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "629d69f4cdf9fe4d91b3cf236026da415a5e2ad15a47fb91a3fa508aeb5e742d",
+          "md5": "e73c9a260e1df370c3d23897327c1515",
+          "sha256": "9b6b9af8b0a4fd8065f78490a2599c8776df9a5ff0521457c9448129848d617b"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp310-cp310-musllinux_1_2_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "e73c9a260e1df370c3d23897327c1515",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp310",
+        "requires_python": ">=3.10",
+        "size": 173890,
+        "upload_time": "2026-10-18T13:46:31",
+        "upload_time_iso_8601": "2026-10-18T13:46:31.897261Z",
+        "url": "https://files.pythonhosted.org/packages/62/9d/69f4cdf9fe4d91b3cf236026da415a5e2ad15a47fb91a3fa508aeb5e742d/munkres-3.0.0-cp310-cp310-musllinux_1_2_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+        },
+        "digests": {
+          "blake2b_256": "54f1600f937748ee0280d63c19312753a2ac384bc5a202c819092f99658b001a",
+          "md5": "ba01872839511a18080baaee0a074372",
+          "sha256": "61a6097bdaea6df616750074b635caba2def21b1788df8c8bf550f3259924ad5"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp310-cp310-win_amd64.whl",
+        "has_sig": false,
+        "md5_digest": "ba01872839511a18080baaee0a074372",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp310",
+        "requires_python": ">=3.10",
+        "size": 136383,
+        "upload_time": "2026-10-18T13:46:33",
+        "upload_time_iso_8601": "2026-10-18T13:46:33.250893Z",
+        "url": "https://files.pythonhosted.org/packages/54/f1/600f937748ee0280d63c19312753a2ac384bc5a202c819092f99658b001a/munkres-3.0.0-cp310-cp310-win_amd64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "489870aa9fc9bd6ed3fe36ee74cea6f6bd711c0f8b4926de86636cfaffbd5df8",
+          "md5": "4345eb64d33d2072a69b56aa1e0ab2ff",
+          "sha256": "ef0467c8b09469d8d8b80763e0b2f3a1fb92fca85dfacd6e92cdfb39a87a40ce"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp311-cp311-macosx_10_9_universal2.whl",
+        "has_sig": false,
+        "md5_digest": "4345eb64d33d2072a69b56aa1e0ab2ff",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp311",
+        "requires_python": ">=3.10",
+        "size": 144713,
+        "upload_time": "2026-10-18T13:46:34",
+        "upload_time_iso_8601": "2026-10-18T13:46:34.75389Z",
+        "url": "https://files.pythonhosted.org/packages/48/98/70aa9fc9bd6ed3fe36ee74cea6f6bd711c0f8b4926de86636cfaffbd5df8/munkres-3.0.0-cp311-cp311-macosx_10_9_universal2.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "8621eac4d460710ec54c0673453570fbb70cc718eca78cb8a571812d7496b897",
+          "md5": "a2fed50c7977cb3066c014d98685b272",
+          "sha256": "99ce90fcfe936f3b591cc917b5af36dd6df79816ddc6d957fb1dc0f1dae3bba1"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "a2fed50c7977cb3066c014d98685b272",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp311",
+        "requires_python": ">=3.10",
+        "size": 174711,
+        "upload_time": "2026-10-18T13:46:36",
+        "upload_time_iso_8601": "2026-10-18T13:46:36.295326Z",
+        "url": "https://files.pythonhosted.org/packages/86/21/eac4d460710ec54c0673453570fbb70cc718eca78cb8a571812d7496b897/munkres-3.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "cfe3c3f1db80af382a84c39932e6bbfe02708fab0abd417980a5a2bbd3fbd1ba",
+          "md5": "8f59ecec46ebfa23247b86d4c81ef45d",
+          "sha256": "9674dfdaf40d752bd33d1f8b3f74a67ad5ffb4793e43372a065b32a0b8046cae"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp311-cp311-musllinux_1_2_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "8f59ecec46ebfa23247b86d4c81ef45d",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp311",
+        "requires_python": ">=3.10",
+        "size": 174675,
+        "upload_time": "2026-10-18T13:46:37",
+        "upload_time_iso_8601": "2026-10-18T13:46:37.732106Z",
+        "url": "https://files.pythonhosted.org/packages/cf/e3/c3f1db80af382a84c39932e6bbfe02708fab0abd417980a5a2bbd3fbd1ba/munkres-3.0.0-cp311-cp311-musllinux_1_2_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+        },
+        "digests": {
+          "blake2b_256": "bbe52a3a68d08099d2bb804ebbc24cd0f513241b39e489882d009e5b91fc52f9",
+          "md5": "e17b392fcdfaf94b9f8345bdb549de1b",
+          "sha256": "1d62ba1a2deb3682aca87343bb7ef96344d78d572dab75c989bc3b19507774a3"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp311-cp311-win_amd64.whl",
+        "has_sig": false,
+        "md5_digest": "e17b392fcdfaf94b9f8345bdb549de1b",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp311",
+        "requires_python": ">=3.10",
+        "size": 136384,
+        "upload_time": "2026-10-18T13:46:39",
+        "upload_time_iso_8601": "2026-10-18T13:46:39.074611Z",
+        "url": "https://files.pythonhosted.org/packages/bb/e5/2a3a68d08099d2bb804ebbc24cd0f513241b39e489882d009e5b91fc52f9/munkres-3.0.0-cp311-cp311-win_amd64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "b38b2928562f24452f3c3b0201eebedd8cc476c83ed3f7c720999e132d28b357",
+          "md5": "7e96d8d5a791065a8f25d47aad4df2e7",
+          "sha256": "9071fbc430b23d007d6d8be914c277fb327f02642780a0a118eaa3cbdcb4fcfe"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp312-cp312-macosx_10_13_universal2.whl",
+        "has_sig": false,
+        "md5_digest": "7e96d8d5a791065a8f25d47aad4df2e7",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp312",
+        "requires_python": ">=3.10",
+        "size": 144661,
+        "upload_time": "2026-10-18T13:46:40",
+        "upload_time_iso_8601": "2026-10-18T13:46:40.49553Z",
+        "url": "https://files.pythonhosted.org/packages/b3/8b/2928562f24452f3c3b0201eebedd8cc476c83ed3f7c720999e132d28b357/munkres-3.0.0-cp312-cp312-macosx_10_13_universal2.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "a5c4fcceee54a4fbff8c53bbfee48ff83499caa39fde78480ce8ac2c26be1be3",
+          "md5": "5b6662027bb589ee5b45bad69e7de7a7",
+          "sha256": "d450e1b471678ea2f811869779d15944e08e59185112676072d1a76771c95b61"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "5b6662027bb589ee5b45bad69e7de7a7",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp312",
+        "requires_python": ">=3.10",
+        "size": 174380,
+        "upload_time": "2026-10-18T13:46:41",
+        "upload_time_iso_8601": "2026-10-18T13:46:41.811996Z",
+        "url": "https://files.pythonhosted.org/packages/a5/c4/fcceee54a4fbff8c53bbfee48ff83499caa39fde78480ce8ac2c26be1be3/munkres-3.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "30ab12bc2c91ecae62ee736a3bef6eb3ca57a632dacaf370b44dee59419afe71",
+          "md5": "abb1ce7d11774820c34095021622a5d4",
+          "sha256": "a8c53195c7d573e5b7c9d5f8ca16f7c2c6d526921947a286e186b6ae9d51e091"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp312-cp312-musllinux_1_2_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "abb1ce7d11774820c34095021622a5d4",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp312",
+        "requires_python": ">=3.10",
+        "size": 174322,
+        "upload_time": "2026-10-18T13:46:43",
+        "upload_time_iso_8601": "2026-10-18T13:46:43.229743Z",
+        "url": "https://files.pythonhosted.org/packages/30/ab/12bc2c91ecae62ee736a3bef6eb3ca57a632dacaf370b44dee59419afe71/munkres-3.0.0-cp312-cp312-musllinux_1_2_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+        },
+        "digests": {
+          "blake2b_256": "b774469cc303db496e2259fdfb873bf09a847b74528cdcabbbc8b505cac74769",
+          "md5": "50d3dda3c9c28029c3905b12bc848f0a",
+          "sha256": "2040243bb936d0371e2811e158b11566c858e62dafcdf739a8843f188f05a203"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp312-cp312-win_amd64.whl",
+        "has_sig": false,
+        "md5_digest": "50d3dda3c9c28029c3905b12bc848f0a",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp312",
+        "requires_python": ">=3.10",
+        "size": 136378,
+        "upload_time": "2026-10-18T13:46:44",
+        "upload_time_iso_8601": "2026-10-18T13:46:44.548007Z",
+        "url": "https://files.pythonhosted.org/packages/b7/74/469cc303db496e2259fdfb873bf09a847b74528cdcabbbc8b505cac74769/munkres-3.0.0-cp312-cp312-win_amd64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "32b7a01b728af3b7da660fbd28573ca701839b1a0f1bae04419656f527b8c7ed",
+          "md5": "d159718a5a749e5bb4beb0ab0fed6a73",
+          "sha256": "cec2e46861dfdc78eb7c8eba5802149be2094dfbede34f5a684bd1a63c6354df"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp313-cp313-macosx_10_13_universal2.whl",
+        "has_sig": false,
+        "md5_digest": "d159718a5a749e5bb4beb0ab0fed6a73",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp313",
+        "requires_python": ">=3.10",
+        "size": 144652,
+        "upload_time": "2026-10-18T13:46:45",
+        "upload_time_iso_8601": "2026-10-18T13:46:45.905541Z",
+        "url": "https://files.pythonhosted.org/packages/32/b7/a01b728af3b7da660fbd28573ca701839b1a0f1bae04419656f527b8c7ed/munkres-3.0.0-cp313-cp313-macosx_10_13_universal2.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "8d764a1b360f1c6c4393d05f4b99fd951afb49701af65dee4792497783025a0f",
+          "md5": "28706fe47163edec806f31996e27a528",
+          "sha256": "18bf78633fa59dbe1149f93b3540d089082e7c79fa14525dee40cd72f8424651"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "28706fe47163edec806f31996e27a528",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp313",
+        "requires_python": ">=3.10",
+        "size": 174468,
+        "upload_time": "2026-10-18T13:46:47",
+        "upload_time_iso_8601": "2026-10-18T13:46:47.188824Z",
+        "url": "https://files.pythonhosted.org/packages/8d/76/4a1b360f1c6c4393d05f4b99fd951afb49701af65dee4792497783025a0f/munkres-3.0.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "c37834e7c0fa9203da817f64013272cc2d0f695a8e621df1073acc163c2e76fe",
+          "md5": "f997a788f781abac1a73e9c90b28caf0",
+          "sha256": "b34e9fb1087f1fae95df86e5633356eba9fe4ad08d5f05eebe3db5531342ab55"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp313-cp313-musllinux_1_2_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "f997a788f781abac1a73e9c90b28caf0",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp313",
+        "requires_python": ">=3.10",
+        "size": 174347,
+        "upload_time": "2026-10-18T13:46:48",
+        "upload_time_iso_8601": "2026-10-18T13:46:48.557834Z",
+        "url": "https://files.pythonhosted.org/packages/c3/78/34e7c0fa9203da817f64013272cc2d0f695a8e621df1073acc163c2e76fe/munkres-3.0.0-cp313-cp313-musllinux_1_2_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+        },
+        "digests": {
+          "blake2b_256": "63ed34b5415665ec31a909ccb22af1e6adae8d105c03153225946ae96a347243",
+          "md5": "7a713ab8cd1e11f26a0410c75ac495dc",
+          "sha256": "37decfb54951719bc17034ac08287e5b30be80f760cc559804073e3b06d1ddcc"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp313-cp313-win_amd64.whl",
+        "has_sig": false,
+        "md5_digest": "7a713ab8cd1e11f26a0410c75ac495dc",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp313",
+        "requires_python": ">=3.10",
+        "size": 136375,
+        "upload_time": "2026-10-18T13:46:49",
+        "upload_time_iso_8601": "2026-10-18T13:46:49.898532Z",
+        "url": "https://files.pythonhosted.org/packages/63/ed/34b5415665ec31a909ccb22af1e6adae8d105c03153225946ae96a347243/munkres-3.0.0-cp313-cp313-win_amd64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "d5057720547fea38168acad07826a043bc77ee7d1aa5b30f727eec3ee7dda9e1",
+          "md5": "21e4ad6ef19e65845dd792cfcd97b8e5",
+          "sha256": "fafe62e13287d4659e6d9f7158f526e6f57b957d231b0d711e1d95bcbcbbd657"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp314-cp314-macosx_10_15_universal2.whl",
+        "has_sig": false,
+        "md5_digest": "21e4ad6ef19e65845dd792cfcd97b8e5",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp314",
+        "requires_python": ">=3.10",
+        "size": 145267,
+        "upload_time": "2026-10-18T13:46:51",
+        "upload_time_iso_8601": "2026-10-18T13:46:51.224664Z",
+        "url": "https://files.pythonhosted.org/packages/d5/05/7720547fea38168acad07826a043bc77ee7d1aa5b30f727eec3ee7dda9e1/munkres-3.0.0-cp314-cp314-macosx_10_15_universal2.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "7e04639a2708bc365204bf6baa05353378972656a09d748bae8a2d4deccbae43",
+          "md5": "b5808cfc8b35cf05003929460d0aad04",
+          "sha256": "afc2264030a502183f97caa5becc4bf66bd5a0cd1d6dfd38812349ccc8486461"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "b5808cfc8b35cf05003929460d0aad04",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp314",
+        "requires_python": ">=3.10",
+        "size": 174581,
+        "upload_time": "2026-10-18T13:46:52",
+        "upload_time_iso_8601": "2026-10-18T13:46:52.793045Z",
+        "url": "https://files.pythonhosted.org/packages/7e/04/639a2708bc365204bf6baa05353378972656a09d748bae8a2d4deccbae43/munkres-3.0.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+        },
+        "digests": {
+          "blake2b_256": "40c6fafd245e393b342c98dcec42bdf8d450639f4d4a60c6950f692ccd8d53e4",
+          "md5": "2593ce7b8345f855aea04723ae46d209",
+          "sha256": "317eca8558e175cc21d14dec71ffc648214826f0469366fcecc0977370c84506"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp314-cp314-musllinux_1_2_x86_64.whl",
+        "has_sig": false,
+        "md5_digest": "2593ce7b8345f855aea04723ae46d209",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp314",
+        "requires_python": ">=3.10",
+        "size": 174477,
+        "upload_time": "2026-10-18T13:46:54",
+        "upload_time_iso_8601": "2026-10-18T13:46:54.109756Z",
+        "url": "https://files.pythonhosted.org/packages/40/c6/fafd245e393b342c98dcec42bdf8d450639f4d4a60c6950f692ccd8d53e4/munkres-3.0.0-cp314-cp314-musllinux_1_2_x86_64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": {
+          "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+        },
+        "digests": {
+          "blake2b_256": "8b80289c7a43d7a027a85e4d9ca65dd97d07ed773f0665c7e5844b37e812cd56",
+          "md5": "9c965ac608f5f00dc32177ab3aaecdc9",
+          "sha256": "9d7a30a12a3ee6bc1f7cdf3d76d9426bd92eaeba696d175d9ee5d40de0af0e76"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0-cp314-cp314-win_amd64.whl",
+        "has_sig": false,
+        "md5_digest": "9c965ac608f5f00dc32177ab3aaecdc9",
+        "packagetype": "bdist_wheel",
+        "python_version": "cp314",
+        "requires_python": ">=3.10",
+        "size": 136829,
+        "upload_time": "2026-10-18T13:46:55",
+        "upload_time_iso_8601": "2026-10-18T13:46:55.522653Z",
+        "url": "https://files.pythonhosted.org/packages/8b/80/289c7a43d7a027a85e4d9ca65dd97d07ed773f0665c7e5844b37e812cd56/munkres-3.0.0-cp314-cp314-win_amd64.whl",
+        "yanked": false,
+        "yanked_reason": null
+      },
+      {
+        "comment_text": null,
+        "core-metadata": false,
+        "digests": {
+          "blake2b_256": "19e4c5cc64941985d8f9fc0291ebf88329709f4df44f745e8e8c999c6e19e03f",
+          "md5": "9c00c7c9349d9a4979ae8c86cfc04176",
+          "sha256": "21f8a04bc28b34bbefc35d4af824b3d70de2f3d37d655da0a1474e5c2ba341bf"
+        },
+        "downloads": -1,
+        "filename": "munkres-3.0.0.tar.gz",
+        "has_sig": false,
+        "md5_digest": "9c00c7c9349d9a4979ae8c86cfc04176",
+        "packagetype": "sdist",
+        "python_version": "source",
+        "requires_python": ">=3.10",
+        "size": 252231,
+        "upload_time": "2026-10-18T13:46:56",
+        "upload_time_iso_8601": "2026-10-18T13:46:56.85556Z",
+        "url": "https://files.pythonhosted.org/packages/19/e4/c5cc64941985d8f9fc0291ebf88329709f4df44f745e8e8c999c6e19e03f/munkres-3.0.0.tar.gz",
+        "yanked": false,
+        "yanked_reason": null
+      }
+    ]
+  },
+  "urls": [
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "9a91d0975684e37c6e2554ff3e8854ab7976d0cca432ac09e62dbeeaeaeda6aa",
+        "md5": "d3a68f477c368fb330c7d9619158ad78",
+        "sha256": "bb7a6f7e825d95b19ceff434ab4d4003c9844dbf7a31ff8087b574cec12d0707"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp310-cp310-macosx_10_9_universal2.whl",
+      "has_sig": false,
+      "md5_digest": "d3a68f477c368fb330c7d9619158ad78",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.10",
+      "size": 144714,
+      "upload_time": "2026-10-18T13:46:28",
+      "upload_time_iso_8601": "2026-10-18T13:46:28.922238Z",
+      "url": "https://files.pythonhosted.org/packages/9a/91/d0975684e37c6e2554ff3e8854ab7976d0cca432ac09e62dbeeaeaeda6aa/munkres-3.0.0-cp310-cp310-macosx_10_9_universal2.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "bff914657fd0a9a2bc3d70680b057b71251d351f00e4428b644c63f9c433738c",
+        "md5": "404725c278502705e0c6a49948653d84",
+        "sha256": "1cf0a7c34f086695209db03ea7eed761f328c5df31964f87fda3b0057b8fb471"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "404725c278502705e0c6a49948653d84",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.10",
+      "size": 173981,
+      "upload_time": "2026-10-18T13:46:30",
+      "upload_time_iso_8601": "2026-10-18T13:46:30.566086Z",
+      "url": "https://files.pythonhosted.org/packages/bf/f9/14657fd0a9a2bc3d70680b057b71251d351f00e4428b644c63f9c433738c/munkres-3.0.0-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "629d69f4cdf9fe4d91b3cf236026da415a5e2ad15a47fb91a3fa508aeb5e742d",
+        "md5": "e73c9a260e1df370c3d23897327c1515",
+        "sha256": "9b6b9af8b0a4fd8065f78490a2599c8776df9a5ff0521457c9448129848d617b"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp310-cp310-musllinux_1_2_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "e73c9a260e1df370c3d23897327c1515",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.10",
+      "size": 173890,
+      "upload_time": "2026-10-18T13:46:31",
+      "upload_time_iso_8601": "2026-10-18T13:46:31.897261Z",
+      "url": "https://files.pythonhosted.org/packages/62/9d/69f4cdf9fe4d91b3cf236026da415a5e2ad15a47fb91a3fa508aeb5e742d/munkres-3.0.0-cp310-cp310-musllinux_1_2_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+      },
+      "digests": {
+        "blake2b_256": "54f1600f937748ee0280d63c19312753a2ac384bc5a202c819092f99658b001a",
+        "md5": "ba01872839511a18080baaee0a074372",
+        "sha256": "61a6097bdaea6df616750074b635caba2def21b1788df8c8bf550f3259924ad5"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp310-cp310-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "ba01872839511a18080baaee0a074372",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp310",
+      "requires_python": ">=3.10",
+      "size": 136383,
+      "upload_time": "2026-10-18T13:46:33",
+      "upload_time_iso_8601": "2026-10-18T13:46:33.250893Z",
+      "url": "https://files.pythonhosted.org/packages/54/f1/600f937748ee0280d63c19312753a2ac384bc5a202c819092f99658b001a/munkres-3.0.0-cp310-cp310-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "489870aa9fc9bd6ed3fe36ee74cea6f6bd711c0f8b4926de86636cfaffbd5df8",
+        "md5": "4345eb64d33d2072a69b56aa1e0ab2ff",
+        "sha256": "ef0467c8b09469d8d8b80763e0b2f3a1fb92fca85dfacd6e92cdfb39a87a40ce"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp311-cp311-macosx_10_9_universal2.whl",
+      "has_sig": false,
+      "md5_digest": "4345eb64d33d2072a69b56aa1e0ab2ff",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.10",
+      "size": 144713,
+      "upload_time": "2026-10-18T13:46:34",
+      "upload_time_iso_8601": "2026-10-18T13:46:34.75389Z",
+      "url": "https://files.pythonhosted.org/packages/48/98/70aa9fc9bd6ed3fe36ee74cea6f6bd711c0f8b4926de86636cfaffbd5df8/munkres-3.0.0-cp311-cp311-macosx_10_9_universal2.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "8621eac4d460710ec54c0673453570fbb70cc718eca78cb8a571812d7496b897",
+        "md5": "a2fed50c7977cb3066c014d98685b272",
+        "sha256": "99ce90fcfe936f3b591cc917b5af36dd6df79816ddc6d957fb1dc0f1dae3bba1"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "a2fed50c7977cb3066c014d98685b272",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.10",
+      "size": 174711,
+      "upload_time": "2026-10-18T13:46:36",
+      "upload_time_iso_8601": "2026-10-18T13:46:36.295326Z",
+      "url": "https://files.pythonhosted.org/packages/86/21/eac4d460710ec54c0673453570fbb70cc718eca78cb8a571812d7496b897/munkres-3.0.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "cfe3c3f1db80af382a84c39932e6bbfe02708fab0abd417980a5a2bbd3fbd1ba",
+        "md5": "8f59ecec46ebfa23247b86d4c81ef45d",
+        "sha256": "9674dfdaf40d752bd33d1f8b3f74a67ad5ffb4793e43372a065b32a0b8046cae"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp311-cp311-musllinux_1_2_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "8f59ecec46ebfa23247b86d4c81ef45d",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.10",
+      "size": 174675,
+      "upload_time": "2026-10-18T13:46:37",
+      "upload_time_iso_8601": "2026-10-18T13:46:37.732106Z",
+      "url": "https://files.pythonhosted.org/packages/cf/e3/c3f1db80af382a84c39932e6bbfe02708fab0abd417980a5a2bbd3fbd1ba/munkres-3.0.0-cp311-cp311-musllinux_1_2_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+      },
+      "digests": {
+        "blake2b_256": "bbe52a3a68d08099d2bb804ebbc24cd0f513241b39e489882d009e5b91fc52f9",
+        "md5": "e17b392fcdfaf94b9f8345bdb549de1b",
+        "sha256": "1d62ba1a2deb3682aca87343bb7ef96344d78d572dab75c989bc3b19507774a3"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp311-cp311-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "e17b392fcdfaf94b9f8345bdb549de1b",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp311",
+      "requires_python": ">=3.10",
+      "size": 136384,
+      "upload_time": "2026-10-18T13:46:39",
+      "upload_time_iso_8601": "2026-10-18T13:46:39.074611Z",
+      "url": "https://files.pythonhosted.org/packages/bb/e5/2a3a68d08099d2bb804ebbc24cd0f513241b39e489882d009e5b91fc52f9/munkres-3.0.0-cp311-cp311-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "b38b2928562f24452f3c3b0201eebedd8cc476c83ed3f7c720999e132d28b357",
+        "md5": "7e96d8d5a791065a8f25d47aad4df2e7",
+        "sha256": "9071fbc430b23d007d6d8be914c277fb327f02642780a0a118eaa3cbdcb4fcfe"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp312-cp312-macosx_10_13_universal2.whl",
+      "has_sig": false,
+      "md5_digest": "7e96d8d5a791065a8f25d47aad4df2e7",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.10",
+      "size": 144661,
+      "upload_time": "2026-10-18T13:46:40",
+      "upload_time_iso_8601": "2026-10-18T13:46:40.49553Z",
+      "url": "https://files.pythonhosted.org/packages/b3/8b/2928562f24452f3c3b0201eebedd8cc476c83ed3f7c720999e132d28b357/munkres-3.0.0-cp312-cp312-macosx_10_13_universal2.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "a5c4fcceee54a4fbff8c53bbfee48ff83499caa39fde78480ce8ac2c26be1be3",
+        "md5": "5b6662027bb589ee5b45bad69e7de7a7",
+        "sha256": "d450e1b471678ea2f811869779d15944e08e59185112676072d1a76771c95b61"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "5b6662027bb589ee5b45bad69e7de7a7",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.10",
+      "size": 174380,
+      "upload_time": "2026-10-18T13:46:41",
+      "upload_time_iso_8601": "2026-10-18T13:46:41.811996Z",
+      "url": "https://files.pythonhosted.org/packages/a5/c4/fcceee54a4fbff8c53bbfee48ff83499caa39fde78480ce8ac2c26be1be3/munkres-3.0.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "30ab12bc2c91ecae62ee736a3bef6eb3ca57a632dacaf370b44dee59419afe71",
+        "md5": "abb1ce7d11774820c34095021622a5d4",
+        "sha256": "a8c53195c7d573e5b7c9d5f8ca16f7c2c6d526921947a286e186b6ae9d51e091"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp312-cp312-musllinux_1_2_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "abb1ce7d11774820c34095021622a5d4",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.10",
+      "size": 174322,
+      "upload_time": "2026-10-18T13:46:43",
+      "upload_time_iso_8601": "2026-10-18T13:46:43.229743Z",
+      "url": "https://files.pythonhosted.org/packages/30/ab/12bc2c91ecae62ee736a3bef6eb3ca57a632dacaf370b44dee59419afe71/munkres-3.0.0-cp312-cp312-musllinux_1_2_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+      },
+      "digests": {
+        "blake2b_256": "b774469cc303db496e2259fdfb873bf09a847b74528cdcabbbc8b505cac74769",
+        "md5": "50d3dda3c9c28029c3905b12bc848f0a",
+        "sha256": "2040243bb936d0371e2811e158b11566c858e62dafcdf739a8843f188f05a203"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp312-cp312-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "50d3dda3c9c28029c3905b12bc848f0a",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp312",
+      "requires_python": ">=3.10",
+      "size": 136378,
+      "upload_time": "2026-10-18T13:46:44",
+      "upload_time_iso_8601": "2026-10-18T13:46:44.548007Z",
+      "url": "https://files.pythonhosted.org/packages/b7/74/469cc303db496e2259fdfb873bf09a847b74528cdcabbbc8b505cac74769/munkres-3.0.0-cp312-cp312-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "32b7a01b728af3b7da660fbd28573ca701839b1a0f1bae04419656f527b8c7ed",
+        "md5": "d159718a5a749e5bb4beb0ab0fed6a73",
+        "sha256": "cec2e46861dfdc78eb7c8eba5802149be2094dfbede34f5a684bd1a63c6354df"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp313-cp313-macosx_10_13_universal2.whl",
+      "has_sig": false,
+      "md5_digest": "d159718a5a749e5bb4beb0ab0fed6a73",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp313",
+      "requires_python": ">=3.10",
+      "size": 144652,
+      "upload_time": "2026-10-18T13:46:45",
+      "upload_time_iso_8601": "2026-10-18T13:46:45.905541Z",
+      "url": "https://files.pythonhosted.org/packages/32/b7/a01b728af3b7da660fbd28573ca701839b1a0f1bae04419656f527b8c7ed/munkres-3.0.0-cp313-cp313-macosx_10_13_universal2.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "8d764a1b360f1c6c4393d05f4b99fd951afb49701af65dee4792497783025a0f",
+        "md5": "28706fe47163edec806f31996e27a528",
+        "sha256": "18bf78633fa59dbe1149f93b3540d089082e7c79fa14525dee40cd72f8424651"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "28706fe47163edec806f31996e27a528",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp313",
+      "requires_python": ">=3.10",
+      "size": 174468,
+      "upload_time": "2026-10-18T13:46:47",
+      "upload_time_iso_8601": "2026-10-18T13:46:47.188824Z",
+      "url": "https://files.pythonhosted.org/packages/8d/76/4a1b360f1c6c4393d05f4b99fd951afb49701af65dee4792497783025a0f/munkres-3.0.0-cp313-cp313-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "c37834e7c0fa9203da817f64013272cc2d0f695a8e621df1073acc163c2e76fe",
+        "md5": "f997a788f781abac1a73e9c90b28caf0",
+        "sha256": "b34e9fb1087f1fae95df86e5633356eba9fe4ad08d5f05eebe3db5531342ab55"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp313-cp313-musllinux_1_2_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "f997a788f781abac1a73e9c90b28caf0",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp313",
+      "requires_python": ">=3.10",
+      "size": 174347,
+      "upload_time": "2026-10-18T13:46:48",
+      "upload_time_iso_8601": "2026-10-18T13:46:48.557834Z",
+      "url": "https://files.pythonhosted.org/packages/c3/78/34e7c0fa9203da817f64013272cc2d0f695a8e621df1073acc163c2e76fe/munkres-3.0.0-cp313-cp313-musllinux_1_2_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+      },
+      "digests": {
+        "blake2b_256": "63ed34b5415665ec31a909ccb22af1e6adae8d105c03153225946ae96a347243",
+        "md5": "7a713ab8cd1e11f26a0410c75ac495dc",
+        "sha256": "37decfb54951719bc17034ac08287e5b30be80f760cc559804073e3b06d1ddcc"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp313-cp313-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "7a713ab8cd1e11f26a0410c75ac495dc",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp313",
+      "requires_python": ">=3.10",
+      "size": 136375,
+      "upload_time": "2026-10-18T13:46:49",
+      "upload_time_iso_8601": "2026-10-18T13:46:49.898532Z",
+      "url": "https://files.pythonhosted.org/packages/63/ed/34b5415665ec31a909ccb22af1e6adae8d105c03153225946ae96a347243/munkres-3.0.0-cp313-cp313-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "d5057720547fea38168acad07826a043bc77ee7d1aa5b30f727eec3ee7dda9e1",
+        "md5": "21e4ad6ef19e65845dd792cfcd97b8e5",
+        "sha256": "fafe62e13287d4659e6d9f7158f526e6f57b957d231b0d711e1d95bcbcbbd657"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp314-cp314-macosx_10_15_universal2.whl",
+      "has_sig": false,
+      "md5_digest": "21e4ad6ef19e65845dd792cfcd97b8e5",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp314",
+      "requires_python": ">=3.10",
+      "size": 145267,
+      "upload_time": "2026-10-18T13:46:51",
+      "upload_time_iso_8601": "2026-10-18T13:46:51.224664Z",
+      "url": "https://files.pythonhosted.org/packages/d5/05/7720547fea38168acad07826a043bc77ee7d1aa5b30f727eec3ee7dda9e1/munkres-3.0.0-cp314-cp314-macosx_10_15_universal2.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "7e04639a2708bc365204bf6baa05353378972656a09d748bae8a2d4deccbae43",
+        "md5": "b5808cfc8b35cf05003929460d0aad04",
+        "sha256": "afc2264030a502183f97caa5becc4bf66bd5a0cd1d6dfd38812349ccc8486461"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "b5808cfc8b35cf05003929460d0aad04",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp314",
+      "requires_python": ">=3.10",
+      "size": 174581,
+      "upload_time": "2026-10-18T13:46:52",
+      "upload_time_iso_8601": "2026-10-18T13:46:52.793045Z",
+      "url": "https://files.pythonhosted.org/packages/7e/04/639a2708bc365204bf6baa05353378972656a09d748bae8a2d4deccbae43/munkres-3.0.0-cp314-cp314-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "ecd37e096674f8d56169b32a443c047468548063d23300723ecfd7e0de57038e"
+      },
+      "digests": {
+        "blake2b_256": "40c6fafd245e393b342c98dcec42bdf8d450639f4d4a60c6950f692ccd8d53e4",
+        "md5": "2593ce7b8345f855aea04723ae46d209",
+        "sha256": "317eca8558e175cc21d14dec71ffc648214826f0469366fcecc0977370c84506"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp314-cp314-musllinux_1_2_x86_64.whl",
+      "has_sig": false,
+      "md5_digest": "2593ce7b8345f855aea04723ae46d209",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp314",
+      "requires_python": ">=3.10",
+      "size": 174477,
+      "upload_time": "2026-10-18T13:46:54",
+      "upload_time_iso_8601": "2026-10-18T13:46:54.109756Z",
+      "url": "https://files.pythonhosted.org/packages/40/c6/fafd245e393b342c98dcec42bdf8d450639f4d4a60c6950f692ccd8d53e4/munkres-3.0.0-cp314-cp314-musllinux_1_2_x86_64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": {
+        "sha256": "5c28326bab6e080b635dcb7bbdd8b787899d58301994bce681e27124579d1c26"
+      },
+      "digests": {
+        "blake2b_256": "8b80289c7a43d7a027a85e4d9ca65dd97d07ed773f0665c7e5844b37e812cd56",
+        "md5": "9c965ac608f5f00dc32177ab3aaecdc9",
+        "sha256": "9d7a30a12a3ee6bc1f7cdf3d76d9426bd92eaeba696d175d9ee5d40de0af0e76"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0-cp314-cp314-win_amd64.whl",
+      "has_sig": false,
+      "md5_digest": "9c965ac608f5f00dc32177ab3aaecdc9",
+      "packagetype": "bdist_wheel",
+      "python_version": "cp314",
+      "requires_python": ">=3.10",
+      "size": 136829,
+      "upload_time": "2026-10-18T13:46:55",
+      "upload_time_iso_8601": "2026-10-18T13:46:55.522653Z",
+      "url": "https://files.pythonhosted.org/packages/8b/80/289c7a43d7a027a85e4d9ca65dd97d07ed773f0665c7e5844b37e812cd56/munkres-3.0.0-cp314-cp314-win_amd64.whl",
+      "yanked": false,
+      "yanked_reason": null
+    },
+    {
+      "comment_text": null,
+      "core-metadata": false,
+      "digests": {
+        "blake2b_256": "19e4c5cc64941985d8f9fc0291ebf88329709f4df44f745e8e8c999c6e19e03f",
+        "md5": "9c00c7c9349d9a4979ae8c86cfc04176",
+        "sha256": "21f8a04bc28b34bbefc35d4af824b3d70de2f3d37d655da0a1474e5c2ba341bf"
+      },
+      "downloads": -1,
+      "filename": "munkres-3.0.0.tar.gz",
+      "has_sig": false,
+      "md5_digest": "9c00c7c9349d9a4979ae8c86cfc04176",
+      "packagetype": "sdist",
+      "python_version": "source",
+      "requires_python": ">=3.10",
+      "size": 252231,
+      "upload_time": "2026-10-18T13:46:56",
+      "upload_time_iso_8601": "2026-10-18T13:46:56.85556Z",
+      "url": "https://files.pythonhosted.org/packages/19/e4/c5cc64941985d8f9fc0291ebf88329709f4df44f745e8e8c999c6e19e03f/munkres-3.0.0.tar.gz",
+      "yanked": false,
+      "yanked_reason": null
+    }
+  ],
+  "vulnerabilities": []
+}

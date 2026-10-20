@@ -218,7 +218,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_header("Content-Length", "0")
                 self.end_headers()
                 return
-            ui_asset = re.fullmatch(r"/tv-ui/(bundled|[0-9a-f]{40})/(index\.html|player\.js|player\.css)", path)
+            # The program player (tv/app: derived from release 6c0dd972 with its seek-reload fix) adds three scripts.
+            ui_asset = re.fullmatch(r"/tv-ui/(bundled|[0-9a-f]{40})/(index\.html|player\.js|player\.css|"
+                                    r"no-native-hls\.js|program-audio\.js|program-status\.js)", path)
             if ui_asset:
                 return self.file(self.app.updates.file(ui_asset[1], ui_asset[2]), tv_asset=True)
             if path == "/tv-api/version":
@@ -232,6 +234,9 @@ class Handler(BaseHTTPRequestHandler):
                         query.get("folder"), query.get("offset", 0), query.get("query", "")))
                 if path == "/tv-api/session":
                     return self.json_response(self.app.tv.status(query["id"], device))
+                if path == "/tv-api/producer":
+                    # Dubbing producer state (MoviePipeline): running / preempted / failed / stopped.
+                    return self.json_response(self.app.jobs.producer_state())
                 if path == "/tv-api/plex/sections":
                     return self.json_response(self.app.tv.plex_sections())
                 if path == "/tv-api/plex/metadata":
@@ -423,7 +428,7 @@ class Handler(BaseHTTPRequestHandler):
                 if mode not in ("prepared", "buffered"):
                     raise ValueError("Choose prepared or buffered delivery")
                 result = self.app.jobs.enqueue(data["source"], audio_index=data.get("audio_index"),
-                    subtitles=data.get("subtitles"), subtitle_index=data.get("subtitle_index"),
+                    subtitles="off", subtitle_index=None,   # owner rule 2026-10-19: subtitles never feed dubbing (viewing only)
                     mode=mode, title=data.get("title"), force_redub=data.get("force_redub", False))
                 return self.json_response(result, 202)
             if path == "/api/plex/prepare":
@@ -566,11 +571,19 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", default="relay-config.json")
+    parser.add_argument("--config", default=None,
+                        help="the user's profile relay-config.json (the app guard always passes it); config, state and "
+                             "cache all come from this file. Without it: relay-config.json in the current folder.")
     parser.add_argument("--setup-only", action="store_true",
                         help="Serve the interface and pairing without starting media, model or update workers")
     args = parser.parse_args()
-    config = Config(args.config)
+    if args.config:
+        config_path = Path(args.config).resolve()
+        if not config_path.is_file():
+            raise SystemExit("KevFLIX config not found: %s" % config_path)   # never falls back to the install root
+    else:
+        config_path = Path("relay-config.json").resolve()
+    config = Config(str(config_path))
     config.state.mkdir(parents=True, exist_ok=True)
     worker_lock = (config.state / "worker.lock").open("a+b")
     if os.name == "nt":

@@ -1,0 +1,51 @@
+diff --git a/gguf_header.py b/gguf_header.py
+index 3780246..cb98b59 100644
+--- a/gguf_header.py
++++ b/gguf_header.py
+@@ -22,9 +22,31 @@ def inspect(model, original):
+     config = json.loads((original / 'config.json').read_text())
+     tokenizer = json.loads((original / 'tokenizer.json').read_text())
+     tokenizer_config_path = original / 'tokenizer_config.json'
+-    tokenizer_config = json.loads(tokenizer_config_path.read_text())
+-    if not tokenizer_config.get('chat_template'):
++    tokenizer_config = json.loads(tokenizer_config_path.read_text(encoding='utf-8'))
++    # Transformers 4.57.6 _from_pretrained gives the independent default Jinja
++    # file priority over tokenizer_config.json. Both paths are inside the original
++    # model directory already file-set/size/SHA-verified by the supervisor.
++    template_path = original / 'chat_template.jinja'
++    if template_path.is_file():
++        template = template_path.read_text(encoding='utf-8')
++        template_storage = 'external-jinja'
++    else:
++        template_path = tokenizer_config_path
++        template = tokenizer_config.get('chat_template')
++        if isinstance(template, list):
++            template = {item['name']: item['template'] for item in template}
++        if isinstance(template, dict):
++            template = template.get('default')
++        template_storage = 'tokenizer-config-json'
++    if not isinstance(template, str) or not template.strip():
+         raise ValueError('Pinned original tokenizer chat template is missing')
++    template_bytes = template_path.read_bytes()
++    template_identity = {
++        'source': 'file' if template_storage == 'external-jinja' else 'tokenizer_config',
++        'path': str(template_path), 'bytes': len(template_bytes),
++        'sha256': hashlib.sha256(template_bytes).hexdigest(),
++        'git_blob_sha1': hashlib.sha1(
++            ('blob %d\0' % len(template_bytes)).encode('ascii') + template_bytes).hexdigest()}
+     if config.get('model_type') != 'qwen3' or config.get('architectures') != ['Qwen3ForCausalLM']:
+         raise ValueError('Original HF configuration is not Qwen3ForCausalLM')
+     reader = GGUFReader(str(model), mode='r')
+@@ -83,7 +105,11 @@ def inspect(model, original):
+             'reader': 'gguf.GGUFReader read-only mmap', 'architecture': config['model_type'],
+             'dimensions': dimensions, 'head_dim': head_dim, 'vocab_size': vocab_size,
+             'tokenizer_explicit_entries': len(vocab), 'tensor_types': counts,
+-            'tokenizer': str(original), 'chat_template_source': str(tokenizer_config_path),
++            'tokenizer': str(original), 'chat_template_source': str(template_path),
++            'chat_template_storage': template_storage,
++            'chat_template_source_sha256': template_identity['sha256'],
++            'chat_template_identity': template_identity,
++            'chat_template_sha256': hashlib.sha256(template.encode('utf-8')).hexdigest(),
+             'tokenizer_config_sha256': hashlib.sha256(tokenizer_config_path.read_bytes()).hexdigest(),
+             'inference': False, 'activation_dtype': 'half'}
+ 

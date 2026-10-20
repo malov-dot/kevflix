@@ -13,7 +13,7 @@ def main():
     parser.add_argument("--out-dir", required=True)
     parser.add_argument("--model-dir", required=True)
     parser.add_argument("--model", default="htdemucs")
-    parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
+    parser.add_argument("--device", choices=("cpu",), default="cpu")
     args = parser.parse_args()
     import yaml
     import torch

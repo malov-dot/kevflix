@@ -1,0 +1,9 @@
+P31 source correction, 2026-10-18.
+
+Root and /root/claude_pipeline_worker independently traced the pending-boundary deadlock: _next_asr_chunk consumes the final640bytes, leaves pending audio0/boundary_flush_bytes0, then clears _asr_audio_event solely because no bytes remain. The next wait cannot reach boundary-finalization; the speaker task awaits its boundary future and a later drain marker cannot pass it. This is the supplied source finding, not a runtime result from this worker.
+
+Exact admission/wakeup fix in translator/backend/session.py: keep _asr_audio_event set when remaining_bytes OR _asr_flush_requested OR _asr_boundary_flush_requested; otherwise retain the existing clear. No queue policy, timing, thresholds, model, transcription or translation changes.
+
+Diagnostics only: the receive-loop websocket.disconnect message logs session ID, close code and reason before break; caught WebSocketDisconnect logs the same fields. Reasons are string-limited to256characters and represented with %r. Existing shutdown/exception behavior remains unchanged.
+
+Implementation by /root/claude_audio_worker under root's exact assignment; proof credited to root/pipeline worker. Before session SHA2569c1e16ac65b7be5d30ca72c0e97749324ece7fbe708651316a27d5ead585d0df. Baseline patches/baselines/P31-session.py.txt; diff P31-boundary-wakeup.patch; after identity in PROVENANCE. Root-owned xt_services.py is unchanged and its current wrapper hash is rebound. Source inspection/diff/hash only; no runtime/imports/tests/builds/apps/models by worker. Root owns the bounded offline async contract check and demo.

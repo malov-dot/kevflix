@@ -1,0 +1,9 @@
+{
+  "path": "translator/server/qwen3asr/qwen3asr_server.py",
+  "repository": "zhaoyx239/X-Translator",
+  "commit": "dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c",
+  "url": "https://raw.githubusercontent.com/zhaoyx239/X-Translator/dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c/server/qwen3asr/qwen3asr_server.py",
+  "git_blob_sha1": "de60804e4eda24518e09f84e591824ad9936d3d1",
+  "upstream_sha256": "4f5a78690fd93810c01c3fcff3e40c3b5d6be7d6921dacfa7ff9aeb4dd26fcbd",
+  "bytes": 9732
+}

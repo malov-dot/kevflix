@@ -5,7 +5,7 @@
   <title>KevFLIX Worker</title><link rel="stylesheet" href="/style.css">
 </head>
 <body>
-<header><div><small>LOCAL ENGLISH DUBBING · TIZENBREW</small><h1>KevFLIX Worker</h1></div><span id="version">0.4.6 · awaiting validation</span></header>
+<header><div><small>LOCAL ENGLISH DUBBING · TIZENBREW</small><h1>KevFLIX Worker</h1></div><span id="version">0.4.36 · awaiting validation</span></header>
 <main>
   <section id="connection"><h2>Connect to your worker</h2><p>The access key stays in this browser session.</p>
     <form id="connect"><input id="token" type="password" autocomplete="off" placeholder="Worker access key" required><button>Connect</button><button type="button" id="logout">Disconnect</button></form>
@@ -14,6 +14,7 @@
   <section><h2>Your TV player</h2><p>Video, dubbing and upscaling run on this PC. Your NAS supplies the source files.</p>
     <p id="pc-mode"></p><p class="pair-label">Enter this code on the TV</p><div id="pair-code" aria-live="polite">— — — — — —</div>
     <p id="pair-expiry"></p><button id="pair-tv">New pairing code</button><div id="tv-devices"></div>
+    <p><a href="/tv" target="_blank" rel="noopener">Open the player on this PC</a> (pair it with a code from this page, then turn English dubbing on).</p>
   </section>
   <section id="pc-settings"><h2>PC settings</h2>
     <h3>Plex account</h3><p id="plex-account-status">Not connected</p>
@@ -21,6 +22,10 @@
     <div class="actions"><select id="plex-server" aria-label="Plex server"></select><button id="plex-use-server" type="button">Use this server</button></div>
     <p id="plex-link-status"></p><button id="plex-folders" type="button">Show Plex library paths</button><pre id="plex-folder-list"></pre>
     <form id="settings-form">
+      <label>Dubbing engine<select id="setting-speech-engine" disabled><option value="generic">Generic English</option><option value="xtranslator">XTranslator + XVoice</option><option value="actor">Actor cloning (existing)</option><option value="sapi">Windows speech (existing)</option><option value="piper">Piper (existing)</option></select></label>
+      <label id="xt-language-field" hidden>XTranslator source language<select id="setting-xt-language" disabled><option value="auto">Detect automatically</option><option value="ru">Russian</option><option value="es">Spanish</option><option value="en">English (no dubbing)</option></select></label>
+      <p class="engine-note muted">Saving an engine selection does not load models. Stop playback and queued movie work before changing it. Use the normal player to start dubbing.</p>
+      <p id="xt-audio-note" class="engine-note muted" hidden>XTranslator uses movie audio and generates translated speech. It does not need subtitle files, typed translations or manually supplied voice samples.</p>
       <label class="check"><input id="setting-startup" type="checkbox">Start KevFLIX with Windows</label>
       <label class="check"><input id="setting-updates" type="checkbox">Automatically update PC and TV software from GitHub</label>
       <p class="muted" id="desktop-update-status">Desktop updates install on the next KevFLIX start.</p>
@@ -31,16 +36,17 @@
       <label>Video encoding<select id="setting-encoder"><option value="auto">Automatic · NVIDIA when available</option><option value="nvenc">NVIDIA hardware encoding</option><option value="software">CPU software encoding</option></select></label>
       <label>Upscaling<select id="setting-upscale"><option value="off">Off</option><option value="on">Lanczos upscaling</option></select></label>
       <label>HDR<select id="setting-hdr"><option value="auto">Automatic / preserve HDR</option><option value="sdr">Convert to SDR</option></select></label>
-      <label>Dubbing processor<select id="setting-device"><option value="cpu">CPU</option><option value="cooperative-cuda">GPU when resources are available</option></select></label>
+      <label>Dubbing processor<select id="setting-device"><option value="cuda">GPU (CUDA)</option></select></label>
       <label>CPU threads<input id="setting-threads" type="number" min="1" max="16"></label>
       <label>Buffered segments<input id="setting-buffer" type="number" min="1" max="6"></label>
       <details><summary>Network settings</summary><label>Listen address<input id="setting-bind"></label><label>Port<input id="setting-port" type="number" min="1024" max="65535"></label><label>Worker URL for the TV<input id="setting-url" type="url"></label></details>
       <button>Save settings</button>
     </form><p id="settings-result"></p><button id="stop-worker" type="button">Close KevFLIX worker</button><p class="muted">Use the KevFLIX PC desktop shortcut to open it again after saving a change that requires reopening.</p><p id="model-status"></p>
+    <div class="engine-status-panel" aria-live="polite"><h3>Dubbing engine status</h3><p id="engine-summary">Not observed</p><dl class="engine-observations"><dt>Detected source language</dt><dd id="engine-language">Not observed</dd><dt>Observed speakers</dt><dd id="engine-speakers">Not observed</dd><dt>Speaker state resets</dt><dd id="engine-resets">Not observed</dd></dl><p id="engine-health">Service health not observed</p><p id="engine-status-error" class="warning"></p><details><summary>Reported versions and observation details</summary><pre id="engine-details">No runtime observations</pre></details></div>
     <details><summary>Install processing components</summary><p>One-time internet downloads. These buttons install files without playing a video or loading a model. Close and reopen KevFLIX after installation before enabling playback.</p>
       <button id="install-video" type="button">Install video tools</button><button id="install-dependencies" type="button">Install dubbing dependencies</button>
       <p>Read <a href="https://github.com/malov-dot/kevflix/blob/main/THIRD-PARTY.md" target="_blank" rel="noreferrer">model terms and access requirements</a>. Gated models require your own accepted Hugging Face access and HF_TOKEN in the PC environment.</p>
-      <label class="check"><input id="accept-model-terms" type="checkbox">I have read and accept the upstream model terms</label><button id="install-models" type="button">Download dubbing models</button><p id="install-status"></p>
+      <label class="check"><input id="accept-model-terms" type="checkbox">I have read and accept the upstream model terms</label><button id="install-models" type="button">Download dubbing models</button><button id="install-xtranslator" type="button">Install X-Translator + X-Voice</button><p id="install-status"></p>
     </details>
   </section>
   <section><h2>Your Plex session</h2><p id="session">No session information yet.</p>

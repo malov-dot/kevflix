@@ -1,0 +1,7 @@
+0.4.31 bounded audit-file rename, 2026-10-18.
+
+Root reports T201312Z failed before WSL with xt_vendor_changed because the packaged selection omitted dependency-audit/r80b/lmt-tokenizer-pattern.json as a possible credential filename. Source inspection confirms this derived file contains only public Qwen model_type, saved Transformers version and tokenizer lexical regex/config; no credential is present.
+
+Renamed only that vendored audit file to dependency-audit/r80b/lmt-lexical-pattern.json using PowerShell Rename-Item -LiteralPath. Original copied first to setup-records/xtranslator-integration-20261018/before-audit-rename-0.4.31/lmt-tokenizer-pattern.json, outside the vendor/package selection. Both copies have SHA25628c1947a7a32bdd0bbe0257eed0a70b35d80ee64f1b6b66c4d210b44c11e8ed0. Contents unchanged. P23-P25 report reference and PROVENANCE file listing updated.
+
+Privacy filtering and runtime provenance verification remain enabled and unchanged. Root owns the build-time expected-file/wrapper crosscheck. No engine implementation, dependencies, model settings, ports or deadlines changed. Existing failed evidence preserved. Source/read/copy/rename/hash bookkeeping only; no tests/imports/builds/apps/models by worker.

@@ -1,3 +1,22 @@
 * text=auto eol=lf
 *.wgt binary
 *.cmd text eol=crlf
+
+# >>> KevFLIX release-prep: byte-pinned files are stored and checked out byte for byte (no EOL conversion)
+relay/actor_voice.py -text
+relay/app_runtime/guard-source/relay/__init__.py -text
+relay/app_runtime/guard-source/relay/cinematic.py -text
+relay/app_runtime/guard-source/relay/demucs_bed.py -text
+relay/app_runtime/guard-source/relay/original_audio_policy.py -text
+relay/app_runtime/guard-source/relay/short_utterance_policy.py -text
+relay/app_runtime/guard-status-read-v1/tolerant_status.py -text
+relay/app_runtime/lease/lease_client.py -text
+relay/beta_stable_gate.py -text
+relay/demucs_bed.py -text
+relay/original_audio_policy.py -text
+relay/resource_budget.py -text
+relay/short_utterance_policy.py -text
+relay/xt_services.py -text
+tv/app/player.js -text
+relay/vendor/xtranslator/** -text
+# <<< KevFLIX release-prep

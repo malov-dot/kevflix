@@ -1,0 +1,632 @@
+"""Linux-only XT lifecycle owner. No model imports; never terminate a WSL distro.
+
+Children have private process groups and a run-token environment tag. A stale
+Windows lease heartbeat, GPU floor breach, child exit or stop request kills only
+this run's identity-checked processes. Cleanup is reported only after /proc and
+nvidia-smi show no owned processes. Called explicitly by XTServices, never at import.
+"""
+from __future__ import annotations
+
+import argparse
+import ctypes
+import errno
+import hashlib
+import json
+import math
+import os
+from pathlib import Path
+import signal
+import shutil
+import socket
+import subprocess
+import tempfile
+import time
+import urllib.request
+import urllib.parse
+import uuid
+
+
+class SharedJSONWriteFailed(RuntimeError):
+    def __init__(self, path, error):
+        detail = json.dumps({'path': str(path), 'error_type': type(error).__name__, 'error': str(error),
+                             'errno': error.errno, 'attempts': getattr(error, 'xt_io_attempts', 1)})
+        super().__init__(detail)
+        self.fault = {'code': 'xt_monitor_failed', 'detail': detail, 'fatal': True,
+                      'recoverable': False, 'stage': 'shared_json_write'}
+
+
+def sharing_retry(operation, deadline):
+    delay, attempts = .025, 0
+    while True:
+        try:
+            attempts += 1
+            return operation()
+        except OSError as error:
+            remaining = deadline - time.monotonic()
+            transient = error.errno in (errno.EACCES, errno.EPERM, errno.EBUSY, errno.ETXTBSY)
+            if not transient or remaining <= 0:
+                error.xt_io_attempts = attempts
+                raise
+            time.sleep(min(delay, remaining))
+            delay = min(.2, delay * 2)
+
+
+def atomic_json(path, value):
+    path = Path(path)
+    temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
+    payload = json.dumps(value, sort_keys=True)
+    deadline, failure = time.monotonic() + 2., None
+    try:
+        sharing_retry(lambda: temporary.write_text(payload, encoding='utf-8'), deadline)
+        sharing_retry(lambda: os.replace(temporary, path), deadline)
+    except OSError as error:
+        failure = SharedJSONWriteFailed(path, error)
+        print(json.dumps({'fault': failure.fault}), flush=True)
+        raise failure from error
+    finally:
+        try:
+            sharing_retry(lambda: temporary.unlink(missing_ok=True), deadline)
+        except OSError as error:
+            if failure is None:
+                raise SharedJSONWriteFailed(temporary, error) from error
+            failure.add_note('Own temporary cleanup failed: %s: %s' % (temporary, error))
+
+
+class MonitorFailed(RuntimeError):
+    def __init__(self, detail):
+        super().__init__(detail)
+        self.fault = {'code': 'xt_monitor_failed', 'detail': detail, 'fatal': True,
+                      'recoverable': False, 'stage': 'heartbeat_read'}
+
+
+def read_heartbeat(path, token, previous):
+    """A read miss never renews a previously validated absolute deadline."""
+    initial_deadline = time.monotonic() + 2.
+    while True:
+        try:
+            heartbeat = json.loads(Path(path).read_text())
+        except (OSError, ValueError) as error:
+            if isinstance(error, OSError) and not isinstance(error, FileNotFoundError) \
+                    and error.errno not in (errno.EACCES, errno.EPERM, errno.EBUSY, errno.ETXTBSY):
+                raise MonitorFailed('Heartbeat read failed: ' + str(error)) from error
+            if previous is not None:
+                return previous
+            if time.monotonic() >= initial_deadline:
+                raise MonitorFailed('No valid initial heartbeat within bounded read window: ' + str(error)) from error
+            time.sleep(.025)
+            continue
+        if not isinstance(heartbeat, dict) or heartbeat.get('token') != token:
+            raise MonitorFailed('Heartbeat token/schema mismatch')
+        expiry = heartbeat.get('expires_unix')
+        if not isinstance(expiry, (int, float)) or not math.isfinite(expiry):
+            raise MonitorFailed('Heartbeat expiry is not a finite timestamp')
+        return heartbeat
+
+
+def create_short_temp(token):
+    """Linux-native private storage; immutable evidence remains at its original paths."""
+    if Path('/tmp').resolve(strict=True) != Path('/tmp'):
+        raise RuntimeError('XT requires native /tmp, not a redirected temporary root')
+    folder = Path(tempfile.mkdtemp(prefix='xt-', dir='/tmp'))
+    os.chmod(folder, 0o700)
+    stat = folder.stat()
+    owner = {'owner': 'kevflix-xtranslator', 'token': token, 'path': str(folder), 'device': stat.st_dev, 'inode': stat.st_ino,
+             'uid': stat.st_uid, 'supervisor_pid': os.getpid()}
+    atomic_json(folder / '.xt-owner.json', owner)
+    # Installed vLLM 0.14 network_utils.py:143 appends '/' + str(uuid4()).
+    # Linux sockaddr_un has 108 bytes including the terminating NUL.
+    socket_bytes = len((str(folder) + '/' + '00000000-0000-0000-0000-000000000000').encode('utf-8'))
+    return {'owner': owner, 'created_unix': time.time(), 'mode': '0700',
+            'vllm_socket_path_bytes': socket_bytes, 'socket_path_limit_bytes': 107,
+            'socket_path_safety_margin_bytes': 16,
+            'environment': {key: str(folder) for key in ('TMPDIR', 'TEMP', 'TMP', 'VLLM_RPC_BASE_PATH')},
+            'removed': False}
+
+
+def cleanup_short_temp(record, token, processes_confirmed):
+    if record is None:
+        return None
+    result = dict(record)
+    if not processes_confirmed:
+        result.update(removed=False, cleanup_reason='preserved: process/GPU cleanup unconfirmed')
+        return result
+    try:
+        owner = record['owner']
+        folder = Path(owner['path'])
+        if owner.get('owner') != 'kevflix-xtranslator' or owner.get('token') != token \
+                or folder.parent != Path('/tmp') or not folder.name.startswith('xt-') \
+                or folder.is_symlink() or folder.resolve() != folder:
+            raise RuntimeError('private temp ownership/path mismatch')
+        if not folder.exists():
+            result.update(removed=True, cleanup_reason='already absent after confirmed process cleanup')
+            return result
+        stat = folder.stat()
+        if (stat.st_dev, stat.st_ino, stat.st_uid) != (owner['device'], owner['inode'], owner['uid']) \
+                or (stat.st_mode & 0o777) != 0o700 \
+                or json.loads((folder / '.xt-owner.json').read_text()) != owner:
+            raise RuntimeError('private temp identity/marker changed; preserving directory')
+        if not shutil.rmtree.avoids_symlink_attacks:
+            raise RuntimeError('safe Linux directory cleanup is unavailable')
+        shutil.rmtree(folder)
+        result.update(removed=True, cleanup_reason='removed after confirmed owned process/GPU cleanup')
+    except (OSError, ValueError, KeyError, TypeError, RuntimeError) as error:
+        result.update(removed=False, cleanup_reason=str(error))
+    return result
+
+
+def process_table():
+    rows = {}
+    for entry in Path('/proc').iterdir():
+        if not entry.name.isdecimal():
+            continue
+        try:
+            raw = (entry / 'stat').read_text()
+            fields = raw[raw.rfind(')') + 2:].split()
+            rows[int(entry.name)] = {'pid': int(entry.name), 'state': fields[0], 'ppid': int(fields[1]),
+                                     'pgid': int(fields[2]), 'start_ticks': int(fields[19])}
+        except (OSError, ValueError, IndexError):
+            continue
+    return rows
+
+
+def owned_processes(token, known):
+    table = process_table()
+    owned = {pid: row for pid, row in table.items()
+             if pid != os.getpid() and known.get(pid) == row['start_ticks']}
+    needle = ('KEVFLIX_XT_RUN_TOKEN=' + token).encode()
+    for pid, row in table.items():
+        if pid == os.getpid():
+            continue
+        try:
+            if needle in Path('/proc/%d/environ' % pid).read_bytes().split(b'\0'):
+                owned[pid] = row
+        except (OSError, PermissionError):
+            pass
+    changed = True
+    while changed:
+        changed = False
+        for pid, row in table.items():
+            if pid != os.getpid() and pid not in owned and row['ppid'] in owned:
+                owned[pid] = row
+                changed = True
+    for pid, row in owned.items():
+        known[pid] = row['start_ticks']
+    return owned
+
+
+def gpu_status(nvidia_smi, owned):
+    reply = subprocess.run([nvidia_smi, '--query-gpu=memory.free,memory.total,uuid', '--format=csv,noheader,nounits'],
+                           capture_output=True, text=True, check=True, timeout=8)
+    lines = [line for line in reply.stdout.splitlines() if line.strip()]
+    if len(lines) != 1:
+        raise RuntimeError('Expected exactly the configured single GPU; refusing ambiguous GPU accounting')
+    fields = [value.strip() for value in lines[0].split(',')]
+    free, total, gpu_uuid = int(fields[0]), int(fields[1]), fields[2]
+    reply = subprocess.run([nvidia_smi, '--query-compute-apps=pid,used_gpu_memory', '--format=csv,noheader,nounits'],
+                           capture_output=True, text=True, check=True, timeout=8)
+    pids, sizes = [], []
+    for line in reply.stdout.splitlines():
+        if not line.strip():
+            continue
+        fields = [field.strip() for field in line.split(',')]
+        pid = int(fields[0])
+        if pid in owned:
+            pids.append(pid)
+            sizes.append(int(fields[1]) if fields[1].isdigit() else None)
+    return {'free_mib': free, 'total_mib': total, 'gpu_uuid': gpu_uuid, 'owned_compute_pids': pids,
+            'owned_mib': sum(sizes) if all(value is not None for value in sizes) else None}
+
+
+class IPCPathTooLong(RuntimeError):
+    def __init__(self, record):
+        detail = json.dumps(record, sort_keys=True)
+        super().__init__(detail)
+        self.fault = {'code': 'xt_ipc_path_too_long', 'detail': detail,
+                      'fatal': True, 'recoverable': False, 'stage': 'ipc_path_admission'}
+
+
+class MTGGUFUnsupported(RuntimeError):
+    def __init__(self, detail):
+        super().__init__(detail)
+        self.fault = {'code': 'xt_mt_gguf_unsupported', 'detail': str(detail),
+                      'fatal': True, 'recoverable': False, 'stage': 'mt_gguf_load'}
+
+
+class MTWarmupFailed(RuntimeError):
+    def __init__(self, detail):
+        super().__init__(detail)
+        self.fault = {'code': 'xt_mt_warmup_failed', 'detail': str(detail),
+                      'fatal': True, 'recoverable': False, 'stage': 'mt_warmup'}
+
+
+def warm_mt(manifest, check, known):
+    """Retain process ownership/heartbeat while one production-client request runs."""
+    started = time.monotonic()
+    log_path = Path(manifest['status_path']).parent / 'mt-warmup.log'
+    env = {**os.environ, **manifest['environment'], **manifest['private_temp_environment'],
+           'KEVFLIX_XT_RUN_TOKEN': manifest['token']}
+    try:
+        with log_path.open('ab', buffering=0) as log:
+            child = subprocess.Popen(manifest['mt_warmup_argv'], env=env, stdin=subprocess.DEVNULL,
+                                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            row = process_table().get(child.pid)
+            if row:
+                known[child.pid] = row['start_ticks']
+            while child.poll() is None:
+                check()
+                if time.monotonic() - started >= 105.:
+                    raise MTWarmupFailed('MT startup warmup exceeded105s total deadline')
+                time.sleep(.2)
+        if time.monotonic() - started >= 105. or child.returncode:
+            raise MTWarmupFailed('MT startup warmup failed: ' + log_tail(log_path))
+        record = json.loads(Path(manifest['mt_warmup_receipt']).read_text())
+        if record.get('ok') is not True or record.get('movie_credit') is not False \
+                or record.get('audio_generated') is not False or record.get('output_discarded') is not True:
+            raise MTWarmupFailed('Invalid MT startup warmup receipt')
+        return record
+    except (OSError, ValueError) as error:
+        raise MTWarmupFailed(type(error).__name__ + ': ' + str(error)) from error
+
+
+def log_tail(path):
+    try:
+        with open(path, 'rb') as handle:
+            handle.seek(0, 2)
+            handle.seek(max(0, handle.tell() - 16384))
+            return handle.read().decode('utf-8', errors='replace')
+    except OSError as error:
+        return str(error)
+
+
+def verify_gguf_header(manifest, check, known):
+    """Owned CPU-only helper; poll lease/floor while it maps metadata, before model launch."""
+    output = Path(manifest['status_path']).parent / 'gguf-header.json'
+    env = {**os.environ, **manifest['environment'], **manifest['private_temp_environment'], 'CUDA_VISIBLE_DEVICES': '',
+           'KEVFLIX_XT_RUN_TOKEN': manifest['token']}
+    with output.open('wb') as handle:
+        child = subprocess.Popen(manifest['gguf_header_argv'], env=env, stdin=subprocess.DEVNULL,
+                                 stdout=handle, stderr=handle, start_new_session=True)
+        row = process_table().get(child.pid)
+        if row:
+            known[child.pid] = row['start_ticks']
+        deadline = time.monotonic() + min(120, float(manifest['start_timeout_seconds']))
+        while child.poll() is None:
+            check()
+            if time.monotonic() >= deadline:
+                raise MTGGUFUnsupported('CPU header validation deadline exceeded')
+            time.sleep(.2)
+    if child.returncode:
+        raise MTGGUFUnsupported(log_tail(output))
+    try:
+        result = json.loads(output.read_text())
+        if result.get('ok') is not True or result.get('inference') is not False:
+            raise ValueError('header result was not a metadata-only pass')
+        return result
+    except (ValueError, OSError) as error:
+        raise MTGGUFUnsupported(log_tail(output)) from error
+
+
+class GPUBudgetInsufficient(RuntimeError):
+    def __init__(self, arithmetic):
+        self.fault = {'kind': 'fatal', 'code': 'xt_gpu_budget_insufficient',
+                      'detail': json.dumps(arithmetic, sort_keys=True)}
+        super().__init__(self.fault['detail'])
+
+
+def owns_listener(port, owned):
+    """Health is meaningful only when this run owns the loopback LISTEN socket."""
+    wanted = set()
+    for line in Path('/proc/net/tcp').read_text().splitlines()[1:]:
+        fields = line.split()
+        host, number = fields[1].split(':')
+        if int(number, 16) == port and fields[3] == '0A':
+            if host != '0100007F':
+                raise RuntimeError('Configured endpoint is listening on a non-loopback address')
+            wanted.add('socket:[%s]' % fields[9])
+    if not wanted:
+        return False
+    found = set()
+    for pid in owned:
+        try:
+            for fd in Path('/proc/%d/fd' % pid).iterdir():
+                try:
+                    target = os.readlink(fd)
+                    if target in wanted:
+                        found.add(target)
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    return wanted == found
+
+
+def verify_assets(manifest, check):
+    """Bind configured Linux paths to every provisioned byte before any model load."""
+    path = Path(manifest['model_manifest_path'])
+    if not path.is_file() or path.stat().st_size > 16 << 20:
+        raise RuntimeError('Model manifest missing or exceeds metadata bound')
+    raw = path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != manifest['model_manifest_sha256']:
+        raise RuntimeError('Model manifest bytes changed between Windows and Linux')
+    data = json.loads(raw)
+    records = data.get('models')
+    if not isinstance(records, list) or not records:
+        raise RuntimeError('Model manifest has no provisioned assets')
+    by_repo = {}
+    for record in records:
+        repo = record['repo']
+        if repo in by_repo or not record.get('revision'):
+            raise RuntimeError('Duplicate model repository or missing pinned revision')
+        by_repo[repo] = record
+    paths = manifest['model_paths']
+    bindings = {
+        'xt_asr_model': ('Qwen/Qwen3-ASR-1.7B', None),
+        'xt_xvoice_ckpt': ('XRXRX/X-Voice', 'XVoice_Base_Stage2/model_70000.safetensors'),
+        'xt_rate_ckpt': ('XRXRX/X-Voice', 'SpeedPredictor/model_28000.safetensors'),
+        'xt_vocab': ('XRXRX/X-Voice', 'XVoice_Base_Stage1/vocab.txt'),
+        'xt_vocos_dir': ('charactr/vocos-mel-24khz', None),
+        'xt_campplus_model': ('iic/speech_campplus_sv_zh-cn_16k-common', None),
+        'xt_mt_model': ('mradermacher/LMT-60-8B-GGUF', 'LMT-60-8B.Q8_0.gguf'),
+        'xt_mt_tokenizer': ('NiuTrans/LMT-60-8B', None),
+        'xt_nltk_data': ('nltk/nltk_data', None),
+    }
+    for key, (repo, relative) in bindings.items():
+        record = by_repo.get(repo)
+        if record is None:
+            raise RuntimeError('Required model repository absent: ' + repo)
+        folder = Path(record['folder']).resolve()
+        expected = folder / relative if relative else folder
+        if Path(paths[key]).resolve() != expected.resolve() or not expected.exists():
+            raise RuntimeError('Configured model path differs from provisioned identity: ' + key)
+        if relative and relative not in {entry['path'] for entry in record['files']}:
+            raise RuntimeError('Required checkpoint/vocab missing from file manifest: ' + key)
+    if 'corpora/cmudict.zip' not in {entry['path'] for entry in by_repo['nltk/nltk_data']['files']}:
+        raise RuntimeError('Required offline CMU dictionary missing from file manifest')
+    deadline = time.monotonic() + float(manifest['start_timeout_seconds'])
+    last_guard = 0.0
+    files, total = 0, 0
+    for record in records:
+        folder = Path(record['folder']).resolve()
+        expected_files = {entry['path'] for entry in record['files']}
+        actual_files = {str(file.relative_to(folder)) for file in folder.rglob('*')
+                        if file.is_file() and '.cache' not in file.relative_to(folder).parts}
+        if not expected_files or actual_files != expected_files or len(expected_files) != len(record['files']):
+            raise RuntimeError('Provisioned model file set changed: ' + record['repo'])
+        for entry in record['files']:
+            file = (folder / entry['path']).resolve()
+            if not file.is_relative_to(folder) or not file.is_file() or file.stat().st_size != int(entry['bytes']):
+                raise RuntimeError('Model asset path/size changed: ' + str(file))
+            digest, size = hashlib.sha256(), 0
+            with file.open('rb') as handle:
+                while block := handle.read(4 << 20):
+                    digest.update(block)
+                    size += len(block)
+                    now = time.monotonic()
+                    if now > deadline:
+                        raise RuntimeError('Model identity verification deadline exceeded; no models loaded')
+                    if now - last_guard >= 1:
+                        check()  # actual lease heartbeat/free-floor/stop checks during large hashes
+                        last_guard = now
+            if size != int(entry['bytes']) or digest.hexdigest() != entry['sha256']:
+                raise RuntimeError('Model asset SHA256 differs from provisioning manifest: ' + str(file))
+            files += 1
+            total += size
+    return {'manifest_sha256': manifest['model_manifest_sha256'], 'verified_files': files, 'verified_bytes': total,
+            'models': [{'repo': row['repo'], 'revision': row['revision'], 'folder': row['folder']} for row in records]}
+
+
+def cleanup(manifest, known):
+    token, nvidia = manifest['token'], manifest['nvidia_smi']
+    for sig, timeout in ((signal.SIGTERM, 8.0), (signal.SIGKILL, 8.0)):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            owned = owned_processes(token, known)
+            # Every service was launched into its own session/group. Kill those
+            # groups as well as identity-checked descendants that made new groups.
+            for group in {row['pgid'] for row in owned.values() if row['pgid'] in known}:
+                try:
+                    os.killpg(group, sig)
+                except ProcessLookupError:
+                    pass
+            for pid, row in owned.items():
+                if row['state'] == 'Z':
+                    continue
+                try:
+                    current = process_table().get(pid)
+                    if current and current['start_ticks'] == row['start_ticks']:
+                        os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+            while True:
+                try:
+                    child, _ = os.waitpid(-1, os.WNOHANG)
+                    if child == 0:
+                        break
+                except ChildProcessError:
+                    break
+            remaining = {pid: row for pid, row in owned_processes(token, known).items() if row['state'] != 'Z'}
+            if not remaining:
+                try:
+                    gpu = gpu_status(nvidia, set(known))
+                    if not gpu['owned_compute_pids']:
+                        return True, [], gpu
+                except Exception as error:
+                    return False, [], {'error': str(error)}
+            time.sleep(.2)
+    remaining = list(owned_processes(token, known).values())
+    return False, remaining, {'error': 'owned Linux processes remain after TERM/KILL'}
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--manifest', required=True)
+    parser.add_argument('--cleanup', action='store_true')
+    args = parser.parse_args()
+    manifest = json.loads(Path(args.manifest).read_text(encoding='utf-8'))
+    if manifest.get('version') != 'kevflix-xt-supervisor-v1' or len(manifest.get('token', '')) != 32:
+        raise ValueError('Invalid supervisor manifest')
+    status_path = Path(manifest['status_path'])
+    known = {}
+    previous = {}
+    try:
+        previous = json.loads(status_path.read_text())
+        if previous.get('token') == manifest['token']:
+            known = {int(row['pid']): int(row['start_ticks']) for row in previous.get('processes', [])}
+        else:
+            previous = {}
+    except FileNotFoundError:
+        pass
+    if args.cleanup:
+        confirmed, processes, gpu = cleanup(manifest, known)
+        temporary = cleanup_short_temp(previous.get('short_temp'), manifest['token'], confirmed)
+        confirmed = confirmed and (temporary is None or temporary['removed'])
+        atomic_json(status_path, {**previous, 'token': manifest['token'], 'phase': 'stopped', 'cleanup_confirmed': confirmed,
+                                  'short_temp': temporary, 'processes': processes, 'gpu': gpu, 'updated_unix': time.time()})
+        return 0 if confirmed else 3
+    # Adopt descendants whose intermediate vLLM parent exits during cleanup.
+    libc = ctypes.CDLL(None, use_errno=True)
+    if libc.prctl(36, 1, 0, 0, 0) != 0:
+        raise RuntimeError('Cannot enable Linux child subreaper; refusing unowned service startup')
+    stopping = []
+    signal.signal(signal.SIGTERM, lambda *_: stopping.append('stop_signal'))
+    signal.signal(signal.SIGINT, lambda *_: stopping.append('stop_signal'))
+    children, logs, reservations = [], [], {}
+    state = {'token': manifest['token'], 'phase': 'starting', 'cleanup_confirmed': False,
+             'supervisor_pid': os.getpid(), 'processes': [], 'services': {},
+             'gpu_budget': manifest['gpu_budget'],
+             'reference_denoising': 'Demucs upstream; DeepFilterNet disabled'}
+    last_valid_heartbeat = None
+    def check(*, admission=False):
+        nonlocal last_valid_heartbeat
+        if stopping:
+            raise RuntimeError(stopping[0])
+        stop = Path(manifest['stop_path'])
+        if stop.exists() and json.loads(stop.read_text()).get('token') == manifest['token']:
+            raise RuntimeError('stop_requested')
+        last_valid_heartbeat = read_heartbeat(manifest['heartbeat_path'], manifest['token'], last_valid_heartbeat)
+        if time.time() > float(last_valid_heartbeat['expires_unix']):
+            raise RuntimeError('resource:Windows lease heartbeat expired')
+        owned = owned_processes(manifest['token'], known)
+        state['processes'] = list(owned.values())
+        state['gpu'] = gpu_status(manifest['nvidia_smi'], set(owned))
+        if not admission and state['gpu']['free_mib'] < max(3072, int(manifest['gpu_floor_mib'])):
+            raise RuntimeError('resource:3072 MiB GPU free-memory floor breached')
+        for child in children:
+            if child.poll() is not None:
+                mt = state['services'].get('mt', {})
+                if mt.get('pid') == child.pid and mt.get('phase') == 'loading':
+                    spec = next(item for item in manifest['services'] if item['name'] == 'mt')
+                    raise MTGGUFUnsupported('vLLM GGUF load exited: ' + log_tail(spec['log']))
+                if mt.get('pid') == child.pid and mt.get('phase') == 'warming':
+                    raise MTWarmupFailed('MT server exited during startup warmup')
+                raise RuntimeError('a service exited before requested cleanup')
+        for service in state['services'].values():
+            if service['phase'] == 'ready' and not owns_listener(urllib.parse.urlparse(service['health_url']).port, owned):
+                raise RuntimeError('owned service lost its loopback listener')
+        state['updated_unix'] = time.time()
+        atomic_json(status_path, state)
+    reason = None
+    try:
+        check()
+        state['short_temp'] = create_short_temp(manifest['token'])
+        atomic_json(status_path, state)
+        temporary = state['short_temp']
+        if temporary['vllm_socket_path_bytes'] + temporary['socket_path_safety_margin_bytes'] >= temporary['socket_path_limit_bytes']:
+            raise IPCPathTooLong(temporary)
+        manifest['private_temp_environment'] = state['short_temp']['environment']
+        # Check/reserve EVERY configured port before loading the first model.
+        # Never adopt an unrelated existing service that merely answers HTTP 200.
+        for spec in manifest['services']:
+            port = urllib.parse.urlparse(spec['health_url']).port
+            reserved = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            try:
+                # Permit previous connections' TIME_WAIT, never SO_REUSEPORT or
+                # adoption of an active listener. Health still checks PID ownership.
+                reserved.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                reserved.bind(('127.0.0.1', port))
+            except BaseException:
+                reserved.close()
+                raise RuntimeError('XT configured port %s is already occupied; no service was started' % port)
+            reservations[port] = reserved
+        state['phase'] = 'verifying_assets'
+        state['asset_identity'] = verify_assets(manifest, check)
+        state['gguf_header'] = verify_gguf_header(manifest, check, known)
+        state['phase'] = 'starting'
+        for spec in manifest['services']:
+            check(admission=bool(spec.get('vllm_budget')))
+            if spec.get('vllm_budget'):
+                current = state['gpu']
+                budget = manifest['gpu_budget']
+                engine = spec['vllm_budget']
+                total_bytes, free_bytes = current['total_mib'] * (1 << 20), current['free_mib'] * (1 << 20)
+                required = (engine['fraction_hundredths'] * total_bytes + 99) // 100
+                admission = {'service': spec['name'], 'measurement': 'fresh same-GPU WSL nvidia-smi immediately before vLLM launch',
+                             'measured_unix': time.time(), 'gpu_uuid': current['gpu_uuid'],
+                             'total_bytes': total_bytes, 'fresh_free_bytes': free_bytes, 'engine': engine,
+                             'required_startup_free_bytes': required,
+                             'same_gpu_and_total': current['gpu_uuid'] == budget['gpu_uuid'] and total_bytes == budget['total_bytes']}
+                admission['ok'] = admission['same_gpu_and_total'] and free_bytes >= required
+                state['gpu_budget'].setdefault('launch_admissions', []).append(admission)
+                atomic_json(status_path, state)
+                if not admission['ok']:
+                    raise GPUBudgetInsufficient({'initial_budget': budget, 'launch_admission': admission})
+            if spec['host'] != '127.0.0.1':
+                raise RuntimeError('Public service binding forbidden')
+            log = open(spec['log'], 'ab', buffering=0)
+            logs.append(log)
+            env = {**os.environ, **manifest['environment'], **spec.get('environment', {}),
+                   **manifest['private_temp_environment'],
+                   'KEVFLIX_XT_RUN_TOKEN': manifest['token']}
+            port = urllib.parse.urlparse(spec['health_url']).port
+            reservations.pop(port).close()
+            child = subprocess.Popen(spec['argv'], cwd=spec['cwd'], env=env, stdin=subprocess.DEVNULL,
+                                     stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+            children.append(child)
+            row = process_table().get(child.pid)
+            if row:
+                known[child.pid] = row['start_ticks']
+            state['services'][spec['name']] = {'pid': child.pid, 'phase': 'loading', 'health_url': spec['health_url']}
+            deadline = time.monotonic() + float(manifest['start_timeout_seconds'])
+            while True:
+                check()
+                try:
+                    with urllib.request.urlopen(spec['health_url'], timeout=2) as response:
+                        healthy = response.status == 200 and owns_listener(port, owned_processes(manifest['token'], known))
+                except Exception:
+                    healthy = False
+                if healthy:
+                    break
+                if time.monotonic() >= deadline:
+                    if spec['name'] == 'mt':
+                        raise MTGGUFUnsupported('vLLM GGUF startup deadline: ' + log_tail(spec['log']))
+                    raise RuntimeError(spec['name'] + ' startup health deadline exceeded')
+                time.sleep(.5)
+            if spec['name'] == 'mt':
+                state['services']['mt']['phase'] = 'warming'
+                state['services']['mt']['warmup'] = warm_mt(manifest, check, known)
+            state['services'][spec['name']]['phase'] = 'ready'
+        state['phase'] = 'ready'
+        while True:
+            check()
+            time.sleep(1.0)
+    except BaseException as error:
+        reason = '%s: %s' % (type(error).__name__, error)
+        if isinstance(error, (GPUBudgetInsufficient, MTGGUFUnsupported, MTWarmupFailed, IPCPathTooLong, SharedJSONWriteFailed, MonitorFailed)):
+            state['fault'] = error.fault
+    finally:
+        confirmed, processes, gpu = cleanup(manifest, known)
+        temporary = cleanup_short_temp(state.get('short_temp'), manifest['token'], confirmed)
+        state['short_temp'] = temporary
+        confirmed = confirmed and (temporary is None or temporary['removed'])
+        state.update(phase='stopped', reason=reason, cleanup_confirmed=confirmed,
+                     processes=processes, gpu=gpu, updated_unix=time.time())
+        atomic_json(status_path, state)
+        for log in logs:
+            log.close()
+        for reserved in reservations.values():
+            reserved.close()
+    return 0 if confirmed else 3
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

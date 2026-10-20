@@ -1,0 +1,5 @@
+X-Translator source: zhaoyx239/X-Translator commit dc6a59a867bd20fc9bb7aa3b360256af8d89cc5c.
+X-Voice source: sunnyxrxrx/X-Voice commit 817bcdd9f8173eb01c7d5c895858b1d93780d9d0.
+Both upstream READMEs declare MIT code licensing; original READMEs, pyproject metadata and source notices are retained. Neither pinned source tree supplies a standalone LICENSE file, so no copyright attribution was fabricated.
+X-Voice weights are separately CC-BY-NC-4.0 (XRXRX/X-Voice pinned model card). Weights are not vendored here. Qwen3-ASR and LMT model cards declare Apache-2.0; Vocos MIT; CAM++ ModelScope v2.0.2 card declares Apache License 2.0. Provisioning owns weight downloads and exact weight hashes.
+Vendored inference dependencies include the full backend/controller/speaker prompt manager; XVoice model and IPA tokenizer source; rate_pred; and ONLY the directly imported eval/text_normalizer.py. Unrelated evaluation datasets/model trees, images, examples and trained weights are omitted.

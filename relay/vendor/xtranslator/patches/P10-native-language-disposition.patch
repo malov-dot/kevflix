@@ -1,0 +1,96 @@
+diff --git a/translator/backend/session.py b/translator/backend/session.py
+index 35c7283..7643388 100644
+--- a/translator/backend/session.py
++++ b/translator/backend/session.py
+@@ -31,6 +31,7 @@ from .services import (
+     Qwen3ASRService,
+     SessionAudioStore,
+     SessionState,
++    TARGET_LANGUAGE_NAMES,
+     XVoiceTTSService,
+     ZipformerASRService,
+     pcm_bytes_to_float32,
+@@ -41,6 +42,10 @@ from .zipformer_postprocess import ZipformerTextPostProcessor, normalize_zipform
+ 
+ logger = setup_logger()
+ 
++
++def _native_language(result):
++    return {key: result.get(key) for key in ('language_code', 'language_raw', 'language_source')}
++
+ FILLER_WORDS = {
+     "嗯",
+     "啊",
+@@ -764,6 +769,7 @@ class TranslationSession:
+                 "text": text,
+                 "delta": delta,
+                 "ts": result.get("ts"),
++                **_native_language(result),
+             },
+             processing_elapsed_ms=processing_elapsed_ms,
+         )
+@@ -1021,6 +1027,7 @@ class TranslationSession:
+                     {
+                         "text": segment,
+                         "source_text": source_segment,
++                        **_native_language(result),
+                         "turn_id": self._current_turn_id,
+                         "segment_index": index,
+                         "segment_count": segment_count,
+@@ -1376,11 +1383,20 @@ class TranslationSession:
+         self._xt_next_uid += 1
+         item["seg_uid"] = self._xt_next_uid
+         self._xt_open[item["seg_uid"]] = item
++        native = _native_language(item)
++        identity = (native['language_code'], native['language_raw'], native['language_source'])
++        if native['language_code'] is not None and native['language_source'] == 'qwen3-asr-native' \
++                and identity != getattr(self, '_xt_last_language', None):
++            self._xt_last_language = identity
++            await self._send_json({'action': 'source_language_detected', 'data': {
++                'seg_uid': item['seg_uid'], 'code': native['language_code'], 'raw': native['language_raw'],
++                'language_source': native['language_source']}})
+         await self._send_json(
+             {
+                 "action": "source_segment_ready",
+                 "data": {
+                     "seg_uid": item["seg_uid"],
++                    **native,
+                     "source_text": item.get("source_text") or item.get("text", ""),
+                     "turn_id": item.get("turn_id", ""),
+                     "segment_index": item.get("segment_index", 1),
+@@ -1525,6 +1541,7 @@ class TranslationSession:
+             "seg_uid": item["seg_uid"], "source_start_ms": item.get("source_start_ms", 0),
+             "source_end_ms": item.get("source_end_ms", 0), "speaker_id": item.get("speaker_id", ""),
+             "source_text": item.get("source_text") or item.get("text", ""),
++            **_native_language(item),
+             "status": status, "terminal": True, "message": str(error)}})
+         if not sent:
+             raise ConnectionError("terminal outcome could not be delivered")
+@@ -1560,11 +1577,18 @@ class TranslationSession:
+ 
+     async def _xt_process_translation(self, item: dict) -> None:
+         segment = item["text"]
++        # Language belongs to this committed ASR result, never a window/filename guess.
++        code = item.get('language_code')
++        status = ('language_unknown' if code is None else 'source_english' if code == 'en'
++                  else 'language_unsupported' if code not in TARGET_LANGUAGE_NAMES else None)
++        if status:
++            await self._xt_terminal_error(item, status, 'Native Qwen language disposition: ' + status)
++            return
+         loop = asyncio.get_running_loop()
+         started = time.perf_counter()
+         try:
+             translated = await loop.run_in_executor(None, self.mt_service.translate, segment,
+-                                                    self.state.source_lang, self.state.target_lang)
++                                                    code, self.state.target_lang)
+         except Exception as exc:
+             await self._xt_terminal_error(item, "translation_failed", exc)
+             if self._xt_transport_error(exc):
+@@ -1594,6 +1618,7 @@ class TranslationSession:
+             return
+         tts_audio_path = await self.audio_store.save_tts_audio(audio_bytes, self.settings.tts_sample_rate)
+         data = {"seg_uid": item["seg_uid"], "source_text": item.get("source_text") or segment,
++                **_native_language(item),
+                 "translated_text": translated, "turn_id": item.get("turn_id", ""),
+                 "segment_index": item.get("segment_index", 1), "segment_count": item.get("segment_count", 1),
+                 "speaker_id": item.get("speaker_id", ""),

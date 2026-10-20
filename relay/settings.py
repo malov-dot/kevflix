@@ -11,7 +11,8 @@ import threading
 import time
 from pathlib import Path
 from urllib import request, parse, error
-from .config import Config
+from . import __version__
+from .config import Config, gpu_first_migration
 from .plex import NoCrossOriginRedirect, Plex
 from .plex_browse import PlexBrowse
 
@@ -83,6 +84,7 @@ class PCSettings:
         return json.loads(self.config.file.read_text(encoding="utf-8-sig"))
 
     def save_raw(self, value):
+        gpu_first_migration(value)       # app-owned CPU-only movie keys only (relay/config.py); nothing else changes
         temporary = self.config.file.with_name(".kevflix-config-" + secrets.token_hex(8) + ".tmp")
         try:
             with temporary.open("x", encoding="utf-8") as stream:
@@ -110,11 +112,34 @@ class PCSettings:
             if self.app.tv.sessions:
                 raise ValueError("Stop the KevFLIX playback session before changing PC settings")
 
+    def engine_idle_required(self):
+        self.idle_required()
+        if self.setup_process and self.setup_process.poll() is None:
+            raise ValueError("Wait for the component installation to finish before changing engine settings")
+        if (self.app.jobs.active_job is not None or self.app.jobs.active_owner is not None
+                or self.app.publications or self.app.jobs.publication_owners):
+            raise ValueError("Finish or cancel active movie work before changing the dubbing engine or source language")
+        if any(job["state"] not in ("complete", "error", "cancelled", "needs_review")
+               for job in self.app.store.jobs()):
+            raise ValueError("Finish or cancel queued movie jobs before changing the dubbing engine or source language")
+
+    def engine_status(self):
+        """Read existing coordinator observations only; never ensure/start/load a service from settings."""
+        status = getattr(self.app.jobs, "engine_status", None)
+        if not callable(status):
+            return {"engine": self.config["speech_engine"], "state": "unobserved"}
+        try:
+            return status()
+        except Exception as error:
+            return {"engine": self.config["speech_engine"], "state": "status_error", "error": str(error)}
+
     def view(self):
         data = self.config.data
         return {"bind": data["bind"], "port": data["port"], "public_url": data["public_url"],
                 "media_roots": data["media_roots"], "path_mappings": data["path_mappings"],
                 "device": data["device"], "cpu_threads": data["cpu_threads"],
+                "speech_engine": data["speech_engine"], "xt_source_language": data.get("xt_source_language", "auto"),
+                "engine_status": self.engine_status(),
                 "tv": {k: data["tv"][k] for k in ("max_height","video_encoder","upscale","hdr_mode","buffer_segments")},
                 "updates_enabled": data["updates"]["enabled"], "start_with_windows": startup_enabled(),
                 "setup_only": data["setup_only"], "setup_locked": data.get("setup_locked", False),
@@ -122,13 +147,30 @@ class PCSettings:
                 "plex": {"linked": bool(data.get("plex_account_token")),
                          "configured": bool(data["plex"]["token"]), "url": data["plex"]["url"],
                          "server_name": data.get("plex_server_name", "")},
+                # Read-only: translation_engine / translation_llm_model are edited in relay-config.json (a Qwen3-8B
+                # folder is a 16 GB user-supplied path, so it is deliberately not a remotely editable setting).
+                "translation_engine": data.get("translation_engine", "m2m100"),
                 "assets": {key: Path(data[key]).is_dir() for key in
-                           ("asr_model","translation_model","diarization_model","separation_model_dir")}}
+                           (("asr_model","diarization_model","separation_model_dir","translation_llm_model")
+                            if data.get("translation_engine") == "qwen3" else
+                            ("asr_model","translation_model","diarization_model","separation_model_dir"))}}
 
     def save(self, supplied):
         self.idle_required()
         with self.lock:
             raw = self.raw()
+            if "speech_engine" in supplied:
+                if supplied["speech_engine"] not in ("generic", "xtranslator", "actor", "sapi", "piper"):
+                    raise ValueError("Choose generic, xtranslator, actor, sapi or piper")
+                raw["speech_engine"] = supplied["speech_engine"]
+            if "xt_source_language" in supplied:
+                if supplied["xt_source_language"] not in ("auto", "ru", "es", "en"):
+                    raise ValueError("Choose automatic detection, Russian, Spanish or English")
+                raw["xt_source_language"] = supplied["xt_source_language"]
+            engine_change = (raw.get("speech_engine", self.config["speech_engine"]) != self.config["speech_engine"]
+                             or raw.get("xt_source_language", "auto") != self.config.data.get("xt_source_language", "auto"))
+            if engine_change:
+                self.engine_idle_required()
             for name in ("bind", "public_url"):
                 if name in supplied:
                     raw[name] = str(supplied[name]).strip()
@@ -151,7 +193,12 @@ class PCSettings:
                         raise ValueError("Each path mapping needs nas and pc paths")
                 raw["path_mappings"] = mappings
             if "device" in supplied:
-                raw["device"] = supplied["device"]
+                # GPU-first: the movie path always uses 'cuda'. The obsolete processor selector values ('cpu',
+                # 'cooperative-cuda', empty) no longer select anything and are not stored; any other value is refused.
+                if supplied["device"] == "cuda":
+                    raw["device"] = "cuda"
+                elif supplied["device"] not in ("cpu", "cooperative-cuda", "", None):
+                    raise ValueError("Movie dubbing runs on the GPU; the processor setting accepts only cuda")
             if "cpu_threads" in supplied:
                 raw["cpu_threads"] = max(1, min(16, int(supplied["cpu_threads"])))
             if "tv" in supplied:
@@ -172,7 +219,12 @@ class PCSettings:
                     raise ValueError("This worker was launched with the setup-only safety lock")
                 raw["setup_only"] = bool(supplied["setup_only"])
             old_address = (self.config["bind"], self.config["port"], self.config["setup_only"])
-            self.save_raw(raw)
+            if engine_change:
+                # Close the old producer before this Config-validated atomic save, then rebuild lazily.
+                # Failures propagate rather than returning a false "applied" response.
+                self.app.jobs.reconfigure_engine(lambda: self.save_raw(raw))
+            else:
+                self.save_raw(raw)
             if "start_with_windows" in supplied:
                 set_startup(bool(supplied["start_with_windows"]))
             result = self.view()
@@ -180,15 +232,21 @@ class PCSettings:
             return result
 
     def install_tools(self, kind, accepted=False):
-        if os.name != "nt" or kind not in ("ffmpeg", "dependencies", "models"):
+        if os.name != "nt" or kind not in ("ffmpeg", "dependencies", "models", "xtranslator"):
             raise ValueError("Choose a Windows processing component")
-        self.idle_required()
+        if kind == "xtranslator":
+            self.engine_idle_required()
+        else:
+            self.idle_required()
         with self.lock:
             if self.setup_process and self.setup_process.poll() is None:
                 raise ValueError("A component installation is already running")
-            if kind == "models" and not accepted:
+            if kind in ("models", "xtranslator") and not accepted:
                 raise ValueError("Read THIRD-PARTY.md and accept the upstream model terms first")
-            if kind == "ffmpeg":
+            if kind == "xtranslator":
+                args = [sys.executable, "-m", "relay.app_runtime.xt_provision", "--config", str(self.config.file),
+                        "--distro", self.config["xt_wsl_distro"]]
+            elif kind == "ffmpeg":
                 args = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "Setup-FFmpeg.ps1")]
             else:
                 args = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(ROOT / "Setup-Worker.ps1")]
@@ -212,7 +270,7 @@ class PCSettings:
             raw["plex_client_identifier"] = client
             self.save_raw(raw)
         headers = {"Accept": "application/json", "X-Plex-Product": "KevFLIX",
-                   "X-Plex-Client-Identifier": client, "X-Plex-Version": "0.3.3"}
+                   "X-Plex-Client-Identifier": client, "X-Plex-Version": __version__}
         if token:
             headers["X-Plex-Token"] = token
         req = request.Request("https://plex.tv" + path, method=method, headers=headers,

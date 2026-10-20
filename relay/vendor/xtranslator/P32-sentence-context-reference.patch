@@ -1,0 +1,414 @@
+--- a/translator/backend/asr_backends.py
++++ b/translator/backend/asr_backends.py
+@@ -134,18 +134,24 @@
+ 
+ 
+ def split_text_by_committable_punctuation(text: str) -> tuple[str, str]:
+-    """切分可提前提交的前缀和仍在波动的尾部。"""
++    """Keep clauses together; bound a sentence-free uncommitted tail at 240 chars."""
+     value = text.strip()
+     if not value:
+         return "", ""
+     punctuation_indexes = [
+         index
+         for index, char in enumerate(value)
+-        if char in "，。！？；：,.!?;:"
++        if char in ".!?…。！？"
+     ]
+-    if len(punctuation_indexes) < 2:
++    stable = [index for index in punctuation_indexes if any(ch.isalnum() for ch in value[index + 1:])]
++    if stable:
++        cutoff = stable[-1] + 1
++    elif len(value) > 240:
++        commas = [index for index, char in enumerate(value[:240]) if char in ",，"]
++        spaces = [index for index, char in enumerate(value[:240]) if char.isspace()]
++        cutoff = commas[-1] + 1 if commas else spaces[-1] + 1 if spaces else 240
++    else:
+         return "", value
+-    cutoff = punctuation_indexes[-2] + 1
+     return value[:cutoff].strip(), value[cutoff:].strip()
+ 
+ 
+@@ -276,7 +282,8 @@
+ 
+     def _retain_result(self, result: dict) -> str:
+         self.language_result = {key: result.get(key) for key in
+-                                ('language_code', 'language_raw', 'language_source')}
++                                ('language_code', 'language_raw', 'language_source',
++                                 'language_context', 'language_observation_id')}
+         return result['text']
+ 
+     def recognize(
+@@ -638,6 +645,7 @@
+         outputs: list[dict] = []
+         # Commit rebuilds remote state. Bind emitted text to the preceding recognition.
+         language = dict(self.asr.language_result)
++        # Nonfinal service text is already the uncommitted remainder.
+         committable, _tail = split_text_by_committable_punctuation(full_text)
+ 
+         if committable:
+@@ -650,6 +658,8 @@
+                     {
+                         "type": "final",
+                         "text": new_final,
++                        "commit_basis": ("sentence" if committable[-1] in ".!?…。！？"
++                                         else "runaway_comma" if committable[-1] in ",，" else "runaway_limit"),
+                         **language,
+                         "delta": "",
+                         "ts": time.time(),
+@@ -713,7 +723,8 @@
+                 outputs.append(
+                     {
+                         "type": "final",
+-                        "text": remaining_text or final_text,
++                        "text": remaining_text,
++                        "commit_basis": "silence",
+                         **self.asr.language_result,
+                         "delta": "",
+                         "ts": time.time(),
+@@ -761,6 +772,7 @@
+         result = {
+             "type": "final",
+             "text": remaining_text.strip(),
++            "commit_basis": "silence",
+             **self.asr.language_result,
+             "delta": "",
+             "ts": time.time(),
+--- a/translator/backend/session.py
++++ b/translator/backend/session.py
+@@ -44,7 +44,8 @@
+ 
+ 
+ def _native_language(result):
+-    return {key: result.get(key) for key in ('language_code', 'language_raw', 'language_source')}
++    return {key: result.get(key) for key in ('language_code', 'language_raw', 'language_source',
++                                            'language_context', 'language_observation_id')}
+ 
+ FILLER_WORDS = {
+     "嗯",
+@@ -733,6 +734,8 @@
+             elapsed_ms,
+         )
+         is_boundary_flush = self._asr_boundary_flush_requested
++        if is_boundary_flush and result.get("type") == "final":
++            result["commit_basis"] = "speaker_boundary"
+         await self._handle_asr_output(result, processing_elapsed_ms=elapsed_ms)
+         if result.get("type") == "final" and (
+             is_boundary_flush or not (result.get("text") or "").strip()
+@@ -772,6 +775,7 @@
+                 "text": text,
+                 "delta": delta,
+                 "ts": result.get("ts"),
++                "commit_basis": result.get("commit_basis"),
+                 **_native_language(result),
+             },
+             processing_elapsed_ms=processing_elapsed_ms,
+@@ -980,6 +984,7 @@
+                     "text": text,
+                     "delta": delta,
+                     "ts": result.get("ts"),
++                    "commit_basis": result.get("commit_basis"),
+                 },
+             }
+         )
+@@ -1030,6 +1035,7 @@
+                     {
+                         "text": segment,
+                         "source_text": source_segment,
++                        "commit_basis": result.get("commit_basis"),
+                         **_native_language(result),
+                         "turn_id": self._current_turn_id,
+                         "segment_index": index,
+@@ -1401,6 +1407,7 @@
+                     "seg_uid": item["seg_uid"],
+                     **native,
+                     "source_text": item.get("source_text") or item.get("text", ""),
++                    "commit_basis": item.get("commit_basis"),
+                     "turn_id": item.get("turn_id", ""),
+                     "segment_index": item.get("segment_index", 1),
+                     "segment_count": item.get("segment_count", 1),
+@@ -1544,6 +1551,8 @@
+             "seg_uid": item["seg_uid"], "source_start_ms": item.get("source_start_ms", 0),
+             "source_end_ms": item.get("source_end_ms", 0), "speaker_id": item.get("speaker_id", ""),
+             "source_text": item.get("source_text") or item.get("text", ""),
++            "reference_refresh": item.get("reference_refresh"),
++            "commit_basis": item.get("commit_basis"),
+             **_native_language(item),
+             "status": status, "terminal": True, "message": str(error)}})
+         if not sent:
+@@ -1602,8 +1611,19 @@
+             await self._xt_terminal_error(item, "empty_output", "translation returned empty text")
+             return
+         clone_audio_path = item.get("clone_audio_path") or None
+-        if self.speaker_prompt_tracker is None:
+-            clone_audio_path = await self.audio_store.export_recent_clone(self.settings.clone_window_seconds)
++        speaker_id = item.get("speaker_id") or ""
++        reference_refresh = {"attempted": False, "speaker_id": speaker_id,
++                             "available": bool(clone_audio_path)}
++        if not clone_audio_path and self.speaker_prompt_tracker is not None and speaker_id:
++            # The same speaker's prompt may have matured while MT was running.
++            # Never ask for the current/default speaker when this identity is empty.
++            reference_refresh["attempted"] = True
++            clone_audio_path = await self.speaker_prompt_tracker.export_prompt_for_speaker(speaker_id)
++            reference_refresh["available"] = bool(clone_audio_path)
++        item["reference_refresh"] = reference_refresh
++        if not clone_audio_path:
++            await self._xt_terminal_error(item, "tts_failed", "missing_speaker_reference")
++            return
+         started = time.perf_counter()
+         try:
+             audio_bytes = await loop.run_in_executor(None, self.tts_service.synthesize, translated, clone_audio_path)
+@@ -1621,12 +1641,14 @@
+             return
+         tts_audio_path = await self.audio_store.save_tts_audio(audio_bytes, self.settings.tts_sample_rate)
+         data = {"seg_uid": item["seg_uid"], "source_text": item.get("source_text") or segment,
++                "commit_basis": item.get("commit_basis"),
+                 **_native_language(item),
+                 "translated_text": translated, "turn_id": item.get("turn_id", ""),
+                 "segment_index": item.get("segment_index", 1), "segment_count": item.get("segment_count", 1),
+                 "speaker_id": item.get("speaker_id", ""),
+                 "source_start_ms": item.get("source_start_ms", 0), "source_end_ms": item.get("source_end_ms", 0),
+                 "clone_audio_path": clone_audio_path, "tts_audio_path": tts_audio_path,
++                "reference_refresh": reference_refresh,
+                 "tts_bytes": len(audio_bytes), "tts_sha256": hashlib.sha256(audio_bytes).hexdigest(),
+                 "tts_sample_rate": self.settings.tts_sample_rate, "tts_channels": 1, "tts_sample_width": 2,
+                 "status": "ok", "terminal": True,
+@@ -1709,12 +1731,12 @@
+         self._zipformer_translation_buffer = ""
+ 
+ def split_translation_segments(text: str) -> list[str]:
+-    """按标点切分翻译片段。"""
+-    parts = re.findall(r"[^，。！？；：,.!?;:]+[，。！？；：,.!?;:]?|[^，。！？；：,.!?;:]+$", text)
++    """One MT unit per sentence; preserve comma clauses and the unfinished tail."""
++    parts = re.findall(r"[^.!?…。！？]+(?:[.!?…。！？]+|$)", text)
+     return [
+         part.strip()
+-        for i, part in enumerate(parts)
+-        if part and part.strip() and (should_emit_segment(part.strip(), 1) or i == len(parts) - 1)
++        for part in parts
++        if part and part.strip()
+     ] or [text.strip()]
+ 
+ 
+--- a/translator/backend/services.py
++++ b/translator/backend/services.py
+@@ -3,6 +3,7 @@
+ import asyncio
+ import base64
+ import audioop
++from collections import deque
+ from datetime import datetime
+ import io
+ import os
+@@ -235,6 +236,34 @@
+                 logger.warning("old session audio prune failed path=%s err=%s", resolved, exc)
+ 
+ 
++class NativeLanguagePrior:
++    """Two agreeing independent native finals; never a forced output label."""
++    def __init__(self):
++        self.seen_final_ids = deque(maxlen=64)
++        self.finals = []
++
++    def request_fields(self):
++        if len(self.finals) == 2:
++            return {'language_context_code': self.finals[-1][0],
++                    'basis_final_ids': [item[1] for item in self.finals]}
++        return {'language_context_code': None, 'basis_final_ids': []}
++
++    def observe(self, result):
++        observation_id = result.get('language_observation_id')
++        if result.get('is_final') is not True or not isinstance(observation_id, str) \
++                or re.fullmatch('[0-9a-f]{32}', observation_id) is None or observation_id in self.seen_final_ids:
++            return
++        self.seen_final_ids.append(observation_id)
++        code = result.get('language_code')
++        if result.get('language_source') != 'qwen3-asr-native' or not isinstance(code, str) \
++                or re.fullmatch('[a-z]{2}', code) is None \
++                or sum(char.isalpha() for char in result.get('text', '')) < 12:
++            return
++        if self.finals and self.finals[-1][0] != code:
++            self.finals = []
++        self.finals = (self.finals + [(code, observation_id)])[-2:]
++
++
+ class Qwen3ASRService:
+     """Qwen3ASR HTTP 客户端。"""
+ 
+@@ -243,6 +272,7 @@
+         self.sample_rate = sample_rate
+         self.chunk_seconds = chunk_seconds
+         self.session = requests.Session()
++        self.language_prior = NativeLanguagePrior()  # per client/WS, survives utterance cache.clear()
+         self.request_timeout_seconds = float(os.environ.get('XTRANSLATE_ASR_REQUEST_TIMEOUT_SECONDS', '90'))
+         if not 30. <= self.request_timeout_seconds <= 90.:
+             raise ValueError('ASR request timeout must be30..90 seconds')
+@@ -266,6 +296,7 @@
+             "is_final": is_final,
+             "sample_rate": sample_rate or self.sample_rate,
+             "committed_text": committed_text,
++            **self.language_prior.request_fields(),
+         }
+         start_time = time.perf_counter()
+         response = None
+@@ -290,6 +321,10 @@
+                 or (raw is not None and not isinstance(raw, str)) \
+                 or source not in (None, 'qwen3-asr-native') or (code is not None and (not raw or source is None)):
+             raise ValueError('Malformed Qwen native language evidence')
++        if is_final:
++            self.language_prior.observe(result)
++        logger.info('qwen3 language context used=%s observation_id=%s final=%s',
++                    result.get('language_context'), result.get('language_observation_id'), is_final)
+         logger.info(
+             "qwen3 request final=%s elapsed_ms=%.1f text_len=%s",
+             is_final,
+@@ -838,7 +873,9 @@
+         }
+         start_time = time.perf_counter()
+         response = self.session.post(self.api_url, json=payload, timeout=90)
+-        response.raise_for_status()
++        if not response.ok:
++            raise requests.HTTPError('X-Voice synthesis HTTP %s: %s' %
++                                     (response.status_code, response.text[:4096]), response=response)
+         pcm = self._wav_bytes_to_pcm(response.content)
+         logger.info(
+             "xvoice tts request elapsed_ms=%.1f text_len=%s audio_bytes=%s clone=%s",
+--- a/translator/server/qwen3asr/qwen3asr_server.py
++++ b/translator/server/qwen3asr/qwen3asr_server.py
+@@ -2,7 +2,7 @@
+ import argparse
+ import uvicorn
+ from fastapi import FastAPI, HTTPException
+-from pydantic import BaseModel
++from pydantic import BaseModel, Field
+ import numpy as np
+ import base64
+ import io
+@@ -13,6 +13,8 @@
+ from qwen_asr import Qwen3ASRModel
+ import logging
+ import time
++import uuid
++import re
+ 
+ logging.basicConfig(level=logging.INFO)
+ logger = logging.getLogger("Qwen3ASR")
+@@ -56,12 +58,35 @@
+     'zh en ar de fr es pt id it ko ru th vi ja tr hi ms nl sv da fi pl cs fa el ro hu mk'.split()))
+ 
+ 
+-def recognition_result(text, state):
++def validated_language_context(code, basis_final_ids):
++    names = {value: key.title() for key, value in NATIVE_LANGUAGE_CODES.items()}
++    if code is None and not basis_final_ids:
++        return {'hint': None, 'basis_final_ids': []}
++    if code not in names or len(basis_final_ids) != 2 or len(set(basis_final_ids)) != 2 \
++            or any(not isinstance(item, str) or re.fullmatch('[0-9a-f]{32}', item) is None for item in basis_final_ids):
++        raise ValueError('Language context requires a canonical native code and two distinct final observation IDs')
++    return {'hint': names[code], 'basis_final_ids': list(basis_final_ids)}
++
++
++def language_context_prompt(context):
++    # Canonical audio-derived label only; avoid adding instructional English
++    # that could leak into the transcript. This is not the language= argument.
++    return context['hint'] or ''
++
++
++def init_context_state(context):
++    return model.init_streaming_state(context=language_context_prompt(context), language=None,
++                                     unfixed_chunk_num=2, unfixed_token_num=5, chunk_size_sec=2.0)
++
++
++def recognition_result(text, state, context, observation_id):
+     raw = getattr(state, 'language', None)
+     raw = raw.strip() if isinstance(raw, str) and raw.strip() else None
+     return {'text': text or '', 'language_raw': raw,
+             'language_code': NATIVE_LANGUAGE_CODES.get(raw.lower()) if raw else None,
+-            'language_source': 'qwen3-asr-native' if raw else None}
++            'language_source': 'qwen3-asr-native' if raw else None,
++            'language_observation_id': observation_id,
++            'language_context': {'hint': context['hint'], 'basis_final_ids': list(context['basis_final_ids'])}}
+ 
+ 
+ def preview_text(text: str, limit: int = 120) -> str:
+@@ -102,6 +127,8 @@
+     is_final: bool = False
+     sample_rate: int = 16000
+     committed_text: str = ""
++    language_context_code: str | None = Field(default=None, max_length=2)
++    basis_final_ids: list[str] = Field(default_factory=list, max_length=2)
+ 
+ 
+ def rebuild_streaming_state(ctx: dict) -> None:
+@@ -110,11 +137,7 @@
+         len(ctx["history_chunks"]),
+         preview_text(ctx.get("prefix_text", "")),
+     )
+-    new_state = model.init_streaming_state(
+-        unfixed_chunk_num=2,
+-        unfixed_token_num=5,
+-        chunk_size_sec=2.0
+-    )
++    new_state = init_context_state(ctx['language_context'])
+     for chunk in ctx["history_chunks"]:
+         if chunk.size == 0:
+             continue
+@@ -154,12 +177,11 @@
+             if request.session_id:
+                 # 初始化 Session
+                 if request.session_id not in session_cache:
++                    context = validated_language_context(request.language_context_code, request.basis_final_ids)
+                     session_cache[request.session_id] = {
+-                        "state": model.init_streaming_state(
+-                            unfixed_chunk_num=2,
+-                            unfixed_token_num=5,
+-                            chunk_size_sec=2.0
+-                        ),
++                        "state": init_context_state(context),
++                        "language_context": context,
++                        "language_observation_id": uuid.uuid4().hex,
+                         "step_count": 0,
+                         "history_chunks": [], 
+                         "last_valid_text": "",
+@@ -202,7 +224,7 @@
+                         preview_text(getattr(ctx["state"], "text", "")),
+                         preview_text(final_text),
+                     )
+-                    result = recognition_result(final_text, ctx['state'])
++                    result = recognition_result(final_text, ctx['state'], ctx['language_context'], ctx['language_observation_id'])
+                     del session_cache[request.session_id]
+                     return result
+                 else:
+@@ -221,18 +243,19 @@
+                     )
+                     if not current_text:
+                         ctx["last_valid_text"] = ""
+-                        return recognition_result('', ctx['state'])
++                        return recognition_result('', ctx['state'], ctx['language_context'], ctx['language_observation_id'])
+                     if ctx["last_valid_text"] and current_text == ctx["last_valid_text"]:
+-                        return dict(ctx['last_valid_result'])
++                        return recognition_result(current_text, ctx['state'], ctx['language_context'], ctx['language_observation_id'])
+                     ctx["last_valid_text"] = current_text
+-                    ctx['last_valid_result'] = recognition_result(current_text, ctx['state'])
++                    ctx['last_valid_result'] = recognition_result(current_text, ctx['state'], ctx['language_context'], ctx['language_observation_id'])
+                     return dict(ctx['last_valid_result'])
+             else:
+                 # 非流式处理
+-                state = model.init_streaming_state(unfixed_chunk_num=2, unfixed_token_num=5, chunk_size_sec=2.0)
++                context = validated_language_context(request.language_context_code, request.basis_final_ids)
++                state = init_context_state(context)
+                 model.streaming_transcribe(audio_data, state)
+                 model.finish_streaming_transcribe(state)
+-                return recognition_result(state.text, state)
++                return recognition_result(state.text, state, context, uuid.uuid4().hex)
+                 
+         except Exception as e:
+             logger.exception("Inference internal error class=%s stage=run_inference elapsed_seconds=%.3f session_id=%s message=%r",
+@@ -247,6 +270,7 @@
+     stage = 'decode_audio'
+     try:
+         reject_poisoned_session(request.session_id)
++        validated_language_context(request.language_context_code, request.basis_final_ids)
+         if not request.audio.startswith("data:audio/wav;base64,"):
+             raise ValueError("不支持的音频格式")
+         
