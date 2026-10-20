@@ -359,6 +359,12 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     if(session&&wantedPlay&&!video.paused&&!reportedError)
       hideTimer=setTimeout(function(){$('player-controls').classList.add('controls-hidden');},5000);
   }
+  // A play() that a later pause() or a new load cancels is not an error (the viewer or a new stream changed the plan): swallow only that.
+  function playVideo(){
+    var result=video.play();
+    if(!result||typeof result.catch!=='function')return Promise.resolve();
+    return result.catch(function(e){if(e&&(e.name==='AbortError'||/interrupted by a (call to pause|new load request)/i.test(String(e.message||''))))return;throw e;});
+  }
   // Play button: its icon follows data-state (CSS), never its text.
   function setPlayState(){var b=$('play-pause');b.dataset.state=wantedPlay?'pause':'play';b.setAttribute('aria-label',wantedPlay?'Pause':'Play');}
   // What the TV is doing with the picture, in plain words: the output limit is not upscaling.
@@ -402,7 +408,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     if(SemBufferGate.loadable(bufferGate,value)&&loadedGeneration!==value.generation&&!loading&&!value.error)void loadStream();
     if(!value.ready){bufferView(session.dub?'Preparing English dub':'Preparing video',wantedPlay?'Playback starts automatically when it is ready.':'Press Play when you want to start.',null);}
     else if(!verdict.open&&(loadedGeneration!==value.generation||(wantedPlay&&video.paused&&!video.ended))){bufferView('Buffering',bufferDetail(verdict,value),verdict.need?(verdict.lead||0)/verdict.need:null);}
-    if(SemBufferGate.autoResume(bufferGate,value,{loaded:loadedGeneration===value.generation&&!loading,paused:video.paused,ended:video.ended,busy:resuming,error:!!reportedError,wantedPlay:wantedPlay})){resuming=true;$('buffering').hidden=true;video.play().catch(function(e){playerMessage(e.message);}).then(function(){resuming=false;});}
+    if(SemBufferGate.autoResume(bufferGate,value,{loaded:loadedGeneration===value.generation&&!loading,paused:video.paused,ended:video.ended,busy:resuming,error:!!reportedError,wantedPlay:wantedPlay})){resuming=true;$('buffering').hidden=true;playVideo().catch(function(e){playerMessage(e.message);}).then(function(){resuming=false;});}
     updateCaptions(false);
   }
   async function openMovie(item,restart){
@@ -469,7 +475,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       }
       if(number!==operation||!session||generation!==session.generation)return;
       $('buffering').hidden=true;reportedError='';playerMessage('');
-      if(SemBufferGate.canResume(bufferGate,session,wantedPlay))await video.play();
+      if(SemBufferGate.canResume(bufferGate,session,wantedPlay))await playVideo();
       else if(wantedPlay)$('buffering').hidden=false;
       showControls();
     }catch(error){
@@ -508,7 +514,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   async function playPause(){
     if(!session)return;
     wantedPlay=!wantedPlay;
-    if(wantedPlay&&loadedGeneration===session.generation&&SemBufferGate.canResume(bufferGate,session,wantedPlay)){try{await video.play();}catch(e){playerMessage(e.message);}}
+    if(wantedPlay&&loadedGeneration===session.generation&&SemBufferGate.canResume(bufferGate,session,wantedPlay)){try{await playVideo();}catch(e){playerMessage(e.message);}}
     else video.pause();
     setPlayState();showControls();
     var intentId=session.id;api('control',{id:intentId,action:wantedPlay?'play':'pause'}).catch(function(e){playerMessage(e.message);}).then(function(){if(session&&session.id===intentId)void poll();});
