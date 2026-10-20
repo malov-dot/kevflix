@@ -234,6 +234,14 @@ class Handler(BaseHTTPRequestHandler):
                         query.get("folder"), query.get("offset", 0), query.get("query", "")))
                 if path == "/tv-api/session":
                     return self.json_response(self.app.tv.status(query["id"], device))
+                if path == "/tv-api/probe/status":
+                    return self.json_response(self.app.tv.probe.status())
+                probe_clip = re.fullmatch(r"/tv-api/probe/clip/([a-z0-9_]{1,40})\.mp4", path)
+                if probe_clip:
+                    clip = self.app.tv.probe.path(probe_clip[1])
+                    if clip is None:
+                        return self.json_response({"error": "That test clip is not ready"}, 404)
+                    return self.file(clip, "video/mp4")
                 if path == "/tv-api/producer":
                     # Dubbing producer state (MoviePipeline): running / preempted / failed / stopped.
                     return self.json_response(self.app.jobs.producer_state())
@@ -383,6 +391,8 @@ class Handler(BaseHTTPRequestHandler):
                         data["state"], data["generation"]))
                 if path == "/tv-api/diagnostic":
                     return self.json_response(self.app.tv.diagnostic(device, data))
+                if path == "/tv-api/probe/prepare":
+                    return self.json_response(self.app.tv.probe.prepare())
                 return self.json_response({"error": "Unknown TV endpoint"}, 404)
             if path.startswith("/hooks/plex/"):
                 secret = path.removeprefix("/hooks/plex/")

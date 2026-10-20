@@ -55,6 +55,83 @@ var SemProofDecoder=(function(){
 }());
 if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
 
+// "Test this TV": plays short SILENT test clips (4K, HEVC, AV1, 120 fps) through MediaSource and reports what really happened, because
+// isTypeSupported() says "probably" for everything and Samsung documents MSE as FHD-only on several TV groups. The clips are made by the PC
+// (relay/tv_probe.py); this module only plays them, one at a time, muted, and describes the outcome. env is injected so it can be tested.
+var SemTvProbe=(function(){
+  'use strict';
+  var PLAY_MS=6000,GOAL_SECONDS=2,CLIP_MS=22000;
+  function mimeOf(clip){return 'video/mp4; codecs="'+clip.codec+'"';}
+  function describe(r){
+    var mc=r.mc?' mc:'+r.mc:'';
+    if(!r.supported)return 'unsupported'+mc;
+    if(r.error&&!r.played)return 'error: '+String(r.error).slice(0,70)+mc;
+    return (r.played?'ok ':'no-play ')+(r.width||0)+'x'+(r.height||0)+' adv '+(Number(r.advanced)||0).toFixed(1)+'s dec '+(r.decoded==null?'?':r.decoded)+' drop '+(r.dropped==null?'?':r.dropped)+mc;
+  }
+  function summarize(results,environment){
+    var out={};
+    Object.keys(environment||{}).slice(0,8).forEach(function(key){out['env_'+key]=String(environment[key]).slice(0,120);});
+    results.forEach(function(r){out[r.name]=describe(r);});
+    return out;
+  }
+  function weight(r){return (r.width||0)*(r.height||0)*(r.fps||1);}
+  function verdict(results){
+    var played=results.filter(function(r){return r.played;}),best=null;
+    played.forEach(function(r){if(!best||weight(r)>weight(best))best=r;});
+    return played.length+' of '+results.length+' test clips played'+(best?'. Best: '+(best.label||best.name):'');
+  }
+  function withTimeout(promise,ms,fallback){
+    return new Promise(function(resolve){
+      var done=false,timer=setTimeout(function(){if(!done){done=true;resolve(fallback(new Error('timeout')));}},ms);
+      promise.then(function(value){if(!done){done=true;clearTimeout(timer);resolve(value);}},
+                   function(error){if(!done){done=true;clearTimeout(timer);resolve(fallback(error));}});
+    });
+  }
+  function create(env){
+    async function playClip(clip){
+      var result={name:clip.name,label:clip.label,fps:clip.fps,supported:false,played:false,advanced:0};
+      var mime=mimeOf(clip);
+      result.supported=!!(env.MediaSource&&env.MediaSource.isTypeSupported&&env.MediaSource.isTypeSupported(mime));
+      try{if(env.capability)result.mc=await env.capability(clip,mime);}catch(ignore){}
+      if(!result.supported)return result;
+      var video=env.createVideo(),source=new env.MediaSource(),url=env.createUrl(source);
+      try{
+        video.muted=true;video.src=url;
+        await env.waitOpen(source,5000);
+        var buffer=source.addSourceBuffer(mime);
+        var data=await env.fetchClip(clip.name);
+        await env.append(buffer,data);
+        if(source.readyState==='open')source.endOfStream();
+        await env.play(video);
+        var begun=env.now(),from=video.currentTime||0;
+        while(env.now()-begun<PLAY_MS&&(video.currentTime-from)<GOAL_SECONDS&&!video.ended)await env.sleep(100);
+        result.advanced=Math.max(0,(video.currentTime||0)-from);
+        result.width=video.videoWidth;result.height=video.videoHeight;
+        var quality=video.getVideoPlaybackQuality&&video.getVideoPlaybackQuality();
+        if(quality){result.decoded=quality.totalVideoFrames;result.dropped=quality.droppedVideoFrames;}
+        result.played=result.advanced>=1&&result.width>0;
+        if(video.error)result.error='media error '+video.error.code;
+      }catch(error){result.error=(error&&error.message)||String(error);}
+      finally{try{env.dispose(video,url);}catch(ignore){}}
+      return result;
+    }
+    async function run(clips,onStep,cancelled){
+      var results=[];
+      for(var i=0;i<clips.length;i++){
+        if(cancelled&&cancelled())break;
+        if(onStep)onStep(i,clips.length,clips[i]);
+        var clip=clips[i];
+        results.push(await withTimeout(playClip(clip),CLIP_MS,function(error){
+          return {name:clip.name,label:clip.label,fps:clip.fps,supported:true,played:false,advanced:0,error:(error&&error.message)||'stopped'};
+        }));
+      }
+      return results;
+    }
+    return {playClip:playClip,run:run};
+  }
+  return {mimeOf:mimeOf,describe:describe,summarize:summarize,verdict:verdict,create:create};
+}());
+
 (function () {
   'use strict';
   // Sem buffer gate (candidate): pure client policy. Backend status is the sole readiness authority;
@@ -490,9 +567,119 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
         hls_js:proofDecoder.canFallback(),ua:navigator.userAgent||'',session:session?session.id:'',codecs:codecSupport()},extra||{})).catch(function(){});
     }catch(ignore){}
   }
+  // ---- "Test this TV" (see SemTvProbe above) --------------------------------------------------------------------------------
+  var probeRunning=false,probeCancel=false;
+  function probeEnvironment(){
+    var out={};
+    try{
+      var info=window.webapis&&window.webapis.productinfo;
+      if(info){
+        out.model=String(typeof info.getRealModel==='function'?info.getRealModel():typeof info.getModel==='function'?info.getModel():'');
+        if(typeof info.getFirmware==='function')out.firmware=String(info.getFirmware());
+        if(typeof info.isUdPanelSupported==='function')out.uhd_panel=String(info.isUdPanelSupported());
+        if(typeof info.is8KPanelSupported==='function')out.panel_8k=String(info.is8KPanelSupported());
+      }else out.webapis='not available in this page';
+      out.avplay=window.webapis&&window.webapis.avplay?'yes':'no';
+    }catch(error){out.webapis='error '+(error&&error.name);}
+    out.screen=(screen.width||0)+'x'+(screen.height||0)+' dpr '+(window.devicePixelRatio||1);
+    return out;
+  }
+  function measureRefresh(ms){
+    return new Promise(function(resolve){
+      var frames=0,first=null,finished=false;
+      function finish(value){if(!finished){finished=true;resolve(value);}}
+      setTimeout(function(){finish(0);},ms+1500);          // a page that is not shown never gets animation frames: do not wait for them
+      function tick(time){
+        if(finished)return;
+        if(first===null)first=time;
+        frames++;
+        if(time-first<ms)requestAnimationFrame(tick);else finish(Math.round(frames*1000/Math.max(1,time-first)));
+      }
+      requestAnimationFrame(tick);
+    });
+  }
+  function probeEnv(){
+    return {
+      MediaSource:window.MediaSource,
+      createVideo:function(){
+        var v=document.createElement('video');v.muted=true;v.defaultMuted=true;v.volume=0;v.setAttribute('playsinline','');
+        v.style.cssText='position:fixed;right:24px;bottom:24px;width:320px;height:180px;z-index:9;background:#000';
+        document.body.appendChild(v);return v;
+      },
+      createUrl:function(source){return URL.createObjectURL(source);},
+      waitOpen:function(source,ms){
+        return new Promise(function(resolve,reject){
+          if(source.readyState==='open'){resolve();return;}
+          var timer=setTimeout(function(){reject(new Error('MediaSource did not open'));},ms);
+          source.addEventListener('sourceopen',function(){clearTimeout(timer);resolve();},{once:true});
+        });
+      },
+      fetchClip:async function(name){
+        var response=await fetch('/tv-api/probe/clip/'+name+'.mp4',{headers:{Authorization:'Bearer '+token},cache:'no-store'});
+        if(!response.ok)throw new Error('clip HTTP '+response.status);
+        return response.arrayBuffer();
+      },
+      append:function(buffer,data){
+        return new Promise(function(resolve,reject){
+          function done(){buffer.removeEventListener('error',failed);resolve();}
+          function failed(){buffer.removeEventListener('updateend',done);reject(new Error('append failed'));}
+          buffer.addEventListener('updateend',done,{once:true});buffer.addEventListener('error',failed,{once:true});
+          try{buffer.appendBuffer(data);}catch(error){buffer.removeEventListener('updateend',done);buffer.removeEventListener('error',failed);reject(error);}
+        });
+      },
+      play:function(video){var promise=video.play();return promise&&promise.then?promise:Promise.resolve();},
+      now:function(){return Date.now();},
+      sleep:function(ms){return new Promise(function(resolve){setTimeout(resolve,ms);});},
+      dispose:function(video,url){
+        try{video.pause();}catch(ignore){}
+        video.removeAttribute('src');try{video.load();}catch(ignore){}
+        URL.revokeObjectURL(url);if(video.parentNode)video.parentNode.removeChild(video);
+      },
+      capability:async function(clip,mime){
+        if(!navigator.mediaCapabilities||!navigator.mediaCapabilities.decodingInfo)return '';
+        var info=await navigator.mediaCapabilities.decodingInfo({type:'media-source',video:{contentType:mime,width:clip.width,height:clip.height,bitrate:30000000,framerate:clip.fps}});
+        return (info.supported?'S':'-')+'/'+(info.smooth?'s':'-')+'/'+(info.powerEfficient?'p':'-');
+      }
+    };
+  }
+  async function runProbe(){
+    if(probeRunning)return;
+    if(session){message('Stop the movie first, then test this TV.');return;}
+    probeRunning=true;probeCancel=false;
+    try{
+      message('Preparing silent test clips on the PC… (Back to stop)');
+      var status=await api('probe/prepare',{});
+      var begun=Date.now();
+      while(status.state==='working'&&!probeCancel&&Date.now()-begun<360000){
+        await new Promise(function(resolve){setTimeout(resolve,2000);});
+        status=await api('probe/status');
+        message('Preparing test clips on the PC: '+status.done+' of '+status.total+'… (Back to stop)');
+      }
+      if(probeCancel){message('Test stopped.');return;}
+      var clips=(status.clips||[]).filter(function(c){return c.state==='ready';});
+      if(!clips.length){
+        message('The PC could not make the test clips'+(status.error?': '+status.error:'')+'.');
+        reportFailure('probe',{probe:{error:String(status.error||'no clips were made')}});
+        return;
+      }
+      var environment=probeEnvironment();
+      environment.refresh=(await measureRefresh(1500))+' Hz page animation rate';
+      var runner=SemTvProbe.create(probeEnv());
+      var results=await runner.run(clips,function(index,total,clip){message('Testing '+(index+1)+' of '+total+': '+clip.label+' (silent, Back to stop)');},function(){return probeCancel;});
+      reportFailure('probe',{probe:SemTvProbe.summarize(results,environment)});
+      var text=SemTvProbe.verdict(results)+(probeCancel?' (stopped early)':'');
+      try{localStorage.setItem('kevflix-probe',JSON.stringify({at:Date.now(),text:text}));}catch(ignore){}
+      renderDefaults();
+      message(text+'. The PC has the details.');
+    }catch(error){
+      message('Test failed: '+((error&&error.message)||'unknown error'));
+    }finally{probeRunning=false;}
+  }
   // What this TV can decode through MSE (the hls.js path) and through the video tag: part of every failure report.
   function codecSupport(){
     var kinds={h264:'video/mp4; codecs="avc1.640028"',hevc:'video/mp4; codecs="hvc1.1.6.L120.90"',av1:'video/mp4; codecs="av01.0.08M.08"',
+      h264_4k:'video/mp4; codecs="avc1.640033"',hevc_4k60:'video/mp4; codecs="hvc1.1.6.L153.B0"',hevc_4k120:'video/mp4; codecs="hvc1.1.6.L156.B0"',
+      hevc10_4k:'video/mp4; codecs="hvc1.2.4.L153.B0"',av1_4k60:'video/mp4; codecs="av01.0.13M.08"',
       aac:'audio/mp4; codecs="mp4a.40.2"',ac3:'audio/mp4; codecs="ac-3"',eac3:'audio/mp4; codecs="ec-3"'},out={};
     Object.keys(kinds).forEach(function(name){
       var type=kinds[name];
@@ -717,6 +904,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     var key=event.keyCode||event.which||({ArrowLeft:37,ArrowUp:38,ArrowRight:39,ArrowDown:40,Enter:13,Backspace:8,Escape:27,Return:10009}[event.key]);
     var active=document.activeElement;
     if(event.isComposing)return;
+    if(probeRunning){event.preventDefault();if(key===10009||key===27||key===8)probeCancel=true;return;}
     if(session&&$('choice-panel').hidden&&$('playback-panel').hidden&&$('player-controls').classList.contains('controls-hidden')&&[13,37,38,39,40].indexOf(key)>=0){
       event.preventDefault();showControls();$('play-pause').focus();return;
     }
@@ -800,6 +988,8 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     $('default-upscale-value').textContent=defaults.upscale?'Lanczos':'Off';
     $('default-hdr-value').textContent=defaults.hdr_mode==='auto'?'Automatic':'Convert to SDR';
     $('default-surround-value').textContent=defaults.surround==='stereo'?'Stereo':'5.1 surround';
+    var lastProbe=null;try{lastProbe=JSON.parse(localStorage.getItem('kevflix-probe')||'null');}catch(ignore){}
+    $('probe-tv-value').textContent=lastProbe&&lastProbe.text?lastProbe.text:'4K, HEVC, AV1 and 120 fps (silent clips)';
     $('default-dub-value').textContent=defaults.dub?'On':'Off';$('default-watch-value').textContent=defaults.watch?'On':'Off';
     $('default-commentary-value').textContent={balanced:'Balanced',quiet:'Quiet','ask-only':'Only when asked'}[defaults.commentary];
   }
@@ -824,6 +1014,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   var modes=[{value:'balanced',label:'Balanced reactions'},{value:'quiet',label:'Quiet reactions'},{value:'ask-only',label:'Only when I ask Sem'}];
   $('default-quality').onclick=function(){choose('Output limit',qualities,defaults.quality,function(v){defaults.quality=Number(v);saveDefaults();});};
   $('default-upscale').onclick=function(){choose('Upscaling',[{value:'off',label:'Off · preserve source size'},{value:'on',label:'Lanczos upscaling on the PC'}],defaults.upscale?'on':'off',function(v){defaults.upscale=v==='on';saveDefaults();});};
+  $('probe-tv').onclick=function(){void runProbe();};
   $('default-surround').onclick=function(){choose('Sound',surroundChoices,defaults.surround||'auto',function(v){defaults.surround=v;saveDefaults();});};
   $('default-hdr').onclick=function(){choose('HDR',[{value:'auto',label:'Preserve HDR when supported'},{value:'sdr',label:'Convert to SDR on the PC'}],defaults.hdr_mode,function(v){defaults.hdr_mode=v;saveDefaults();});};
   $('default-dub').onclick=function(){defaults.dub=!defaults.dub;saveDefaults();};

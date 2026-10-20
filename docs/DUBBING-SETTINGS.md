@@ -92,3 +92,15 @@ cancelled), or the whole film is dubbed. A job that is waiting for its next wind
 between windows. A seek or a new playback loads them again. The 150 s idle limits of each process (`IDLE_UNLOAD_S`,
 `actor_beta.vox.job_lease_idle_seconds`) remain as a second safety net. The server log shows `models_released` (what was stopped),
 `vox_released` and `analysis_worker_stopped` / `resident_demucs_stopped` with reason `playback_stopped`.
+
+## Test this TV
+
+Settings, "This TV", "Test this TV" (on the TV) shows what the TV really decodes, because `isTypeSupported()` answers "probably" for
+everything and Samsung documents MSE (the engine hls.js uses) as FHD-only on several TV groups. It is never started on its own and is
+refused while a movie is open. The PC makes eight silent test clips on the CPU (`relay/tv_probe.py`, about 11 s in total, 87 MB, kept in
+`<state>/tv-probe`; no GPU is used, so neither Sem nor the dubbing is affected): H.264 1080p60 (control), H.264 4K30, HEVC 1080p60, HEVC 4K 24,
+60 and 120 fps, HEVC Main10 4K24 and AV1 4K60. The TV plays each one muted through MediaSource for about 3 s (Back stops it) and sends one
+`tv_diagnostic` line (`stage: "probe"`) to the PC's `server.stderr.log`: per clip `ok` or `no-play` or `unsupported` or `error`, the size reached,
+seconds advanced, decoded and dropped frames and the MediaCapabilities flags (supported / smooth / power efficient), plus the TV's model and
+firmware when the page can read them, the screen size and the page's animation rate. Routes (device token required): `POST /tv-api/probe/prepare`,
+`GET /tv-api/probe/status`, `GET /tv-api/probe/clip/<name>.mp4` (only the eight known names). The result decides whether HEVC or 4K output is worth building.

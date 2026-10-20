@@ -20,6 +20,7 @@ from urllib.parse import urlencode
 from .media import probe, fingerprint, file_hash, subtitle_cues, wav_info, RATE, CHANNELS
 from .process import ProcessOwner, Cancelled
 from .plex_browse import PlexBrowse
+from .tv_probe import ProbeClips
 from .buffer_policy import buffer_metrics, next_request, note_heartbeat
 from . import producer_policy as _producer
 from . import embedded_subtitles as _subs
@@ -34,7 +35,7 @@ def passthrough_mode(mode):
     original-English... (every producer mode that starts with "original")."""
     return mode == "no-dialogue" or str(mode or "").startswith("original")
 DIAGNOSTIC_KEYS = ("stage", "engine", "code", "message", "ready_state", "network_state", "native_hls", "hls_js", "ua",
-                   "session", "error", "hls", "codecs")
+                   "session", "error", "hls", "codecs", "probe")
 _URL = re.compile(r"https?://\S+", re.I)
 
 
@@ -52,7 +53,7 @@ def diagnostic_record(data):
     for key in DIAGNOSTIC_KEYS:
         value = data.get(key)
         if isinstance(value, dict):
-            value = {str(k)[:24]: clean(v) for k, v in list(value.items())[:6]}
+            value = {str(k)[:24]: clean(v) for k, v in list(value.items())[:24]}
         else:
             value = clean(value)
         record[key] = value
@@ -126,6 +127,7 @@ class TVService:
         self._encoder_lock = threading.Lock()
         self._premeasure_thread = None
         self._vram_probe = None            # tests inject: callable() -> free MiB | None
+        self.probe = ProbeClips(config)    # the "Test this TV" clips (relay/tv_probe.py); nothing runs until the TV asks
 
     def start(self):
         if self.config["tv"]["enabled"]:
