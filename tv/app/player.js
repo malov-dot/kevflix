@@ -43,10 +43,10 @@ var SemProofDecoder=(function(){
       if(!prev||prev.time!==o.time)return {time:o.time,at:now,stalled:false};
       return {time:o.time,at:prev.at,stalled:now-prev.at>=limit};
     }
-    // What to do when a stream fails or stalls: first the other decoder, then (5.1 playback only) stereo sound, then give up.
+    // What to do when a stream fails or stalls: first the other decoder, then give up. There is deliberately NO automatic switch to stereo:
+    // a film that has 5.1 is played in 5.1 (the viewer can still choose Stereo in the Sound option).
     function failurePlan(o){
       if(!o.secondAttempt&&(o.ownEngine||o.canFallback))return 'other-engine';
-      if(o.surroundActive&&!o.stereoTried)return 'stereo';
       return 'give-up';
     }
     return {attach:attach,detach:detach,canFallback:canFallback,watchStall:watchStall,failurePlan:failurePlan,lastError:function(){return failure;},engine:function(){return hls?'hls.js':'native';}};
@@ -530,7 +530,7 @@ var SemTvProbe=(function(){
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     bufferGate=SemBufferGate.create();
-    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;stereoTried=false;surroundDropPending=false;
+    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;
     $('details').hidden=true;$('player').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;message('');
     $('audio-track').replaceChildren.apply($('audio-track'),value.audio_tracks.map(function(track){
       var option=document.createElement('option');option.value=track.index;
@@ -691,32 +691,23 @@ var SemTvProbe=(function(){
   // advanced the picture is remembered (kevflix-engine), see checkStall.
   function prefersOwnDecoder(){try{var saved=localStorage.getItem('kevflix-engine');return saved?saved==='hlsjs':true;}catch(ignore){return true;}}
   function rememberEngine(own){try{localStorage.setItem('kevflix-engine',own?'hlsjs':'native');}catch(ignore){}}
-  var STALL_MS=15000,stallWatch=null,switchedEngine=false,engineConfirmed=false,progressMark=null,stereoTried=false,surroundDropPending=false;
-  // 5.1 that neither decoder can play on this TV: ask the PC for stereo sound and remember it as the default for this TV.
-  function dropSurround(reason){
-    stereoTried=true;surroundDropPending=true;                 // becomes this TV's default only once stereo has really played
-    reportFailure('surround-dropped',{error:String(reason||'')});
-    playerMessage('5.1 sound did not play on this TV. Switching to stereo…');
-    void change('quality',{quality:session.quality,upscale:session.upscale,hdr_mode:session.hdr_mode,surround:'stereo'});
-  }
+  var STALL_MS=15000,stallWatch=null,switchedEngine=false,engineConfirmed=false,progressMark=null;
+  // watchStall/failurePlan live on the decoder INSTANCE (proofDecoder), not on the SemProofDecoder module: calling them on the module threw
+  // "SemProofDecoder.watchStall is not a function" inside poll() before every heartbeat, so the PC stopped the playback as idle.
   function checkStall(){
     if(!session||loading||loadedGeneration!==session.generation||!wantedPlay||video.paused||video.ended||session.ready!==true){stallWatch=null;return;}
     var time=Number(video.currentTime)||0;
     if(!engineConfirmed&&progressMark!==null&&time>progressMark+2){
       engineConfirmed=true;rememberEngine(proofDecoder.engine()==='hls.js');
-      if(surroundDropPending){surroundDropPending=false;defaults.surround='stereo';saveDefaults();}
     }
     var lead=(Number(session.ready_through)||0)-position();
-    stallWatch=SemProofDecoder.watchStall(stallWatch,{time:time,lead:lead},Date.now(),STALL_MS);
+    stallWatch=proofDecoder.watchStall(stallWatch,{time:time,lead:lead},Date.now(),STALL_MS);
     if(!stallWatch.stalled)return;
     stallWatch=null;
     var spans=[];
     try{for(var i=0;i<video.buffered.length;i++)spans.push(video.buffered.start(i).toFixed(1)+'-'+video.buffered.end(i).toFixed(1));}catch(ignore){}
     reportFailure('stalled',{error:'no progress for '+STALL_MS/1000+' s, lead '+Math.round(lead)+' s, buffered '+(spans.join(',')||'none')+', time '+time.toFixed(1)});
-    if(switchedEngine){
-      if(SemProofDecoder.failurePlan({ownEngine:false,secondAttempt:true,canFallback:false,surroundActive:session.surround_active===true,stereoTried:stereoTried})==='stereo')dropSurround('stalled');
-      return;
-    }
+    if(switchedEngine)return;                  // both decoders stalled: reported above, nothing else to try (5.1 stays 5.1)
     switchedEngine=true;
     var wasOwn=proofDecoder.engine()==='hls.js';
     playerMessage('The TV player did not start the stream. Trying the other decoder…');
@@ -749,10 +740,8 @@ var SemTvProbe=(function(){
     }catch(error){
       if(number===operation&&serial===loadSerial){
         reportFailure(own?'hls.js-failed':'native-failed',{error:error.message,hls:proofDecoder.lastError()});
-        var plan=SemProofDecoder.failurePlan({ownEngine:own,secondAttempt:!!second,canFallback:proofDecoder.canFallback(),
-          surroundActive:session&&session.surround_active===true,stereoTried:stereoTried});
+        var plan=proofDecoder.failurePlan({ownEngine:own,secondAttempt:!!second,canFallback:proofDecoder.canFallback()});
         if(plan==='other-engine')retry=own?'native':'own';                           // one automatic retry with the other decoder
-        else if(plan==='stereo')dropSurround(error.message);
         else{reportedError=error.message;playerMessage(error.message);showControls();}
       }
     }finally{if(serial===loadSerial)loading=false;}
