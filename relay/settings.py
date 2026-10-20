@@ -39,36 +39,52 @@ def preserve_private_acl(source, target):
         raise ctypes.WinError(ctypes.get_last_error())
 
 
-def startup_enabled():
-    if os.name != "nt":
-        return False
+def _legacy_run_value():
+    """The old HKCU Run entry (earlier builds): a command, or None. It was enumerated at login on one PC but never launched."""
     import winreg
     try:
         with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
             command, _ = winreg.QueryValueEx(key, "KevFLIX")
-            return str(ROOT / "scripts" / "run_worker.py").lower() in command.lower()
+            return command if str(ROOT / "scripts" / "run_worker.py").lower() in command.lower() else None
     except OSError:
+        return None
+
+
+def _remove_legacy_run_value():
+    import winreg
+    if _legacy_run_value() is None:
+        return
+    with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run", 0, winreg.KEY_SET_VALUE) as key:
+        try:
+            winreg.DeleteValue(key, "KevFLIX")
+        except FileNotFoundError:
+            pass
+
+
+def startup_enabled():
+    """True when the Windows logon tasks (relay/startup_tasks.py) exist."""
+    if os.name != "nt":
+        return False
+    from . import startup_tasks
+    try:
+        return startup_tasks.enabled()
+    except (OSError, subprocess.SubprocessError):
         return False
 
 
 def set_startup(enabled):
+    """Start the worker (and the tray icon) at Windows login through scheduled tasks; the old Run entry is always removed."""
     if os.name != "nt":
         if enabled:
             raise ValueError("Windows startup registration is available only on Windows")
         return
-    import winreg
-    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
-        if enabled:
-            pythonw = Path(sys.executable).with_name("pythonw.exe")
-            command = '"' + str(pythonw) + '" "' + str(ROOT / "scripts" / "run_worker.py") + '"'
-            winreg.SetValueEx(key, "KevFLIX", 0, winreg.REG_SZ, command)
-        else:
-            try:
-                command, _ = winreg.QueryValueEx(key, "KevFLIX")
-                if str(ROOT / "scripts" / "run_worker.py").lower() in command.lower():
-                    winreg.DeleteValue(key, "KevFLIX")
-            except FileNotFoundError:
-                pass
+    from . import startup_tasks
+    if enabled:
+        startup_tasks.install(ROOT)
+        _remove_legacy_run_value()
+    else:
+        startup_tasks.remove()
+        _remove_legacy_run_value()
 
 
 class PCSettings:

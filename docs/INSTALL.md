@@ -8,6 +8,13 @@ The source and packages are development artifacts. No runtime tests, model infer
 
 `KevFLIX-Setup-<version>.exe` installs the app code and a private Python runtime under %LOCALAPPDATA%/Programs/KevFLIX. Startup with Windows is checked by default for a new install. An update keeps the choice you made earlier.
 
+### Start at login and the tray icon
+
+"Start with Windows" (a checkbox in the installer, a switch in the app's settings) creates two per-user Windows scheduled tasks that run when you log in, with your normal privileges and no time limit:
+- `KevFLIX Server` starts the PC worker about 15 seconds after login (it is restarted up to three times if it stops at once).
+- `KevFLIX Tray` shows the KevFLIX icon in the notification area about 10 seconds after login: an orange K while the worker answers, a grey K when it does not. Right-click for Open KevFLIX PC, Start server, Stop server and Exit tray icon; double-click opens KevFLIX PC. Closing the icon does not stop the worker. Windows may place a new icon under the ^ overflow arrow: drag it onto the taskbar to keep it visible. The tray log is `<profile>/logs/tray.log`.
+Turning the switch off, or uninstalling, removes both tasks and the older `KevFLIX` entry under HKCU\...\Run that earlier builds wrote (on one PC Windows read that entry at login but never launched it). Check the tasks with `schtasks /Query /TN "KevFLIX Server"`.
+
 ### Your profile: settings and data that are never replaced
 
 Your settings and data live in the KevFLIX profile, separate from the versioned app folder. The default location is %LOCALAPPDATA%/KevFLIX/profile. To use another folder, set KEVFLIX_PROFILE, or write {"profile_root": "<folder>"} to %LOCALAPPDATA%/KevFLIX/profile-location.json.
@@ -136,7 +143,7 @@ Do not open the worker to the public internet. Permit its configured port only f
 
 ## TV installation
 
-Version 0.4.43 remembers a successful PC address and opens directly into KevFLIX on future launches. The address form appears on first use, when the PC is unreachable, or from Settings > Change PC address. A paired TV keeps its pairing and starts on Home. Update the TizenBrew module or standalone WGT to receive bootstrap/launcher changes; worker-only interface updates do not replace the TV launcher.
+Version 0.4.44 remembers a successful PC address and opens directly into KevFLIX on future launches. The address form appears on first use, when the PC is unreachable, or from Settings > Change PC address. A paired TV keeps its pairing and starts on Home. Update the TizenBrew module or standalone WGT to receive bootstrap/launcher changes; worker-only interface updates do not replace the TV launcher.
 
 Target API baseline: Tizen 6.5 or newer. TizenBrew integration was written against its documented application-module format and the v2.0.5 release; installation has not been exercised.
 
