@@ -35,7 +35,15 @@ var SemProofDecoder=(function(){
       own.loadSource(url);own.attachMedia(video);
       return 'hls.js';
     }
-    return {attach:attach,detach:detach,canFallback:canFallback,lastError:function(){return failure;},engine:function(){return hls?'hls.js':'native';}};
+    // A stream the player says is loaded but never advances (seen on a TV whose own HLS player fetched the playlist and nothing more):
+    // prev is the previous result (or null); o = {time, lead seconds of ready media ahead}. stalled once time stood still for limit ms
+    // while at least 20 s of media was ready.
+    function watchStall(prev,o,now,limit){
+      if(!o||!(o.lead>=20))return {time:o?o.time:null,at:now,stalled:false};
+      if(!prev||prev.time!==o.time)return {time:o.time,at:now,stalled:false};
+      return {time:o.time,at:prev.at,stalled:now-prev.at>=limit};
+    }
+    return {attach:attach,detach:detach,canFallback:canFallback,watchStall:watchStall,lastError:function(){return failure;},engine:function(){return hls?'hls.js':'native';}};
   }
   return {create:create,isHls:isHls};
 }());
@@ -439,7 +447,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     bufferGate=SemBufferGate.create();
-    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();
+    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;
     $('details').hidden=true;$('player').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;message('');
     $('audio-track').replaceChildren.apply($('audio-track'),value.audio_tracks.map(function(track){
       var option=document.createElement('option');option.value=track.index;
@@ -485,16 +493,37 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     });
     return out;
   }
-  function prefersOwnDecoder(){try{return localStorage.getItem('kevflix-engine')==='hlsjs';}catch(ignore){return false;}}
-  function rememberOwnDecoder(){try{localStorage.setItem('kevflix-engine','hlsjs');}catch(ignore){}}
-  async function loadStream(forceOwn){
+  // hls.js (MSE) is tried first wherever it exists; the browser's own HLS player is the second choice. The engine that really
+  // advanced the picture is remembered (kevflix-engine), see checkStall.
+  function prefersOwnDecoder(){try{var saved=localStorage.getItem('kevflix-engine');return saved?saved==='hlsjs':true;}catch(ignore){return true;}}
+  function rememberEngine(own){try{localStorage.setItem('kevflix-engine',own?'hlsjs':'native');}catch(ignore){}}
+  var STALL_MS=15000,stallWatch=null,switchedEngine=false,engineConfirmed=false,progressMark=null;
+  function checkStall(){
+    if(!session||loading||loadedGeneration!==session.generation||!wantedPlay||video.paused||video.ended||session.ready!==true){stallWatch=null;return;}
+    var time=Number(video.currentTime)||0;
+    if(!engineConfirmed&&progressMark!==null&&time>progressMark+2){engineConfirmed=true;rememberEngine(proofDecoder.engine()==='hls.js');}
+    var lead=(Number(session.ready_through)||0)-position();
+    stallWatch=SemProofDecoder.watchStall(stallWatch,{time:time,lead:lead},Date.now(),STALL_MS);
+    if(!stallWatch.stalled)return;
+    stallWatch=null;
+    var spans=[];
+    try{for(var i=0;i<video.buffered.length;i++)spans.push(video.buffered.start(i).toFixed(1)+'-'+video.buffered.end(i).toFixed(1));}catch(ignore){}
+    reportFailure('stalled',{error:'no progress for '+STALL_MS/1000+' s, lead '+Math.round(lead)+' s, buffered '+(spans.join(',')||'none')+', time '+time.toFixed(1)});
+    if(switchedEngine)return;
+    switchedEngine=true;
+    var wasOwn=proofDecoder.engine()==='hls.js';
+    playerMessage('The TV player did not start the stream. Trying the other decoder…');
+    loadedGeneration=0;
+    void loadStream(wasOwn?'native':'own',true);
+  }
+  async function loadStream(engine,second){
     if(!session)return;loading=true;
-    var number=operation,generation=session.generation,id=session.id,target=desiredPosition-session.base,serial=++loadSerial,retryOwn=false;
-    var own=forceOwn===true||prefersOwnDecoder();
+    var number=operation,generation=session.generation,id=session.id,target=desiredPosition-session.base,serial=++loadSerial,retry=null;
+    var own=(engine?engine==='own':prefersOwnDecoder())&&proofDecoder.canFallback();
     loadAbort=new AbortController();var signal=loadAbort.signal;
     try{
       video.pause();$('buffering').hidden=false;
-      var ready=waitFor('loadedmetadata',number,own?30000:15000,signal);
+      var ready=waitFor('loadedmetadata',number,second?30000:20000,signal);
       proofDecoder.attach(session.url,own);await ready;
       if(!session||id!==session.id||generation!==session.generation)return;
       loadedGeneration=generation;
@@ -506,23 +535,24 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       }
       if(number!==operation||!session||generation!==session.generation)return;
       $('buffering').hidden=true;reportedError='';playerMessage('');
-      if(own&&forceOwn===true)rememberOwnDecoder();     // the TV's own HLS player failed and hls.js worked: start with it from now on
+      progressMark=Number(video.currentTime)||0;stallWatch=null;
       if(SemBufferGate.canResume(bufferGate,session,wantedPlay))await playVideo();
       else if(wantedPlay)$('buffering').hidden=false;
       showControls();
     }catch(error){
       if(number===operation&&serial===loadSerial){
         reportFailure(own?'hls.js-failed':'native-failed',{error:error.message,hls:proofDecoder.lastError()});
-        if(!own&&proofDecoder.canFallback())retryOwn=true;        // one automatic retry with the player's own decoder
+        if(!second&&(own||proofDecoder.canFallback()))retry=own?'native':'own';    // one automatic retry with the other decoder
         else{reportedError=error.message;playerMessage(error.message);showControls();}
       }
     }finally{if(serial===loadSerial)loading=false;}
-    if(retryOwn)return loadStream(true);
+    if(retry){playerMessage('The TV player could not start the stream. Trying the other decoder…');return loadStream(retry,true);}
   }
   async function poll(){
     if(!session||polling)return;polling=true;
     var id=session.id,number=operation;
     try{
+      checkStall();
       var state=SemBufferGate.heartbeatState({ended:video.ended,loading:loading||loadedGeneration!==session.generation,wantedPlay:wantedPlay,paused:video.paused});
       var value=await api('heartbeat',{id:id,position:position(),state:state,generation:session.generation,intent:wantedPlay?'play':'pause'});
       if(number===operation&&session&&session.id===id)updateStatus(value);
