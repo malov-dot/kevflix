@@ -26,6 +26,7 @@ from . import subtitle_runtime as _subs
 from . import dialogue_units as _units
 from .cinematic import CinematicSeparator,replacement_envelope,replace_dialogue,actor_mix_levels,CHECKPOINT_SHA256,take_removal_intervals,merge_intervals
 from . import take_fit as _fit
+from . import take_deess as _deess
 from .nonverbal import nonverbal_reason,sparse_speech_reason,audio_features as tone_features,translation_artifact_reason
 from . import audio_evidence as _evidence
 from .dialogue import plan_dialogue,overlap,caption_text,is_no_speech
@@ -94,7 +95,8 @@ def overlap_policy(config):
             'concise_retranslation':beta.get('concise_retranslation') is True,
             'language_correction':beta.get('language_correction') is True,
             'nonverbal_audio':beta.get('nonverbal_audio') is True,
-            'reject_unintelligible':beta.get('reject_unintelligible') is True}
+            'reject_unintelligible':beta.get('reject_unintelligible') is True,
+            'deess_takes':beta.get('deess_takes') is True}
 
 
 REFERENCE_DONOR_MAX_GAP_SECONDS=36.
@@ -191,6 +193,40 @@ def fit_rendered_take(path,receipt,window,*,ffmpeg,runner=None,max_speed=TAKE_FI
     except (Cancelled,ResourceYield,TimeoutError):raise
     except (ValueError,RuntimeError,OSError) as error:
         return path,dict(receipt,fit={'applied':False,'reason':'fit_failed','error':'%s: %s'%(type(error).__name__,str(error)[:200])})
+
+
+def deess_rendered_take(path,receipt):
+    """Lower the hot fricative bursts of a rendered take (relay/take_deess.py: Vox \"s/sh/f\" bursts are 5 dB hotter than the
+    actors' own and read as static when played loudly). Same contract as fit_rendered_take: the result is a NEW file named by
+    the source take's sha256, with its own sha256 and receipt (the de-ess receipt and the earlier sha256 kept), so claims,
+    private copies, readback, the ledger and the mix see one consistent take. A take with no hot burst, a format the
+    de-esser does not handle, or any failure is returned UNCHANGED (the reason is in receipt['deess'])."""
+    import soundfile as sf
+    try:
+        samples,take_rate=sf.read(str(path),dtype='float32')
+        shaped,info=_deess.deess(samples,take_rate)
+        if not info.get('applied'):return path,dict(receipt,deess=info)
+        source=str(receipt.get('sha256') or file_hash(Path(path)))
+        target=Path(path).with_name('%s-ds-%s.wav'%(Path(path).stem[:48],source[:16]))
+        temp=target.with_name(target.name+'.%d.tmp'%os.getpid())
+        try:
+            reuse=False
+            if target.exists():
+                import numpy as np
+                try:
+                    existing,existing_rate=sf.read(str(target),dtype='float32')
+                    reuse=existing_rate==take_rate and existing.shape==shaped.shape and bool(np.array_equal(existing,shaped))
+                except (RuntimeError,ValueError,OSError):reuse=False
+            if not reuse:
+                sf.write(str(temp),shaped,take_rate,subtype='FLOAT',format='WAV')
+                os.replace(temp,target)
+        finally:
+            if temp.exists():temp.unlink()
+        shaped_receipt=dict(receipt,sha256=file_hash(target),deess=info,pre_deess_sha256=source)
+        if 'audio' in receipt:shaped_receipt['audio']=str(target)
+        return target,shaped_receipt
+    except (ValueError,RuntimeError,OSError) as error:
+        return path,dict(receipt,deess={'version':_deess.VERSION,'applied':False,'reason':'deess_failed','error':'%s: %s'%(type(error).__name__,str(error)[:200])})
 
 
 # Owner decision 2026-10-19: Vox take length AND clarity vary with the sampling seed (the same words ran 3.8 s and read back
@@ -2369,7 +2405,9 @@ class ActorPipeline:
             the same words on another seed, search the retry seeds (choose_take). The result is published under the cue's
             seed-42 claim key."""
             policy=overlap_policy(self.config)
-            def fit(p,r):return fit_rendered_take(p,r,window,ffmpeg=self.config['ffmpeg'],runner=owner.run,max_speed=policy['fit_max_speed'])
+            def fit(p,r):
+                fitted=fit_rendered_take(p,r,window,ffmpeg=self.config['ffmpeg'],runner=owner.run,max_speed=policy['fit_max_speed'])
+                return deess_rendered_take(*fitted) if policy['deess_takes'] else fitted
             first=fit(path,receipt)
             if again is None:return first
             return choose_take(*first,window,render=again,fit=fit,check=lambda p,r:take_check(cue,p,r),

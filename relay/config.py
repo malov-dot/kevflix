@@ -509,7 +509,7 @@ class Config:
                    'verified_speech','progressive_actor','live_mux','asr_rescue',
                    'original_audio_policy','short_utterance_policy','media','store',
                    # owner-approved dubbing behaviour (2026-10-19): speed fit, speech-only removal, non-speech lines
-                   'take_fit','speech_activity','nonverbal','loudness_reference','audio_evidence','audio_events','borrowed_reference')
+                   'take_fit','speech_activity','nonverbal','loudness_reference','audio_evidence','audio_events','borrowed_reference','take_deess')
             values['actor_implementation']={name:hashlib.sha256(Path(__file__).with_name(name+'.py').read_bytes()).hexdigest()
                                             for name in names}
             # embedded-subtitles-v1: caption selection/extraction changes chunk captions.

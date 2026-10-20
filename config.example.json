@@ -146,6 +146,7 @@
     "take_fit_max_speed": 1.5,
     "language_correction": true,
     "nonverbal_audio": true,
-    "reject_unintelligible": true
+    "reject_unintelligible": true,
+    "deess_takes": true
   }
 }
