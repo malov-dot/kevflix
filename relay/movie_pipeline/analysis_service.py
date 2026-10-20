@@ -78,9 +78,15 @@ MEASURE_INTERVAL_S = 10.0
 MAX_CONSECUTIVE_DEATHS = 3
 WATCH_S = 1.0                    # service-owned watchdog cadence (deadlines hold even when every caller detached)
 CHILD_DEADLINE_MARGIN_S = 60.0   # the child's own guard deadline backs up the service watchdog
-OP_TIMEOUTS = {'text_language': 60.0, 'speech': 900.0, 'english': 300.0, 'english_batch': 600.0, 'analyze': 900.0,
-               'embed': 120.0, 'refine_utterances': 900.0, 'device_report': 60.0, 'generic_vad': 300.0,
-               'generic_synthesize': 300.0, 'language_id': 120.0, 'audio_events': 120.0}
+# The first request of an op after the worker started also loads that op's model. On a cold disk (the first start after a reboot or an
+# install) the language-id, audio-event and speaker models took longer than the former 120 s and the whole pipeline stopped with
+# 'Dubbing error'; they now get the same room as speech recognition.
+OP_TIMEOUTS = {'text_language': 300.0, 'speech': 900.0, 'english': 300.0, 'english_batch': 600.0, 'analyze': 900.0,
+               'embed': 300.0, 'refine_utterances': 900.0, 'device_report': 60.0, 'generic_vad': 300.0,
+               'generic_synthesize': 300.0, 'language_id': 600.0, 'audio_events': 600.0}
+# A request that ran past its limit costs that worker only: the next request starts a fresh one. MAX_CONSECUTIVE_DEATHS in a row
+# (no request answered in between) still stop the service until close(), like every other fatal fault.
+RECOVERABLE_STOPS = frozenset({'analysis_timeout'})
 ENGLISH_BATCH_RPC_ROWS = 64      # rows per english_batch RPC (a Qwen3 batch is 16 rows; each RPC bounds its own deadline)
 EXIT_DEADLINE, EXIT_GUARD_FAILURE = 76, 77      # relay.first_pass_resident.LeaseGuard exit codes (fatal)
 _ENDED_ERRORS = ('ViewEnded', 'LeasePreempted', 'LeaseExpired')
@@ -540,8 +546,12 @@ class AnalysisService:
                     gen.death = record
                 death = gen.death
             if death['kind'] == 'fatal' and not self._closed and self._fatal is None:
-                self._fatal = death
-                self.emit('analysis_service_failed', fault=death)
+                if death['code'] in RECOVERABLE_STOPS and self._deaths + 1 < MAX_CONSECUTIVE_DEATHS:
+                    self._deaths += 1
+                    self.emit('analysis_worker_timeout', fault=death, consecutive=self._deaths)
+                else:
+                    self._fatal = death
+                    self.emit('analysis_service_failed', fault=death)
             if self._gen is gen:
                 self._gen = None
             if not gen.released and gen not in self._unconfirmed:

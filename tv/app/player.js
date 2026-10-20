@@ -113,7 +113,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   var token=localStorage.getItem('sem-tv-token')||'', device=localStorage.getItem('sem-tv-device')||'';
   var folder=null,parent=null,offset=0,rows=[],session=null,loadedGeneration=0,wantedPlay=false;
   var operation=0,polling=false,loading=false,pollTimer=null,hideTimer=null,lastHeartbeat=0,reportedError='';
-  var video=$('video'),desiredPosition=0,mediaStart=0,loadAbort=null,loadSerial=0;
+  var video=$('video'),desiredPosition=0,mediaStart=0,loadAbort=null,loadSerial=0,openedAt=0;
   // Local proof only: muted before any play; native HLS first, hls.js (MSE) fallback, direct files native.
   var proofDecoder=SemProofDecoder.create(video,typeof Hls==='undefined'?null:Hls);video.muted=true;video.defaultMuted=true;
   var sourceMode='folders',posterUrls=[],posterEpoch=0,captionKey='',setupOnly=false;
@@ -406,7 +406,12 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     if(changed){proofDecoder.detach();loadedGeneration=0;desiredPosition=value.position;video.pause();if(loadAbort)loadAbort.abort();loading=false;loadSerial++;}
     var verdict=SemBufferGate.evaluate(bufferGate,value);
     if(SemBufferGate.loadable(bufferGate,value)&&loadedGeneration!==value.generation&&!loading&&!value.error)void loadStream();
-    if(!value.ready){bufferView(session.dub?'Preparing English dub':'Preparing video',wantedPlay?'Playback starts automatically when it is ready.':'Press Play when you want to start.',null);}
+    if(!value.ready){
+      var waited=openedAt?Math.round((Date.now()-openedAt)/1000):0;
+      bufferView(session.dub?'Preparing English dub':'Preparing video',
+        (wantedPlay?'Playback starts automatically when it is ready.':'Press Play when you want to start.')+(waited>=5?' '+clock(waited)+' so far.':'')+
+        (session.dub&&waited>=20?' The first start after the PC restarts can take a couple of minutes while the speech models load.':''),null);
+    }
     else if(!verdict.open&&(loadedGeneration!==value.generation||(wantedPlay&&video.paused&&!video.ended))){bufferView('Buffering',bufferDetail(verdict,value),verdict.need?(verdict.lead||0)/verdict.need:null);}
     if(SemBufferGate.autoResume(bufferGate,value,{loaded:loadedGeneration===value.generation&&!loading,paused:video.paused,ended:video.ended,busy:resuming,error:!!reportedError,wantedPlay:wantedPlay})){resuming=true;$('buffering').hidden=true;playVideo().catch(function(e){playerMessage(e.message);}).then(function(){resuming=false;});}
     updateCaptions(false);
@@ -430,7 +435,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     bufferGate=SemBufferGate.create();
-    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';
+    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();
     $('details').hidden=true;$('player').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;message('');
     $('audio-track').replaceChildren.apply($('audio-track'),value.audio_tracks.map(function(track){
       var option=document.createElement('option');option.value=track.index;
