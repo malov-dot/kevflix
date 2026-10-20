@@ -7,8 +7,9 @@ vowels) against 9.7 dB below in the originals. Played loudly they sound like bur
 high band ONLY inside frames whose high-band level rises above a ceiling set relative to the take's own voiced level.
 Everything else, including every take with no hot burst, is returned unchanged (same array, applied False).
 
-Pure numpy, deterministic, same length in and out, mono take at 48 kHz (anything else is left alone)."""
-import numpy as np
+Pure numpy, deterministic, same length in and out, mono take at 48 kHz (anything else is left alone). numpy is imported inside the
+functions: the installed app's server process runs on a Python without numpy until a take is rendered, and importing this module
+(through actor_pipeline) must not fail there."""
 
 VERSION = 'take-deess-v1'
 RATE = 48000
@@ -25,6 +26,7 @@ MIN_VOICED_FRAMES = 3
 
 
 def _frames(x):
+    import numpy as np
     padded = np.concatenate([np.zeros(FRAME, dtype=np.float64), x.astype(np.float64), np.zeros(2 * FRAME, dtype=np.float64)])
     count = 1 + (len(padded) - FRAME) // HOP
     index = np.arange(FRAME)[None, :] + HOP * np.arange(count)[:, None]
@@ -33,6 +35,7 @@ def _frames(x):
 
 def deess(samples, rate=RATE, *, ceiling_db=CEILING_DB, max_reduction_db=MAX_REDUCTION_DB):
     """(samples, info). info['applied'] is False (and `samples` is the very same array) when nothing was lowered."""
+    import numpy as np
     info = {'version': VERSION, 'applied': False, 'reason': None, 'ceiling_db': float(ceiling_db), 'split_hz': SPLIT_HZ}
     x = np.asarray(samples)
     if rate != RATE or x.ndim != 1 or len(x) < FRAME or not np.isfinite(x).all():
