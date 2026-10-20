@@ -410,7 +410,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       var waited=openedAt?Math.round((Date.now()-openedAt)/1000):0;
       bufferView(session.dub?'Preparing English dub':'Preparing video',
         (wantedPlay?'Playback starts automatically when it is ready.':'Press Play when you want to start.')+(waited>=5?' '+clock(waited)+' so far.':'')+
-        (session.dub&&waited>=20?' The first start after the PC restarts can take a couple of minutes while the speech models load.':''),null);
+        (session.dub&&waited>=20?' The first start after the PC restarts is slower while the speech models warm up.':''),null);
     }
     else if(!verdict.open&&(loadedGeneration!==value.generation||(wantedPlay&&video.paused&&!video.ended))){bufferView('Buffering',bufferDetail(verdict,value),verdict.need?(verdict.lead||0)/verdict.need:null);}
     if(SemBufferGate.autoResume(bufferGate,value,{loaded:loadedGeneration===value.generation&&!loading,paused:video.paused,ended:video.ended,busy:resuming,error:!!reportedError,wantedPlay:wantedPlay})){resuming=true;$('buffering').hidden=true;playVideo().catch(function(e){playerMessage(e.message);}).then(function(){resuming=false;});}

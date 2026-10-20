@@ -83,7 +83,9 @@ CHILD_DEADLINE_MARGIN_S = 60.0   # the child's own guard deadline backs up the s
 # 'Dubbing error'; they now get the same room as speech recognition.
 OP_TIMEOUTS = {'text_language': 300.0, 'speech': 900.0, 'english': 300.0, 'english_batch': 600.0, 'analyze': 900.0,
                'embed': 300.0, 'refine_utterances': 900.0, 'device_report': 60.0, 'generic_vad': 300.0,
-               'generic_synthesize': 300.0, 'language_id': 600.0, 'audio_events': 600.0}
+               'generic_synthesize': 300.0, 'language_id': 600.0, 'audio_events': 600.0, 'warmup': 900.0}
+SLOW_OP_LOG_S = 3.0               # a request that took at least this long is logged with its queued and running seconds
+PREWARM_RETRY_S = 15.0            # after a warm-up stopped (resource hold, fault) the next claim may try again after this
 # A request that ran past its limit costs that worker only: the next request starts a fresh one. MAX_CONSECUTIVE_DEATHS in a row
 # (no request answered in between) still stop the service until close(), like every other fatal fault.
 RECOVERABLE_STOPS = frozenset({'analysis_timeout'})
@@ -199,6 +201,8 @@ class AnalysisService:
         self._fatal = None
         self._closed = False
         self._deaths = 0
+        self._warming = False                        # a background start + warm-up is in flight (see prewarm)
+        self._prewarm_not_before = 0.0               # monotonic time before which a stopped warm-up is not retried
         self._ready_info = None
         self._stats = None
         self._devices = self._devices_at = None      # from the latest actual reply (not startup, never from config)
@@ -668,6 +672,43 @@ class AnalysisService:
             self.emit('analysis_worker_ready', pid=gen.pid, load_seconds=info.get('load_seconds'),
                       devices=info.get('devices'), memory=info.get('memory'), vram_mib=self.vram_mib)
 
+    # ---- start-up -------------------------------------------------------------------------------------------------
+    def prewarm(self, translation=False):
+        """Start the worker now and warm its models in the background, so the first real request of a dub does not pay the
+        start (about 13 s) and the first call of every step (about 20 s of analysis, about 25 s more for the translator) while
+        the TV shows 'Preparing'. Never blocks and never raises; real requests queue behind the warm-up in the worker's order.
+        A resource hold or any fault only means the first real request starts the worker as before."""
+        with self._lock:
+            if self._closed or self._fatal is not None or self._warming or time.monotonic() < self._prewarm_not_before:
+                return False
+            gen = self._gen
+            if gen is not None and getattr(gen, 'warmed', False) and self._live(gen):
+                return False                         # the live worker was already warmed
+            self._warming = True
+        threading.Thread(target=self._prewarm, args=(bool(translation),), name='analysis-service-prewarm', daemon=True).start()
+        return True
+
+    def _prewarm(self, translation):
+        began = time.monotonic()
+        try:
+            owner = _NoOwner()
+            gen = self._ensure()
+            self._await_ready(gen, owner)
+            if getattr(gen, 'warmed', False):
+                return
+            gen.warmed = True
+            result = self.call('warmup', {'translation': translation}, owner) or {}
+            self.emit('analysis_prewarmed', seconds=round(time.monotonic() - began, 1), steps=result.get('steps'),
+                      translation=translation)
+        except Exception as error:  # noqa: BLE001 - a warm-up is an optimisation: whatever stops it, real requests go on
+            record = fault_record(error)
+            self._prewarm_not_before = time.monotonic() + PREWARM_RETRY_S
+            self.emit('analysis_prewarm_skipped', code=(record or {}).get('code') or type(error).__name__,
+                      seconds=round(time.monotonic() - began, 1))
+        finally:
+            with self._lock:
+                self._warming = False
+
     # ---- requests -------------------------------------------------------------------------------------------------
     def call(self, op, args, owner=None, *, timeout=None):
         """One RPC; returns the decoded JSON result or raises a relay.movie_faults error. No service lock is held
@@ -675,6 +716,7 @@ class AnalysisService:
         owner = owner if owner is not None else _NoOwner()
         if owner.cancelled.is_set():
             raise AnalysisCancelled('window_cancelled', 'analysis %s cancelled' % op)
+        requested = time.monotonic()
         timeout = float(timeout or OP_TIMEOUTS.get(op, 600.0))
         temps = []
         try:
@@ -761,6 +803,11 @@ class AnalysisService:
         if owner.cancelled.is_set():                 # re-checked immediately before returning (after decode/measure)
             self._drop_reply_audio(reply)
             raise AnalysisCancelled('window_cancelled', 'analysis %s cancelled' % op)
+        finished = time.monotonic()
+        if finished - requested >= SLOW_OP_LOG_S:
+            begun = slot.started if slot.started is not None else requested
+            self.emit('analysis_op', op=op, total_s=round(finished - requested, 1), waited_s=round(begun - requested, 1),
+                      ran_s=round(finished - begun, 1))
         return value
 
     def _encode_args(self, args, temps):

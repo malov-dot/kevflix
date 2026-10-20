@@ -73,7 +73,7 @@ MAX_AUDIO_BYTES = 1 << 30
 MAX_ARRAY_BYTES = 512 << 20
 NPY_HEADER_SLACK = 4096
 OPS = frozenset({'text_language', 'speech', 'english', 'english_batch', 'analyze', 'embed', 'refine_utterances',
-                 'device_report', 'generic_vad', 'generic_synthesize', 'language_id', 'audio_events'})
+                 'device_report', 'generic_vad', 'generic_synthesize', 'language_id', 'audio_events', 'warmup'})
 MAX_BATCH_ROWS = 256                                # rows of one english_batch request (the client sends fewer)
 # Cache operation names of translations. They differ per engine on top of the namespace (which already carries the
 # translator's content identity and policy), so an M2M100 entry can never answer a Qwen3 request or the reverse.
@@ -712,6 +712,9 @@ class Worker:
                 args['waveform'], int(args['rate']), args['segments'], args['vectors'], args.get('offset', 0),
                 speech_regions=args.get('speech_regions') or (), known_speakers=args.get('known_speakers'),
                 whisper_no_speech=bool(args.get('whisper_no_speech', False))))
+        if op == 'warmup':                            # first-call cost of every step on a generated clip; nothing cached
+            from relay.movie_pipeline import analysis_warmup
+            return analysis_warmup.run(self, bool(args.get('translation')), self.io_dir)
         if op == 'device_report':
             return {'devices': self.devices(), 'speaker_policy': self.speakers.policy_metadata() if self.speakers else None,
                     'memory': self.memory, 'ct2_policy': dict(self.ct2_policy)}

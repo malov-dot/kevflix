@@ -55,3 +55,14 @@ default stays `m2m100` so an install without the model keeps working.
 film moves. Raise the target to make everything louder, lower it to make everything quieter.
 `tv.actor_beta_start_seconds` (60) is the start buffer; the producer then keeps running to the end of the film and `mux_ahead_*`
 keeps the segments ready, so nothing buffers during play.
+
+## First start of a session
+
+The speech models load in a few seconds each (Whisper turbo about 3 s, speaker and audio-event models about 2 s each, Qwen3-8B int8
+about 16 s with the files in the disk cache). What used to make the first chunk slow was the first CALL of every step: CUDA and
+cuDNN set-up, the language-detector tables, the speaker pipeline's first batch and the translator's first generate, about 30 s
+of analysis plus the worker start. The analysis worker is therefore started when a dub job is claimed, at the same time as the first
+separation, and warms every step once on a generated voice-like clip (op `warmup`, nothing cached). On the test PC the full
+analysis of the first real chunk dropped from 32 s to 2 s. The server log lists `analysis_prewarmed` with the seconds per step,
+`analysis_prewarm_skipped` when the GPU lease was not available (the first request then starts the worker as before) and
+`analysis_op` for every request slower than 3 s, split into waited and ran seconds.

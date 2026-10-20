@@ -369,7 +369,20 @@ class MoviePipeline:
             else:
                 self._start_separation(record)
             admitted = True
+        if admitted:
+            self._prewarm_analysis()
         return admitted
+
+    def _prewarm_analysis(self):
+        """Start the analysis worker and warm its models while the first chunk is still being separated (see
+        AnalysisService.prewarm). Best effort: the first real request starts the worker if this does not."""
+        prewarm = getattr(self.analysis, 'prewarm', None)
+        if not callable(prewarm):
+            return
+        try:
+            prewarm(translation=self.config['translation_engine'] == 'qwen3')
+        except Exception:  # noqa: BLE001 - an optimisation never stops claiming
+            pass
 
     def _start_separation(self, record):
         record.state = 'separating'
