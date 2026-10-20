@@ -134,6 +134,9 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   try{browsePrefs=JSON.parse(localStorage.getItem('kevflix-browse')||'{}');sourceChosen=!!browsePrefs.source;sourceMode=browsePrefs.source==='folders'?'folders':'plex';}catch(ignore){}
   var defaults={quality:2160,upscale:false,hdr_mode:'auto',dub:false,watch:false,commentary:'balanced',encoder:'default',threads:2,subtitles:'off',progress_sync:true},resumeMap={};
   try{Object.assign(defaults,JSON.parse(localStorage.getItem('kevflix-defaults')||'{}'));resumeMap=JSON.parse(localStorage.getItem('kevflix-resume')||'{}');}catch(ignore){}
+  // One-time clean-up: upscaling is on only when the viewer turns it on. A saved 'Lanczos upscaling' default (from an earlier build or a
+  // stray key press) is switched off once; a choice made after this point is kept.
+  try{if(localStorage.getItem('kevflix-upscale-reset')!=='1'){if(defaults.upscale===true){defaults.upscale=false;localStorage.setItem('kevflix-defaults',JSON.stringify(defaults));}localStorage.setItem('kevflix-upscale-reset','1');}}catch(ignore){}
   $('worker-address').textContent='Worker: '+location.origin;
   function message(text){
     $('notice').textContent=text||'';$('notice').hidden=!text;clearTimeout(noticeTimer);
@@ -362,7 +365,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   function profileLabel(s){
     var parts=[s.dub?'English dubbing':'Original audio'];
     if(s.profile==='Original file')parts.push('Original file');
-    else if(s.upscale)parts.push('Upscaling to '+(s.quality===2160?'4K':s.quality+'p'));
+    else if(s.upscale)parts.push('Upscaling to '+(s.quality===2160?'4K':s.quality+'p')+' on the PC');
     else if(s.quality&&s.quality<2160)parts.push('Output limited to '+s.quality+'p');
     else parts.push('Original resolution');
     return parts.join(' · ');
