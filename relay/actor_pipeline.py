@@ -222,6 +222,10 @@ LID_PAD_SECONDS=.1
 # least as confident as the one it replaces.
 LID_ALLOWED=frozenset(('en','ru','uk','be','bg','sr','pl','cs','sk','es','pt','fr','it','de','nl','ro','ca','tr','el','hu','sv','da','no','fi'))
 LID_MAX_CONFIDENCE_DROP=.05
+# A re-decoding must also be a confident reading in its own right: two clean Spanish lines of a Spanish-language test film became Turkish
+# ('Elbette. Elbette.') and English ('But hey, that's you.') at word confidence .56-.59, while the corrections that were right
+# read .72 and above. Replacements that carry no word confidences (no word timestamps) are judged by the drop rule alone.
+LID_MIN_REPLACEMENT_CONFIDENCE=.70
 
 
 def shift_segments(segments,offset):
@@ -248,7 +252,9 @@ def apply_language_corrections(segments,ids,redecode,window_language,*,min_proba
         probability=float((ident or {}).get('probability') or 0.)
         if ident and found in LID_ALLOWED and found!=window_language and probability>=min_probability:
             replacement=redecode(index,found)
-            if replacement and mean_word_probability(replacement)>=mean_word_probability([segment])-LID_MAX_CONFIDENCE_DROP:
+            if (replacement and mean_word_probability(replacement)>=mean_word_probability([segment])-LID_MAX_CONFIDENCE_DROP
+                    and (not any(item.get('words') for item in replacement)
+                         or mean_word_probability(replacement)>=LID_MIN_REPLACEMENT_CONFIDENCE)):
                 out.extend(replacement)
                 corrections.append({'start':segment['start'],'end':segment['end'],'window_language':window_language,
                                     'detected':found,'probability':round(probability,3),'before':segment.get('text'),

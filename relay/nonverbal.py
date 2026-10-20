@@ -201,13 +201,14 @@ def _unit_reason(c):
 # --------------------------------------------------------------------------------------------------------------------
 # already-English text
 # --------------------------------------------------------------------------------------------------------------------
-# Function words that are English and not also common in ru/es/fr/Latin (so "no", "me", "a", "on", "son", "he" are excluded)
+# Function words that are English and not also common in ru/es/fr/Latin (so "no", "me", "a", "on", "son", "he", "has", "come" are
+# excluded: "¿Lo has notado?" and "¿Me has oído?" are Spanish, "come" is Spanish and Italian)
 _EN_WORDS = frozenset((
     'the', 'and', 'you', 'your', 'are', 'was', 'were', 'been', "i'm", "i'll", "i've", "it's", "that's", 'this', 'these', 'those',
     'what', 'who', 'why', 'how', 'when', 'where', 'with', 'without', 'from', "don't", "doesn't", "didn't", "can't", "couldn't",
-    'would', 'should', "won't", 'have', 'has', 'had', 'does', 'did', 'there', 'here', 'they', 'them', 'his', 'her', 'but', 'just',
+    'would', 'should', "won't", 'have', 'had', 'does', 'did', 'there', 'here', 'they', 'them', 'his', 'her', 'but', 'just',
     'now', 'well', 'yes', 'please', 'sir', 'thank', 'thanks', 'hello', 'okay', 'going', 'know', 'want', 'need', 'think', "let's",
-    'get', 'got', 'come', 'tell', 'help', 'wait', 'stop', 'listen', 'look', 'really', 'very', 'good', 'right', 'not', 'for',
+    'get', 'got', 'tell', 'help', 'wait', 'stop', 'listen', 'look', 'really', 'very', 'good', 'right', 'not', 'for',
     'we', 'our', 'us', 'my', 'it', 'is', 'of', 'to', 'in', 'at', 'if', 'then', 'so', 'be', 'do', 'will', 'can', 'yeah', 'yep',
     "what's", "who's", "where's", "there's", "he's", "she's", "isn't", "aren't", "wasn't", "weren't", "haven't", "hasn't",
     "wouldn't", "shouldn't", "you're", "we're", "they're", "you'll", "we'll", "he'll", "she'll", "they'll", "you've", "we've",
@@ -395,6 +396,21 @@ def _events_dict(events):
     return out, False
 
 
+NARRATION_SPEECH_MIN = 0.60     # classifier Speech score from which a monotone line may be narration rather than a chant
+NARRATION_WORDS_PER_SECOND = 2.5   # the fastest chant of the test films is 2.2 words/s (Russian); Spanish narration is 2.9-3.0
+
+
+def _spoken_narration(speech, text, duration):
+    """True for a monotone line the classifier hears as Speech and that is spoken at an ordinary rate (needs text and duration)."""
+    try:
+        if speech is None or float(speech) < NARRATION_SPEECH_MIN or text is None or duration is None or float(duration) <= 0:
+            return False
+        words = len(re.findall(r'\w+', str(text)))
+        return words / float(duration) >= NARRATION_WORDS_PER_SECOND
+    except Exception:
+        return False
+
+
 def nonverbal_audio_reason(features, events, *, text=None, duration=None):
     """Reason from the measured features of the ORIGINAL vocals excerpt and the classifier labels, else None.
 
@@ -426,9 +442,10 @@ def nonverbal_audio_reason(features, events, *, text=None, duration=None):
         # 3 a long held steady note
         if hold >= HELD_NOTE_MIN_S and vf >= HELD_NOTE_MIN_VOICED:
             return 'singing_held_note'
-        # 4 recitative on one tone (extra features)
+        # 4 recitative on one tone (extra features). Not for a calm narrator: a Spanish-language test film has monotone spoken narration at an
+        #   ordinary speaking rate that the classifier calls Speech (.74-.82); chanted prayers and recitation run well under that rate
         if (float(f.get('tone_share') or 0) >= TONE_SHARE_MIN and float(f.get('tone_run_s') or 0) >= TONE_RUN_MIN_S
-                and float(f.get('voiced_s') or 0) >= TONE_VOICED_MIN_S):
+                and float(f.get('voiced_s') or 0) >= TONE_VOICED_MIN_S and not _spoken_narration(speech, text, duration)):
             return 'chant_monotone'
         # 5 recitative on one tone with the export features only (speech-like classifier score is low)
         if (hold >= CHANT_HELD_MIN_S and vf >= CHANT_VOICED_MIN and rng is not None and float(rng) <= CHANT_RANGE_MAX
