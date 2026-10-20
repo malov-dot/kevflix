@@ -54,6 +54,9 @@ LOG = logging.getLogger('relay.movie_pipeline')
 
 RETRY_RESOURCES_S = 30.0          # relay coordinator.loop cadence
 FENCE_POLL_S = 1.0
+RELEASE_GRACE_S = 4.0              # no unfinished job for this long: the models leave RAM and VRAM (playback stopped / film done)
+RELEASE_POLL_S = 1.0
+TERMINAL_JOB_STATES = ('complete', 'error', 'cancelled', 'needs_review')
 
 
 class _Record:
@@ -119,6 +122,9 @@ class MoviePipeline:
         self.threads = []
         self.on_job = None
         self.jobs_seen = set()
+        self._idle_since = None          # monotonic time the pipeline last had no unfinished work (models are released after RELEASE_GRACE_S)
+        self._models_released = False
+        self._release_check_at = 0.0
         # english_windows counts only windows settled ready with generated English; original-audio outcomes are
         # counted apart and never as rendered English. fallback_original includes original-unverified windows.
         self.counts = {'claimed': 0, 'render_attempts': 0, 'english_windows': 0, 'english_generated_seconds': 0.0,
@@ -298,6 +304,7 @@ class MoviePipeline:
             now = time.monotonic()
             self.resident.idle_check()
             self.analysis.idle_check()
+            self._release_idle_models(now)
             if now >= retry_at:
                 self.store.retry_resources()
                 retry_at = now + RETRY_RESOURCES_S
@@ -372,6 +379,49 @@ class MoviePipeline:
         if admitted:
             self._prewarm_analysis()
         return admitted
+
+    def _work_pending(self):
+        """True while any job has unfinished work (a dub being played or produced), or a window is in flight or queued. Unknown counts as
+        pending: models are never dropped on a guess."""
+        if self.records or self.deferred or not self.sep_q.empty() or not self.ana_q.empty():
+            return True
+        try:
+            return any(job['state'] not in TERMINAL_JOB_STATES for job in self.store.jobs())
+        except Exception:  # noqa: BLE001
+            return True
+
+    def _release_idle_models(self, now):
+        """Models live only while a dub is being produced for playback: RELEASE_GRACE_S after the last job ended (playback stopped, the
+        job was cancelled, or the whole film is dubbed) the speech/translation worker, the resident Demucs and the Vox engines exit and
+        their RAM and VRAM are free. A seek or a new playback starts them again."""
+        if now < self._release_check_at:
+            return
+        self._release_check_at = now + RELEASE_POLL_S
+        if self._work_pending():
+            self._idle_since, self._models_released = None, False
+            return
+        if self._idle_since is None:
+            self._idle_since = now
+        if self._models_released or now - self._idle_since < RELEASE_GRACE_S:
+            return
+        results = {}
+        for name, release in (('analysis', self.analysis.unload), ('demucs', self.resident.unload)):
+            try:
+                results[name] = release('playback_stopped')
+            except Exception as error:  # noqa: BLE001
+                results[name] = 'error:' + type(error).__name__
+        if 'busy' in results.values():
+            return                                   # a request is still unwinding: ask again at the next poll
+        threading.Thread(target=self._release_vox, name='movie-vox-release', daemon=True).start()
+        self._models_released = True
+        self.emit('models_released', reason='no unfinished dub work', **results)
+
+    def _release_vox(self):
+        try:
+            released = self.relay.actor_beta_hook.release_vox_engines(self.config, 'playback_stopped')
+            self.emit('vox_released', keepers=released)
+        except Exception as error:  # noqa: BLE001 - the keeper's own idle release still follows
+            self.emit('vox_release_failed', error=type(error).__name__)
 
     def _prewarm_analysis(self):
         """Start the analysis worker and warm its models while the first chunk is still being separated (see

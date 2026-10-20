@@ -264,6 +264,17 @@ def movie_lease_source(config):
     return source
 
 
+def release_vox_engines(config, reason):
+    """Stop the Vox engines and give their GPU lease back now (the job lease keeper otherwise holds them job_lease_idle_seconds after
+    the last window). Returns how many keepers were released; 0 when Vox was never started in this process. May block while the
+    engines drain: call it from a worker thread."""
+    module = sys.modules.get('_movie_vox_automatic_renderer')
+    keepers = list(getattr(module, '_KEEPERS', {}).values()) if module is not None else []
+    for keeper in keepers:
+        keeper.release(reason)
+    return len(keepers)
+
+
 def movie_lease_guard_factory(config, module):
     """The Vox guard: one process-level JobLeaseKeeper per lease configuration, so ONE GPU lease and warm engines
     span the windows, chunks and verification retries of a job (review P2-1). No gpu_lease -> fails closed."""

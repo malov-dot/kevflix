@@ -23,6 +23,7 @@ from .speech import Speech
 from .store import Store
 from . import actor_beta_hook as _beta
 from . import demucs_bed_parent as _bed
+from . import actor_surround as _surround
 
 
 def cue_id(cue):
@@ -384,7 +385,13 @@ def process_actor_chunk(config,store,job_id,index,owner,pipeline=None):
         ready=directory/'english.wav'
         owner.run([config['ffmpeg'],'-hide_banner','-loglevel','error','-nostdin','-ss',str(chunk['start']-origin),
             '-i',result['audio'],'-t',str(chunk_end-chunk['start']),'-ar',RATE,'-ac',CHANNELS,'-c:a','pcm_s16le','-y',ready])
+        surround=Path(result['audio']).with_name(_surround.SIDECAR)           # before `audio` points at english.wav
         result.update(audio=str(ready),sha256=file_hash(ready))
+        # The 5.1 mix of the same 30 s as english.wav, bound to it by hash (relay/actor_surround.py). Only the mix this render's own
+        # report names is published; anything else is removed.
+        _surround.publish(surround,directory,result.get('surround_mix'),result['sha256'],
+            lambda source,target:owner.run([config['ffmpeg'],'-hide_banner','-loglevel','error','-nostdin','-ss',str(chunk['start']-origin),
+                '-i',str(source),'-t',str(chunk_end-chunk['start']),'-ar',RATE,'-ac','6','-c:a','flac','-sample_fmt','s32','-y',target]))
         # firstpass-runtime-glue-v1: never Demucs twice; stdlib check before the post-ready cleanup.
         _demucs=(config.data if hasattr(config,'data') else config).get('actor_beta')
         if (isinstance(_demucs,dict) and _demucs.get('enabled') is True and _demucs.get('demucs_first_pass') is True

@@ -25,6 +25,14 @@ from . import producer_policy as _producer
 from . import embedded_subtitles as _subs
 
 
+# A stereo dub of a 5.1 film that has no surround mix for that chunk. The stereo dub is on the ITU-normalised scale (the downmix is divided
+# by 1+sqrt(2)); the surround mixes and the film's own 5.1 are on the native scale. +5.8 dB (measured with ebur128 on front/center
+# material, where the center is added on top of FL/FR) keeps a fallback chunk at the loudness of its neighbours.
+SURROUND_UPMIX = "volume=5.8dB,pan=5.1|FL=FL|FR=FR|FC=0.5*FL+0.5*FR|LFE=0*FL|BL=0*FL|BR=0*FL"
+def passthrough_mode(mode):
+    """True for a chunk whose english.wav is just the original soundtrack: no-dialogue, original-unverified, original-trial-fallback,
+    original-English... (every producer mode that starts with "original")."""
+    return mode == "no-dialogue" or str(mode or "").startswith("original")
 DIAGNOSTIC_KEYS = ("stage", "engine", "code", "message", "ready_state", "network_state", "native_hls", "hls_js", "ua",
                    "session", "error", "hls", "codecs")
 _URL = re.compile(r"https?://\S+", re.I)
@@ -255,7 +263,8 @@ class TVService:
                 "position": 0.0, "start_index": 0, "generation": 1, "epoch": 0,
                 "dub": False, "compatibility": bool(self.config["tv"]["pc_process_all"]),
                 "quality": int(self.config["tv"]["max_height"]), "upscale": bool(self.config["tv"]["upscale"]),
-                "hdr_mode": self.config["tv"]["hdr_mode"], "subtitles": "off", "watch_mode": "balanced",
+                "hdr_mode": self.config["tv"]["hdr_mode"], "surround": self.config["tv"].get("surround", "auto"),
+                "subtitles": "off", "watch_mode": "balanced",
                 "encoder": self.config["tv"]["video_encoder"], "encoder_threads": self.config["tv"]["encoder_threads"],
                 "plex_key": None, "sync_progress": bool(self.config["tv"]["sync_plex_progress"]),
                 "job_id": None, "job_revision": None, "watch": False, "state": "paused", "resource_wait": None,
@@ -282,7 +291,7 @@ class TVService:
 
     def control(self, ident, device, action, position=None, enabled=None, audio_index=None,
                 quality=None, upscale=None, hdr_mode=None, subtitles=None, watch_mode=None,
-                encoder=None, encoder_threads=None):
+                encoder=None, encoder_threads=None, surround=None):
         value = self.session(ident, device)
         if action == "stop":
             self.stop(ident)
@@ -324,7 +333,11 @@ class TVService:
                     raise ValueError("Choose a resolution up to 4K")
                 if hdr_mode not in ("auto", "sdr"):
                     raise ValueError("Choose automatic HDR or SDR conversion")
+                if surround is not None and surround not in ("auto", "stereo"):
+                    raise ValueError("Choose 5.1 surround (automatic) or stereo sound")
                 value.update(quality=quality, upscale=bool(upscale), hdr_mode=hdr_mode, compatibility=True)
+                if surround is not None:
+                    value["surround"] = surround
             new_position = value["position"] if position is None else float(position)
             if not math.isfinite(new_position):
                 raise ValueError("Invalid playback position")
@@ -479,6 +492,7 @@ class TVService:
                 "state": value["state"], "generation": value["generation"], "epoch": value["epoch"],
                 "dub": value["dub"], "compatibility": value["compatibility"], "watch": value["watch"], "job_id": value["job_id"],
                 "quality": value["quality"], "upscale": value["upscale"], "hdr_mode": value["hdr_mode"],
+                "surround": value.get("surround", "auto"), "surround_active": self._surround_stream(value) is not None,
                 "encoder": value["encoder"], "encoder_threads": value["encoder_threads"],
                 "subtitles": value["subtitles"], "watch_mode": value["watch_mode"], "sync_progress": value["sync_progress"],
                 "resource_wait": value["resource_wait"], "progress_warning": value.get("progress_warning"),
@@ -906,9 +920,42 @@ class TVService:
     # (one atomic merge, state untouched). A seek, resume, second session or server restart reuses the stored record
     # while its key (source fingerprint + sampling plan + target + audio track + layout) is unchanged.
 
-    def _loudness_key(self, value):
+    def _surround_stream(self, value):
+        """The selected source audio stream when this playback is 5.1 (surround on, 6-channel 5.1 track), else None. One answer
+        for a whole playback: every segment of a stream has the same channel layout."""
+        if (value.get("surround") or self.config["tv"].get("surround", "auto")) == "stereo":
+            return None
+        stream = next((s for s in value["streams"] if s.get("index") == value["audio_index"]
+                       and s.get("codec_type") == "audio"), None)
+        if stream and int(stream.get("channels") or 0) == 6 and stream.get("channel_layout") in ("5.1", "5.1(side)"):
+            return stream
+        return None
+
+    def _loudness_cfg(self, value):
+        """tv.loudness for this playback: a 5.1 stream is measured in 5.1 (BS.1770 channel weights, LFE excluded), a stereo one
+        in the downmix the dub is built from."""
         from . import loudness_job as _lj
         cfg = _lj.settings(self.config["tv"]["loudness"])
+        if self._surround_stream(value) is not None:
+            cfg = {**cfg, "layout": "native"}
+        return cfg
+
+    def _surround_mix(self, audio, audio_hash):
+        """The chunk's 5.1 mix (english-surround.flac beside english.wav) when its receipt binds it to exactly this english.wav and
+        its own hash holds, else None."""
+        folder = Path(audio).parent
+        mix, receipt = folder / "english-surround.flac", folder / "english-surround.json"
+        try:
+            saved = json.loads(receipt.read_text())
+            if saved.get("english_sha256") == audio_hash and mix.is_file() and file_hash(mix) == saved.get("surround_sha256"):
+                return mix
+        except (OSError, ValueError):
+            pass
+        return None
+
+    def _loudness_key(self, value):
+        from . import loudness_job as _lj
+        cfg = self._loudness_cfg(value)
         return _lj.job_key(value["fingerprint"], value["audio_index"], value["duration"], cfg)[0]
 
     def _stored_loudness(self, value, job):
@@ -945,7 +992,7 @@ class TVService:
             if record is not None:
                 self._remember_loudness(job["id"], record)
                 return record["result"]
-            cfg = _lj.settings(self.config["tv"]["loudness"])
+            cfg = self._loudness_cfg(value)
             key = self._loudness_key(value)
             stream = next((s for s in value["streams"] if s.get("index") == value["audio_index"]
                            and s.get("codec_type") == "audio"), None)
@@ -1483,6 +1530,24 @@ class TVService:
                      if k in ("knee_dbfs", "ceiling_dbfs")}    # defaults -3 / -1 dBFS
             identity_parts.append(_pl.mux_identity(gain_db, **curve))   # a different gain/curve is a different mux output
             audio_filter = _pl.mux_filter(gain_db, **curve) + ",apad"   # constant gain, stateless soft knee, then pad
+        # 5.1 playback: every segment is six-channel AAC. A dub chunk uses its bound surround mix; a chunk whose english.wav is just the
+        # original soundtrack (and a playback without dub) uses the film's own 5.1; a dub chunk without a surround mix is upmixed from
+        # the stereo dub so the stream's layout never changes mid-way.
+        surround = self._surround_stream(value)
+        audio_input, audio_prefix, channel_args, audio_rate = audio, "", ["-ac", "2"], "192k"
+        if surround is not None:
+            channel_args, audio_rate = [], "384k"
+            bound = self._surround_mix(audio, audio_hash) if audio else None
+            mode = ((self.store.chunk(job["id"], index) or {}).get("payload") or {}).get("mode") if audio and job else None
+            if bound is not None:
+                audio_input = bound
+                identity_parts.append(["surround", "mix", file_hash(bound)])
+            elif audio and not passthrough_mode(mode):
+                audio_prefix = SURROUND_UPMIX + ","
+                identity_parts.append(["surround", "upmix"])
+            else:
+                audio_input = None
+                identity_parts.append(["surround", "original"])
         identity = json.dumps(identity_parts)
         if value.get("speech_engine") == "xtranslator":
             identity = json.dumps(["xtranslator", identity])
@@ -1499,8 +1564,8 @@ class TVService:
         temporary = directory / ("%s.%s.partial.ts" % (key, uuid.uuid4().hex[:8]))
         args = [self.config["ffmpeg"], "-hide_banner", "-loglevel", "error", "-nostdin",
                 "-ss", str(start), "-i", value["source"]]
-        if audio:
-            args += ["-i", str(audio)]
+        if audio_input:
+            args += ["-i", str(audio_input)]
         height, width = value["quality"], value["quality"] * 16 // 9
         scale = ("scale=w=%s:h=%s" % (width, height) if value["upscale"] else
                  "scale=w='min(%s,iw)':h='min(%s,ih)'" % (width, height))
@@ -1513,14 +1578,14 @@ class TVService:
         rate = "30M" if height == 2160 else "8M"
         color = (["-color_primaries", "bt2020", "-color_trc", video["color_transfer"],
                   "-colorspace", "bt2020nc"] if preserve_hdr else [])
-        args += ["-map", "0:" + str(video["index"]), "-map", "1:a:0" if audio else "0:" + str(value["audio_index"]),
+        args += ["-map", "0:" + str(video["index"]), "-map", "1:a:0" if audio_input else "0:" + str(value["audio_index"]),
                  "-t", "%.6f" % duration, "-vf", scale, "-c:v", codec, *codec_options,
                  "-threads", str(value["encoder_threads"]), "-filter_threads", str(min(2, value["encoder_threads"])),
                  "-pix_fmt", "yuv420p10le" if preserve_hdr else "yuv420p",
                  "-maxrate", rate, "-bufsize", "60M" if height == 2160 else "16M", *color,
                  "-force_key_frames", "expr:gte(t,n_forced*2)",
-                 "-c:a", "aac", "-b:a", "192k", "-ar", "48000", "-ac", "2",
-                 "-af", audio_filter, "-sn", "-dn", "-output_ts_offset", str(start),
+                 "-c:a", "aac", "-b:a", audio_rate, "-ar", "48000", *channel_args,
+                 "-af", audio_prefix + audio_filter, "-sn", "-dn", "-output_ts_offset", str(start),
                  "-muxdelay", "0", "-muxpreload", "0", "-mpegts_flags", "+resend_headers",
                  "-f", "mpegts", "-y", str(temporary)]
         try:

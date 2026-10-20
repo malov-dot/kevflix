@@ -52,6 +52,7 @@
     "buffer_segments": 2,
     "upscale": false,
     "hdr_mode": "auto",
+    "surround": "auto",
     "pc_process_all": true,
     "sync_plex_progress": false,
     "allow_plex_controls": false,
@@ -147,6 +148,7 @@
     "language_correction": true,
     "nonverbal_audio": true,
     "reject_unintelligible": true,
-    "deess_takes": true
+    "deess_takes": true,
+    "surround_mix": true
   }
 }

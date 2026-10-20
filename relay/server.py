@@ -376,7 +376,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(self.app.tv.control(data["id"], device, data["action"],
                         data.get("position"), data.get("enabled"), data.get("audio_index"),
                         data.get("quality"), data.get("upscale"), data.get("hdr_mode"),
-                        data.get("subtitles"), data.get("watch_mode"), data.get("encoder"), data.get("encoder_threads")))
+                        data.get("subtitles"), data.get("watch_mode"), data.get("encoder"), data.get("encoder_threads"),
+                        data.get("surround")))
                 if path == "/tv-api/heartbeat":
                     return self.json_response(self.app.tv.heartbeat(data["id"], device, data["position"],
                         data["state"], data["generation"]))

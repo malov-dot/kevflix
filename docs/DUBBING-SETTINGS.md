@@ -66,3 +66,29 @@ separation, and warms every step once on a generated voice-like clip (op `warmup
 analysis of the first real chunk dropped from 32 s to 2 s. The server log lists `analysis_prewarmed` with the seconds per step,
 `analysis_prewarm_skipped` when the GPU lease was not available (the first request then starts the worker as before) and
 `analysis_op` for every request slower than 3 s, split into waited and ran seconds.
+
+## 5.1 surround
+
+`tv.surround` (`auto`, the default, or `stereo`; the TV's Playback options and defaults have a "Sound" row that sets it per movie) and
+`actor_beta.surround_mix` (default `true`). When the selected audio track of a film is 5.1, the TV stream is six-channel AAC (384 kb/s
+in MPEG-TS) from start to end: the dub is the film's own 5.1 with the original speech removed from every channel it is in (left, right,
+center, surrounds; whichever channel carries it) and the English voice put back into the channels the speech was in, at the level that
+makes the stereo downmix carry the same voice as the stereo dub. Music, effects and the LFE are the original samples, bit for bit,
+outside the replaced lines. How it is made (`relay/actor_surround.py`): per replaced line, per frequency bin, each channel is regressed
+on the speech estimate the stereo mix already subtracts, so only the part of a channel coherent with the speech is taken; channels
+without speech are not touched; the estimates are then reconciled so that their downmix equals that estimate exactly, and the mix goes
+through the stereo mix's own protected-span and headroom rules. The result is stored per chunk (`actor-surround.flac`, published as
+`english-surround.flac` with a receipt that binds it to that chunk's `english.wav` by hash). A chunk without a valid surround mix
+(an older render) is upmixed from the stereo dub so the stream's channel layout never changes; a chunk that is only the original
+soundtrack, and playback without dub, use the film's own 5.1. The playback loudness of a 5.1 stream is measured in 5.1 (BS.1770 channel
+weights, LFE excluded). Choose `stereo` if a TV or sound system cannot play six-channel AAC.
+
+## Models only while a dub is playing
+
+Nothing is loaded when the app starts or when a film plays without English dubbing. The speech/translation worker, the resident Demucs
+and the Vox engines are started when a dub job has work, and they exit, freeing RAM and VRAM, `RELEASE_GRACE_S` (4 s,
+`relay/movie_pipeline/pipeline.py`) after the last job ended: playback was stopped (the TV session ends and its on-demand job is
+cancelled), or the whole film is dubbed. A job that is waiting for its next window keeps them, so playback never reloads models
+between windows. A seek or a new playback loads them again. The 150 s idle limits of each process (`IDLE_UNLOAD_S`,
+`actor_beta.vox.job_lease_idle_seconds`) remain as a second safety net. The server log shows `models_released` (what was stopped),
+`vox_released` and `analysis_worker_stopped` / `resident_demucs_stopped` with reason `playback_stopped`.

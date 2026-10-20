@@ -43,7 +43,13 @@ var SemProofDecoder=(function(){
       if(!prev||prev.time!==o.time)return {time:o.time,at:now,stalled:false};
       return {time:o.time,at:prev.at,stalled:now-prev.at>=limit};
     }
-    return {attach:attach,detach:detach,canFallback:canFallback,watchStall:watchStall,lastError:function(){return failure;},engine:function(){return hls?'hls.js':'native';}};
+    // What to do when a stream fails or stalls: first the other decoder, then (5.1 playback only) stereo sound, then give up.
+    function failurePlan(o){
+      if(!o.secondAttempt&&(o.ownEngine||o.canFallback))return 'other-engine';
+      if(o.surroundActive&&!o.stereoTried)return 'stereo';
+      return 'give-up';
+    }
+    return {attach:attach,detach:detach,canFallback:canFallback,watchStall:watchStall,failurePlan:failurePlan,lastError:function(){return failure;},engine:function(){return hls?'hls.js':'native';}};
   }
   return {create:create,isHls:isHls};
 }());
@@ -144,7 +150,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     if(suppliedLauncher)history.replaceState(null,'',location.pathname+location.search);
   }catch(ignore){}
   try{browsePrefs=JSON.parse(localStorage.getItem('kevflix-browse')||'{}');sourceChosen=!!browsePrefs.source;sourceMode=browsePrefs.source==='folders'?'folders':'plex';}catch(ignore){}
-  var defaults={quality:2160,upscale:false,hdr_mode:'auto',dub:false,watch:false,commentary:'balanced',encoder:'default',threads:2,subtitles:'off',progress_sync:true},resumeMap={};
+  var defaults={quality:2160,upscale:false,hdr_mode:'auto',surround:'auto',dub:false,watch:false,commentary:'balanced',encoder:'default',threads:2,subtitles:'off',progress_sync:true},resumeMap={};
   try{Object.assign(defaults,JSON.parse(localStorage.getItem('kevflix-defaults')||'{}'));resumeMap=JSON.parse(localStorage.getItem('kevflix-resume')||'{}');}catch(ignore){}
   // One-time clean-up: upscaling is on only when the viewer turns it on. A saved 'Lanczos upscaling' default (from an earlier build or a
   // stray key press) is switched off once; a choice made after this point is kept.
@@ -437,8 +443,8 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     message('Opening movie…');
     var value=await api('open',item.plex?{plex_key:item.id,resume:!restart}:{node:item.id});
     if(!item.plex&&!restart&&item.resume>10)value=await api('control',{id:value.id,action:'seek',position:item.resume});
-    if(prefs.quality!==value.quality||prefs.upscale!==value.upscale||prefs.hdr_mode!==value.hdr_mode)
-      value=await api('control',{id:value.id,action:'quality',quality:prefs.quality,upscale:prefs.upscale,hdr_mode:prefs.hdr_mode,position:value.position});
+    if(prefs.quality!==value.quality||prefs.upscale!==value.upscale||prefs.hdr_mode!==value.hdr_mode||(prefs.surround||'auto')!==value.surround)
+      value=await api('control',{id:value.id,action:'quality',quality:prefs.quality,upscale:prefs.upscale,hdr_mode:prefs.hdr_mode,surround:prefs.surround||'auto',position:value.position});
     if(prefs.encoder!=='default')value=await api('control',{id:value.id,action:'processing',encoder:prefs.encoder,encoder_threads:prefs.threads||2,position:value.position});
     if(prefs.dub)value=await api('control',{id:value.id,action:'dub',enabled:true,position:value.position});
     if(prefs.watch)value=await api('control',{id:value.id,action:'watch',enabled:true});
@@ -447,7 +453,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     bufferGate=SemBufferGate.create();
-    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;
+    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;stereoTried=false;surroundDropPending=false;
     $('details').hidden=true;$('player').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;message('');
     $('audio-track').replaceChildren.apply($('audio-track'),value.audio_tracks.map(function(track){
       var option=document.createElement('option');option.value=track.index;
@@ -486,9 +492,10 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   }
   // What this TV can decode through MSE (the hls.js path) and through the video tag: part of every failure report.
   function codecSupport(){
-    var kinds={h264:'avc1.640028',hevc:'hvc1.1.6.L120.90',av1:'av01.0.08M.08'},out={};
+    var kinds={h264:'video/mp4; codecs="avc1.640028"',hevc:'video/mp4; codecs="hvc1.1.6.L120.90"',av1:'video/mp4; codecs="av01.0.08M.08"',
+      aac:'audio/mp4; codecs="mp4a.40.2"',ac3:'audio/mp4; codecs="ac-3"',eac3:'audio/mp4; codecs="ec-3"'},out={};
     Object.keys(kinds).forEach(function(name){
-      var type='video/mp4; codecs="'+kinds[name]+'"';
+      var type=kinds[name];
       try{out[name]=(typeof MediaSource!=='undefined'&&MediaSource.isTypeSupported(type)?'mse ':'')+(video.canPlayType(type)||'no');}catch(ignore){out[name]='?';}
     });
     return out;
@@ -497,11 +504,21 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   // advanced the picture is remembered (kevflix-engine), see checkStall.
   function prefersOwnDecoder(){try{var saved=localStorage.getItem('kevflix-engine');return saved?saved==='hlsjs':true;}catch(ignore){return true;}}
   function rememberEngine(own){try{localStorage.setItem('kevflix-engine',own?'hlsjs':'native');}catch(ignore){}}
-  var STALL_MS=15000,stallWatch=null,switchedEngine=false,engineConfirmed=false,progressMark=null;
+  var STALL_MS=15000,stallWatch=null,switchedEngine=false,engineConfirmed=false,progressMark=null,stereoTried=false,surroundDropPending=false;
+  // 5.1 that neither decoder can play on this TV: ask the PC for stereo sound and remember it as the default for this TV.
+  function dropSurround(reason){
+    stereoTried=true;surroundDropPending=true;                 // becomes this TV's default only once stereo has really played
+    reportFailure('surround-dropped',{error:String(reason||'')});
+    playerMessage('5.1 sound did not play on this TV. Switching to stereo…');
+    void change('quality',{quality:session.quality,upscale:session.upscale,hdr_mode:session.hdr_mode,surround:'stereo'});
+  }
   function checkStall(){
     if(!session||loading||loadedGeneration!==session.generation||!wantedPlay||video.paused||video.ended||session.ready!==true){stallWatch=null;return;}
     var time=Number(video.currentTime)||0;
-    if(!engineConfirmed&&progressMark!==null&&time>progressMark+2){engineConfirmed=true;rememberEngine(proofDecoder.engine()==='hls.js');}
+    if(!engineConfirmed&&progressMark!==null&&time>progressMark+2){
+      engineConfirmed=true;rememberEngine(proofDecoder.engine()==='hls.js');
+      if(surroundDropPending){surroundDropPending=false;defaults.surround='stereo';saveDefaults();}
+    }
     var lead=(Number(session.ready_through)||0)-position();
     stallWatch=SemProofDecoder.watchStall(stallWatch,{time:time,lead:lead},Date.now(),STALL_MS);
     if(!stallWatch.stalled)return;
@@ -509,7 +526,10 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     var spans=[];
     try{for(var i=0;i<video.buffered.length;i++)spans.push(video.buffered.start(i).toFixed(1)+'-'+video.buffered.end(i).toFixed(1));}catch(ignore){}
     reportFailure('stalled',{error:'no progress for '+STALL_MS/1000+' s, lead '+Math.round(lead)+' s, buffered '+(spans.join(',')||'none')+', time '+time.toFixed(1)});
-    if(switchedEngine)return;
+    if(switchedEngine){
+      if(SemProofDecoder.failurePlan({ownEngine:false,secondAttempt:true,canFallback:false,surroundActive:session.surround_active===true,stereoTried:stereoTried})==='stereo')dropSurround('stalled');
+      return;
+    }
     switchedEngine=true;
     var wasOwn=proofDecoder.engine()==='hls.js';
     playerMessage('The TV player did not start the stream. Trying the other decoder…');
@@ -542,7 +562,10 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     }catch(error){
       if(number===operation&&serial===loadSerial){
         reportFailure(own?'hls.js-failed':'native-failed',{error:error.message,hls:proofDecoder.lastError()});
-        if(!second&&(own||proofDecoder.canFallback()))retry=own?'native':'own';    // one automatic retry with the other decoder
+        var plan=SemProofDecoder.failurePlan({ownEngine:own,secondAttempt:!!second,canFallback:proofDecoder.canFallback(),
+          surroundActive:session&&session.surround_active===true,stereoTried:stereoTried});
+        if(plan==='other-engine')retry=own?'native':'own';                           // one automatic retry with the other decoder
+        else if(plan==='stereo')dropSurround(error.message);
         else{reportedError=error.message;playerMessage(error.message);showControls();}
       }
     }finally{if(serial===loadSerial)loading=false;}
@@ -776,6 +799,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
     $('default-quality-value').textContent=defaults.quality===2160?'4K':defaults.quality+'p';
     $('default-upscale-value').textContent=defaults.upscale?'Lanczos':'Off';
     $('default-hdr-value').textContent=defaults.hdr_mode==='auto'?'Automatic':'Convert to SDR';
+    $('default-surround-value').textContent=defaults.surround==='stereo'?'Stereo':'5.1 surround';
     $('default-dub-value').textContent=defaults.dub?'On':'Off';$('default-watch-value').textContent=defaults.watch?'On':'Off';
     $('default-commentary-value').textContent={balanced:'Balanced',quiet:'Quiet','ask-only':'Only when asked'}[defaults.commentary];
   }
@@ -800,6 +824,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   var modes=[{value:'balanced',label:'Balanced reactions'},{value:'quiet',label:'Quiet reactions'},{value:'ask-only',label:'Only when I ask Sem'}];
   $('default-quality').onclick=function(){choose('Output limit',qualities,defaults.quality,function(v){defaults.quality=Number(v);saveDefaults();});};
   $('default-upscale').onclick=function(){choose('Upscaling',[{value:'off',label:'Off · preserve source size'},{value:'on',label:'Lanczos upscaling on the PC'}],defaults.upscale?'on':'off',function(v){defaults.upscale=v==='on';saveDefaults();});};
+  $('default-surround').onclick=function(){choose('Sound',surroundChoices,defaults.surround||'auto',function(v){defaults.surround=v;saveDefaults();});};
   $('default-hdr').onclick=function(){choose('HDR',[{value:'auto',label:'Preserve HDR when supported'},{value:'sdr',label:'Convert to SDR on the PC'}],defaults.hdr_mode,function(v){defaults.hdr_mode=v;saveDefaults();});};
   $('default-dub').onclick=function(){defaults.dub=!defaults.dub;saveDefaults();};
   $('default-watch').onclick=function(){defaults.watch=!defaults.watch;saveDefaults();};
@@ -877,6 +902,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
   $('detail-restart').onclick=function(){if(selectedItem)openMovie(selectedItem,true).catch(function(e){message(e.message);});};
   $('detail-dub').onclick=function(){moviePrefs.dub=!moviePrefs.dub;if(!moviePrefs.dub&&moviePrefs.subtitles==='dub')moviePrefs.subtitles='off';$('detail-dub').textContent='English dubbing: '+(moviePrefs.dub?'on':'off');};
   $('detail-watch').onclick=function(){moviePrefs.watch=!moviePrefs.watch;$('detail-watch').textContent='Watch with Sem: '+(moviePrefs.watch?'on':'off');};
+  var surroundChoices=[{value:'auto',label:'5.1 surround when the film has it'},{value:'stereo',label:'Stereo'}];
   var encoders=[{value:'software',label:'CPU software encoding'}];
   var threadChoices=[1,2,4,8].map(function(n){return {value:n,label:n+' CPU threads for video encoding'};});
   function encoderLabel(value){return (encoders.find(function(e){return e.value===value;})||{label:'Use PC default'}).label;}
@@ -886,6 +912,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       ['Movie quality',moviePrefs.quality===2160?'4K':moviePrefs.quality+'p',function(){choose('Movie quality',qualities,moviePrefs.quality,function(v){moviePrefs.quality=Number(v);renderMovieOptions();});}],
       ['Upscaling',moviePrefs.upscale?'On':'Off',function(){moviePrefs.upscale=!moviePrefs.upscale;renderMovieOptions();}],
       ['HDR',moviePrefs.hdr_mode==='auto'?'Automatic':'SDR',function(){moviePrefs.hdr_mode=moviePrefs.hdr_mode==='auto'?'sdr':'auto';renderMovieOptions();}],
+      ['Sound',moviePrefs.surround==='stereo'?'Stereo':'5.1 surround',function(){moviePrefs.surround=moviePrefs.surround==='stereo'?'auto':'stereo';renderMovieOptions();}],
       ['English dubbing',moviePrefs.dub?'On':'Off',function(){$('detail-dub').click();renderMovieOptions();}],
       ['Watch with Sem',moviePrefs.watch?'On':'Off',function(){$('detail-watch').click();renderMovieOptions();}],
       ['Sem commentary',moviePrefs.commentary,function(){choose('Sem commentary',modes,moviePrefs.commentary,function(v){moviePrefs.commentary=v;renderMovieOptions();});}],
@@ -907,6 +934,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       ['Output limit',session.quality===2160?'4K':session.quality+'p',function(){choose('Output limit',qualities,session.quality,function(v){return change('quality',{quality:Number(v),upscale:session.upscale,hdr_mode:session.hdr_mode});});}],
       ['Upscaling',session.upscale?'Lanczos':'Off',function(){choose('Upscaling',[{value:'off',label:'Off'},{value:'on',label:'Lanczos on the PC'}],session.upscale?'on':'off',function(v){return change('quality',{quality:session.quality,upscale:v==='on',hdr_mode:session.hdr_mode});});}],
       ['HDR',session.hdr_mode==='auto'?'Automatic':'SDR',function(){choose('HDR',[{value:'auto',label:'Preserve HDR signal'},{value:'sdr',label:'Convert to SDR'}],session.hdr_mode,function(v){return change('quality',{quality:session.quality,upscale:session.upscale,hdr_mode:v});});}],
+      ['Sound',session.surround==='stereo'?'Stereo':session.surround_active?'5.1 surround':'Stereo (this film has no 5.1 track)',function(){choose('Sound',surroundChoices,session.surround||'auto',function(v){return change('quality',{quality:session.quality,upscale:session.upscale,hdr_mode:session.hdr_mode,surround:v});});}],
       ['Audio track','Select',function(){choose('Audio track',session.audio_tracks.map(function(t){return{value:t.index,label:t.language+' · '+t.title};}),session.audio_index,function(v){return change('audio',{audio_index:Number(v)});});}],
       ['Subtitles',session.subtitles==='off'?'Off':'On',function(){choose('Subtitles',[{value:'off',label:'Off'},{value:'auto',label:'External subtitle file'}].concat(session.dub?[{value:'dub',label:'English dubbing text'}]:[]).concat(session.subtitle_tracks.map(function(t){return{value:String(t.index),label:t.language+' · '+t.title};})),session.subtitles,function(v){return setting('subtitles',{subtitles:v});});}],
       ['Sem commentary',session.watch_mode,function(){choose('Sem commentary',modes,session.watch_mode,function(v){return setting('watch_mode',{watch_mode:v});});}],

@@ -27,6 +27,7 @@ from . import dialogue_units as _units
 from .cinematic import CinematicSeparator,replacement_envelope,replace_dialogue,actor_mix_levels,CHECKPOINT_SHA256,take_removal_intervals,merge_intervals
 from . import take_fit as _fit
 from . import take_deess as _deess
+from . import actor_surround as _surround       # numpy imported inside its functions
 from .nonverbal import nonverbal_reason,sparse_speech_reason,audio_features as tone_features,translation_artifact_reason
 from . import audio_evidence as _evidence
 from .dialogue import plan_dialogue,overlap,caption_text,is_no_speech
@@ -1560,6 +1561,8 @@ class ActorPipeline:
         if final_window is True and render_start<end<render_end:render_end=end   # exact decoded geometry, last chunk only
         if not origin<=render_start<render_end<=end:raise ValueError('Render range is outside the analyzed audio')
         first_pass=removal=None;fp_scope=fp_wall=None
+        source51=original if original.shape[1]==6 else None   # the film's own 5.1 (the first pass replaces `original` by its stereo downmix)
+        surround_source=None                                   # (5.1 original, its layout) for the surround mix; first-pass lane only
         line_voice_mode=_beta.beta_settings(self.config) is not None
         if _fpf.enabled(self.config):
             # C's validated one-pass Demucs bundle: processing STEREO is the working original, raw vocals feed
@@ -1573,6 +1576,7 @@ class ActorPipeline:
             if first_pass is None:raise ValueError('demucs_first_pass is enabled but no first-pass bundle was returned')
             fp_arrays=_fpf.arrays(first_pass,len(original),rate)
             source_layout_evidence=layout_evidence
+            if source51 is not None:surround_source=(source51,source_layout_evidence['layout'])
             original,speech,removal=fp_arrays['processing'],fp_arrays['raw_vocals'],fp_arrays['removal_stem']
             layout_evidence=_fpf.layout_evidence(first_pass);layout='stereo';lfe=None
             if self._admission_window is not None:
@@ -1650,7 +1654,7 @@ class ActorPipeline:
                     return report
                 return self._render_prepared(original,speech,rate,origin,end,prepared['cues'],prepared['all_cues'],
                     prepared['voices'],folder,store,job_id,owner,revision,report,started,protection=protection,removal=removal,
-                    claimant=claimant,fence=fence)
+                    claimant=claimant,fence=fence,surround_source=surround_source)
         owner.check()
         if self.require_prepared_plan:
             # The scheduler permitted this render alongside another window's preparation only because the actor
@@ -2163,14 +2167,15 @@ class ActorPipeline:
         if prepare_only:return save('prepared')
         return self._render_prepared(original,speech,rate,origin,end,active,all_cues,voices,
                                      folder,store,job_id,owner,revision,report,started,protection=protection,removal=removal,
-                                     claimant=claimant,fence=fence)
+                                     claimant=claimant,fence=fence,surround_source=surround_source)
 
     def _render_prepared(self,original,speech,rate,origin,end,cues,all_cues,voices,
                          folder,store,job_id,owner,revision,report,started,protection=None,removal=None,
-                         claimant=None,fence=None):
+                         claimant=None,fence=None,surround_source=None):
         if report.get('beta_dialogue_ownership') is None:
             return self._render_attempt(original,speech,rate,origin,end,cues,all_cues,voices,
-                                        folder,store,job_id,owner,revision,report,started,protection=protection,removal=removal)
+                                        folder,store,job_id,owner,revision,report,started,protection=protection,removal=removal,
+                                        surround_source=surround_source)
         # v3 (caption_targets): one claimant (run id) holds this window's line claims across all its attempts.
         # A window whose atomic line-ledger commit lost a race to another window re-renders from a fresh snapshot
         # (the winner's commit is final; this run's claims and synthesized artifacts are kept and reused), and
@@ -2190,7 +2195,8 @@ class ActorPipeline:
                 try:
                     return self._render_attempt(original,speech,rate,origin,end,cues,all_cues,voices,
                                                 folder,store,job_id,owner,revision,report,started,protection=protection,
-                                                removal=removal,claimant=claimant,fence=fence,forced=dict(forced),boosts=dict(boosts))
+                                                removal=removal,claimant=claimant,fence=fence,forced=dict(forced),boosts=dict(boosts),
+                                                surround_source=surround_source)
                 except LineCommitRace as race:
                     lost.append({'attempt':attempt,'races':race.races})
                     if len(lost)>=LINE_COMMIT_ATTEMPTS:
@@ -2221,7 +2227,7 @@ class ActorPipeline:
 
     def _render_attempt(self,original,speech,rate,origin,end,cues,all_cues,voices,
                         folder,store,job_id,owner,revision,report,started,protection=None,removal=None,
-                        claimant=None,fence=None,forced=None,boosts=None):
+                        claimant=None,fence=None,forced=None,boosts=None,surround_source=None):
         import numpy as np
         import soundfile as sf
         issues=report['issues']
@@ -2760,6 +2766,21 @@ class ActorPipeline:
         else:
             write_layout_wav(output,mixed,rate,layout)
             for cue,line,placement,pan,gain in pending:ledger.put(cue,line,placement,pan,gain)
+        (folder/_surround.SIDECAR).unlink(missing_ok=True)      # never leave the surround mix of an earlier render beside this mix
+        if surround_source is not None and removal is not None and _surround.enabled(self.config):
+            # 5.1 output: the film's own 5.1 with the original speech removed from every channel it is in and the English voice put
+            # back where it was (relay/actor_surround.py). The stereo mix above is complete and valid on its own, so a failure here
+            # only means that this chunk has no surround mix.
+            surround_path=folder/_surround.SIDECAR
+            try:
+                source51,source_layout=surround_source
+                surround,surround_receipt=_surround.compose_surround(source51,removal,generated,envelope,origin=origin,rate=rate,
+                    protected_intervals=protected,layout=source_layout)
+                _surround.write_sidecar(surround_path,surround,rate)
+                report['surround_mix']={**surround_receipt,'file':_surround.SIDECAR,'sha256':file_hash(surround_path)}
+            except Exception as error:                 # an optional artifact (even a MemoryError) never fails a finished stereo chunk
+                surround_path.unlink(missing_ok=True)
+                report['surround_mix']={'version':_surround.VERSION,'error':'%s: %s'%(type(error).__name__,str(error)[:180])}
         report.update(audio=str(output),sha256=file_hash(output),mix=mix,
                       state='candidate',quality_scope='Machine construction only; residual dialogue and soundtrack listening pending',
                       original_audio_protection={'version':policy['version'],'channel_layout':layout,

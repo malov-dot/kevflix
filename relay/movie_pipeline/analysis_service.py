@@ -988,6 +988,27 @@ class AnalysisService:
                 'unconfirmed_workers': [g.pid for g in list(self._unconfirmed)]}
 
     # ---- idle unload / close ----------------------------------------------------------------------------------------
+    def unload(self, reason='unloaded'):
+        """Stop the worker now: its models leave RAM and VRAM and its lease view is released (non-blocking). Returns 'stopped', 'absent'
+        (no live worker) or 'busy' (a request is still running or the lock is taken: ask again shortly). A worker that is still loading
+        its models is stopped too."""
+        if not self._lock.acquire(blocking=False):
+            return 'busy'
+        try:
+            self._reap()
+            gen = self._gen
+            if gen is None or gen.dead.is_set():
+                return 'absent'
+            with gen.lock:
+                if gen.pending:
+                    return 'busy'
+                gen.stopping = True                  # a racing call() sees this and takes a fresh generation
+            self._stop_gen(gen, _rec('cancelled', 'analysis_idle_unload', reason), graceful=True)
+            self.emit('analysis_worker_stopped', reason=reason)
+            return 'stopped'
+        finally:
+            self._lock.release()
+
     def idle_check(self):
         """Unload the models and release the lease view after IDLE_UNLOAD_S without a request (non-blocking lock).
         Also retries ending any unconfirmed earlier worker."""

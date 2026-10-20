@@ -452,6 +452,20 @@ class ResidentDemucs:
         if mib is not None:
             self.peak_mib = max(getattr(self, 'peak_mib', 0), mib)
 
+    def unload(self, reason='unloaded'):
+        """Stop the resident worker now (model out of RAM and VRAM, lease view released; non-blocking). Returns 'stopped', 'absent' or
+        'busy' (a window is being produced or the lock is taken: ask again shortly)."""
+        if not self.lock.acquire(blocking=False):
+            return 'busy'
+        try:
+            self._reap()
+            if self.child is None:
+                return 'absent'
+            self._close_locked(reason)
+            return 'stopped'
+        finally:
+            self.lock.release()
+
     def idle_check(self):
         """Unload the model and release the lease view after idle_seconds without a request (non-blocking)."""
         if (self.child is None and not self.zombies) or time.monotonic() - self.last_used < self.idle_seconds:

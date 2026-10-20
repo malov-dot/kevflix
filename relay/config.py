@@ -100,7 +100,7 @@ DEFAULTS = {
            "local_only": True,
            "max_height": 2160, "encoder_threads": 2, "buffer_segments": 2,
            "video_encoder": "auto", "nvenc_min_free_mib": 2048, "upscale": False,
-           "hdr_mode": "auto", "pc_process_all": True, "sync_plex_progress": False,
+           "hdr_mode": "auto", "surround": "auto", "pc_process_all": True, "sync_plex_progress": False,
            "min_free_disk_gib": 10,
            "idle_seconds": 45, "allow_origins": ["http://127.0.0.1:8081", "http://localhost:8081"],
            "allow_plex_controls": False,
@@ -509,7 +509,7 @@ class Config:
                    'verified_speech','progressive_actor','live_mux','asr_rescue',
                    'original_audio_policy','short_utterance_policy','media','store',
                    # owner-approved dubbing behaviour (2026-10-19): speed fit, speech-only removal, non-speech lines
-                   'take_fit','speech_activity','nonverbal','loudness_reference','audio_evidence','audio_events','borrowed_reference','take_deess')
+                   'take_fit','speech_activity','nonverbal','loudness_reference','audio_evidence','audio_events','borrowed_reference','take_deess','actor_surround')
             values['actor_implementation']={name:hashlib.sha256(Path(__file__).with_name(name+'.py').read_bytes()).hexdigest()
                                             for name in names}
             # embedded-subtitles-v1: caption selection/extraction changes chunk captions.
