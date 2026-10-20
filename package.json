@@ -1,6 +1,6 @@
 {
   "name": "kevflix",
-  "version": "0.4.44",
+  "version": "0.4.45",
   "description": "KevFLIX: local movies with PC-assisted English dubbing and upscaling. Unvalidated development build.",
   "packageType": "app",
   "appName": "KevFLIX",

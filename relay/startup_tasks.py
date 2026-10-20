@@ -63,7 +63,7 @@ def definitions(root, user=None):
                       description='Starts the KevFLIX PC worker (dubbing server for the TV) when you log in.')
     tray = task_xml(user=user, command=powershell_exe(),
                     arguments='-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "%s"' % (root / 'scripts' / 'tray.ps1'),
-                    working_directory=root, delay=TRAY_DELAY,
+                    working_directory=root, delay=TRAY_DELAY, restart=True,
                     description='Shows the KevFLIX icon in the notification area while you are logged in.')
     return [(SERVER_TASK, server), (TRAY_TASK, tray)]
 

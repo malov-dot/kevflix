@@ -94,6 +94,7 @@ $notify.ContextMenuStrip = $menu
 
 $script:running = $null
 function Update-State([bool]$announce) {
+  try {
     $info = Get-WorkerInfo
     $now = [bool]$info
     if ($now) {
@@ -117,23 +118,33 @@ function Update-State([bool]$announce) {
     }
     $script:running = $now
     return $now
+  } catch {
+    Write-Log ('status update failed: ' + $_.Exception.Message)
+    return $false
+  }
 }
 
 function Start-Hidden([string]$file, [string]$arguments) {
     Start-Process -FilePath $file -ArgumentList $arguments -WorkingDirectory $root -WindowStyle Hidden
 }
 $open.add_Click({
+  try {
     $py = Get-Interpreter 'pythonw.exe'
     if ($py) { Start-Hidden $py ('"{0}"' -f (Join-Path $root 'scripts\open_pc.py')); Write-Log 'open requested' }
+  } catch { Write-Log ('open failed: ' + $_.Exception.Message) }
 })
 $notify.add_DoubleClick({ $open.PerformClick() })
 $start.add_Click({
+  try {
     $py = Get-Interpreter 'pythonw.exe'
     if ($py) { Start-Hidden $py ('"{0}"' -f (Join-Path $root 'scripts\run_worker.py')); Write-Log 'start requested' }
+  } catch { Write-Log ('start failed: ' + $_.Exception.Message) }
 })
 $stop.add_Click({
+  try {
     $py = Get-Interpreter 'python.exe'
     if ($py) { Start-Hidden $py ('-I -B "{0}"' -f (Join-Path $root 'scripts\stop_worker.py')); Write-Log 'stop requested' }
+  } catch { Write-Log ('stop failed: ' + $_.Exception.Message) }
 })
 
 Write-Log ('tray starting (install {0}, profile {1})' -f $root, $profileRoot)
@@ -146,11 +157,14 @@ if ($SelfTest) {
     exit 0
 }
 
+# nothing in a handler may end the icon: log it and carry on
+$ErrorActionPreference = 'Continue'
+[System.Windows.Forms.Application]::SetUnhandledExceptionMode([System.Windows.Forms.UnhandledExceptionMode]::CatchException)
+[System.Windows.Forms.Application]::add_ThreadException({ param($sender, $e) Write-Log ('unhandled error: ' + $e.Exception.Message) })
 $timer = New-Object System.Windows.Forms.Timer
 $timer.Interval = 5000
 $timer.add_Tick({ [void](Update-State $true) })
 $timer.Start()
 $context = New-Object System.Windows.Forms.ApplicationContext
 $exit.add_Click({ $timer.Stop(); $notify.Visible = $false; $notify.Dispose(); $context.ExitThread() })
-[System.Windows.Forms.Application]::Run($context)
-Write-Log 'tray closed'
+try { [System.Windows.Forms.Application]::Run($context) } finally { Write-Log 'tray closed' }
