@@ -70,7 +70,7 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       return out;
     }
     function shouldPlay(verdict,wantedPlay,s){return verdict.open===true&&wantedPlay===true&&!(s&&s.paused_intent===true);}
-    // player-seek-reload-v1: loading is not playing. A new generation loads once the backend lead is satisfied even
+    // Loading is not playing. A new generation loads once the backend lead is satisfied even
     // while the viewer is paused (paused_intent); play decisions still use shouldPlay/canResume/autoResume.
     function loadable(gate,s){return evaluate(gate,s,true).open===true;}
     // Re-evaluated against the latest status at every play decision. Contract (startable present): the real verdict.
@@ -567,14 +567,18 @@ if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
       if(!neighbor||Math.abs(neighbor.getBoundingClientRect().top-rect.top)>20){returnFromAlphabet=active;$('alphabet').querySelector('button').focus();return;}
     }
     if(targets.indexOf(active)<0){if(targets[0])targets[0].focus();return;}
-    var best=null,score=Infinity;
+    var best=null,score=Infinity,inRow=null,rowScore=Infinity;
     targets.forEach(function(e){
       if(e===active)return;
       var r=e.getBoundingClientRect(),dx=r.left+r.width/2-cx,dy=r.top+r.height/2-cy;
       if((direction===37&&dx>=-5)||(direction===39&&dx<=5)||(direction===38&&dy>=-5)||(direction===40&&dy<=5))return;
       var value=(direction===37||direction===39)?Math.abs(dx)+3*Math.abs(dy):Math.abs(dy)+3*Math.abs(dx);
+      // Left and Right stay in the current row when a button there is on that side (a button on the next row whose centre is
+      // nearly under this one must not win over the one beside it, e.g. Resume -> Play from beginning).
+      if((direction===37||direction===39)&&r.top<rect.bottom-4&&r.bottom>rect.top+4&&value<rowScore){inRow=e;rowScore=value;}
       if(value<score){best=e;score=value;}
     });
+    if(inRow)best=inRow;
     if(best){best.focus();best.scrollIntoView({block:'nearest',inline:'nearest'});}
   }
   window.addEventListener('keydown',function(event){
