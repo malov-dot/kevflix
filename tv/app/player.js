@@ -494,11 +494,11 @@ var SemTvProbe=(function(){
     session=value;
     $('movie-title').textContent=session.title;
     $('profile').textContent=profileLabel(session);
-    $('dub').textContent='English dubbing: '+(session.dub?'on':'off');
+    $('dub').textContent=session.live?'English dubbing: not for live':'English dubbing: '+(session.dub?'on':'off');
     $('watch').textContent='Watch with Sem: '+(session.watch?'on':'off');
     setPlayState();
-    $('time').textContent=clock(position())+' / '+clock(session.duration);
-    $('progress-fill').style.width=(100*position()/Math.max(1,session.duration))+'%';
+    $('time').textContent=session.live?'LIVE':clock(position())+' / '+clock(session.duration);
+    $('progress-fill').style.width=session.live?'100%':(100*position()/Math.max(1,session.duration))+'%';
     if(typeof value.ready_through==='number')$('progress-ready').style.width=Math.max(0,Math.min(100,100*value.ready_through/Math.max(1,session.duration)))+'%';
     if(value.error){reportedError=value.error;playerMessage(value.error);video.pause();showControls();}
     else if(value.resource_wait)playerMessage(value.resource_wait);
@@ -539,7 +539,9 @@ var SemTvProbe=(function(){
       throw error;
     }finally{if(youtubeOpening===mine)youtubeOpening=null;}
   }
-  window.KevFlixPlayer={openYoutube:function(id){return openMovie({id:String(id),youtube:true,title:'YouTube video'},true);}};
+  // The OK that picked the video in the YouTube view is the viewer's own Play: apply the saved sound choice now (the player starts muted and a library film
+  // is unmuted by its Play button's click, which a YouTube pick never presses: without this the video played silently).
+  window.KevFlixPlayer={openYoutube:function(id){try{if(window.KevFlixAudio)window.KevFlixAudio.apply();}catch(ignore){}return openMovie({id:String(id),youtube:true,title:'YouTube video'},true);}};
   async function openMovie(item,restart){
     if(item.plex&&item.playable===false){message('This library item is available to browse. KevFLIX currently plays videos.');return;}
     if(setupOnly){message('Setup-only mode: TV pairing is available; playback and dubbing remain disabled.');return;}
@@ -554,8 +556,8 @@ var SemTvProbe=(function(){
     if(prefs.encoder!=='default')value=await api('control',{id:value.id,action:'processing',encoder:prefs.encoder,encoder_threads:prefs.threads||2,position:value.position});
     if(item.youtube?(value.youtube&&value.youtube.dub_default):prefs.dub)value=await api('control',{id:value.id,action:'dub',enabled:true,position:value.position});
     if(prefs.watch)value=await api('control',{id:value.id,action:'watch',enabled:true});
-    value=await api('control',{id:value.id,action:'watch_mode',watch_mode:prefs.commentary});
-    value=await api('control',{id:value.id,action:'progress_sync',enabled:item.plex&&prefs.progress_sync!==false});
+    if(!item.youtube)value=await api('control',{id:value.id,action:'watch_mode',watch_mode:prefs.commentary});          // a YouTube video has neither commentary nor Plex progress: two round trips less before it starts
+    if(!item.youtube)value=await api('control',{id:value.id,action:'progress_sync',enabled:item.plex&&prefs.progress_sync!==false});
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     bufferGate=SemBufferGate.create();$('buffering').hidden=true;
@@ -756,7 +758,7 @@ var SemTvProbe=(function(){
       loadedGeneration=generation;
       mediaStart=(session.dub||session.compatibility)&&video.seekable.length?video.seekable.start(0):0;
       updateCaptions(true);
-      if(Math.abs(video.currentTime-(mediaStart+target))>.05){
+      if(!session.live&&Math.abs(video.currentTime-(mediaStart+target))>.05){      // a live stream starts at its live edge, never at 'position'
         var seeked=waitFor('seeked',number,20000,signal);
         video.currentTime=Math.max(0,mediaStart+target);await seeked;
       }
@@ -799,7 +801,7 @@ var SemTvProbe=(function(){
     }catch(error){if(number===operation){playerMessage(error.message);reportedError=error.message;}}
   }
   function seekTo(target){
-    if(!session)return;
+    if(!session||session.live)return;                                   // a live stream has no timeline
     target=Math.max(0,Math.min(session.duration-.1,target));
     if(SemBufferGate.localSeekable(session,loadedGeneration,target,video.seekable,mediaStart)){
       video.currentTime=mediaStart+target-session.base;desiredPosition=target;showControls();void poll();return;
@@ -836,7 +838,14 @@ var SemTvProbe=(function(){
   $('play-pause').onclick=playPause;
   $('rewind').onclick=function(){if(session)seekTo(position()-10);};
   $('forward').onclick=function(){if(session)seekTo(position()+10);};
-  $('dub').onclick=function(){if(session)void change('dub',{enabled:!session.dub});};
+  // A live stream cannot be dubbed, and a YouTube video that is still downloading cannot be dubbed yet: say so WITHOUT touching playback (change() pauses and reloads).
+  $('dub').onclick=function(){
+    if(!session)return;
+    var y=session.youtube;
+    if(session.live){playerMessage(session.dub_unsupported||'Dubbing is not available for live streams.');return;}
+    if(!session.dub&&y&&y.streaming&&!y.complete){playerMessage('Dubbing needs the whole video, which is still downloading'+(typeof y.download_percent==='number'?' ('+Math.round(y.download_percent)+'%)':'')+'. Try again in a moment.');return;}
+    void change('dub',{enabled:!session.dub});
+  };
   $('playback-settings').onclick=function(){$('playback-panel').hidden=false;renderPlaybackSettings();clearTimeout(hideTimer);};
   $('close-playback-settings').onclick=function(){$('playback-panel').hidden=true;showControls();$('playback-settings').focus();};
   $('apply-quality').onclick=function(){
@@ -872,7 +881,8 @@ var SemTvProbe=(function(){
   video.addEventListener('waiting',function(){if(session)bufferView('Buffering','Waiting for the next part of the movie…',null);});
   video.addEventListener('playing',function(){$('buffering').hidden=true;showControls();});
   video.addEventListener('pause',function(){if(!wantedPlay)$('buffering').hidden=true;});
-  video.addEventListener('timeupdate',function(){if(session){$('time').textContent=clock(position())+' / '+clock(session.duration);$('progress-fill').style.width=100*position()/session.duration+'%';}});
+  // The card never stays over a picture that is moving: a 'waiting' the TV never follows with 'playing' (Tizen's native HLS can skip it) would leave it up.
+  video.addEventListener('timeupdate',function(){if(session&&!loading&&!video.paused&&!video.seeking&&video.readyState>=3&&!$('buffering').hidden)$('buffering').hidden=true;if(session&&!session.live){$('time').textContent=clock(position())+' / '+clock(session.duration);$('progress-fill').style.width=100*position()/session.duration+'%';}});
   video.addEventListener('ended',function(){if(session&&session.youtube){void leave();return;}wantedPlay=false;setPlayState();showControls();void poll();});   // a YouTube video that ends returns to the YouTube view
   video.addEventListener('error',function(){if(session&&!loading){reportFailure('playback-error');playerMessage('Playback could not continue. Lower the output limit, select SDR conversion, or turn dubbing off.');showControls();}});
   document.addEventListener('visibilitychange',function(){if(document.hidden&&session){wantedPlay=false;video.pause();void poll();}});

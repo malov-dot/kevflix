@@ -15,6 +15,11 @@
   // Hand-off (stage 3): when the picked video's id reaches us (key reply or the 1 s status poll) the picture stream stops and KevFLIX's own
   // player (player.js, window.KevFlixPlayer.openYoutube) downloads and plays it; its exit (Back / end of video / any error) calls resume().
   var seenSeq = 0, handoff = false, notice = '';
+  // Picture transport. Pull (/tv-api/youtube/frame): ONE picture per request and the next is asked for only after the last arrived, so a slow
+  // Wi-Fi link can never queue seconds of pictures (the old push stream, one endless multipart <img>, did, which felt like a laggy menu).
+  // The TV also reports how long each picture took (download + decode) so the PC can send smaller pictures when the link is slow.
+  // The push stream stays as the fallback when the PC or the TV lacks support.
+  var pullOk = false, pullAbort = null, pullUrl = '', pullFailures = 0, lastCounter = 0, lastMs = 0;
 
   function token() { try { return localStorage.getItem('sem-tv-token') || ''; } catch (ignore) { return ''; } }
   function mapKey(code) { return BACK[code] ? 'Back' : (NAMES[code] || null); }
@@ -67,11 +72,12 @@
   function connect() {
     var mine = ++serial;
     ticket = '';
-    $('youtube-screen').removeAttribute('src');
+    stopPicture();
     setState('connecting', 'Starting YouTube on your PC…');
     call('youtube/open', {}, 70000).then(function (result) {
       if (mine !== serial || !active) return;
       ticket = result.screen_ticket || '';
+      pullOk = result.frame_pull === true && typeof fetch === 'function' && typeof URL === 'function' && typeof URL.createObjectURL === 'function';
       seenSeq = Math.max(seenSeq, result.play_seq || 0);         // a selection made before this view opened is not a new pick
       showStream(mine);
     }).catch(function (error) {
@@ -79,18 +85,73 @@
       setState('error', ((error && error.message) || 'YouTube could not start') + '. Press OK to retry, or Back to return.');
     });
   }
-  function showStream(mine) {
+  function firstPicture(mine) {
+    if (mine !== serial) return;
+    clearTimeout(firstFrameTimer);
+    if (state !== 'live') {
+      setState('live', notice || 'Press Back twice, or hold Back, to return to KevFLIX');   // how to leave: a single Back belongs to YouTube
+      notice = '';
+      clearTimeout(hintTimer);
+      hintTimer = setTimeout(function () { if (active && state === 'live') setState('live', ''); }, HINT_MS);
+    }
+  }
+  function stopPicture() {
+    if (pullAbort) { try { pullAbort.abort(); } catch (ignore) {} pullAbort = null; }
+    if (pullUrl) { try { URL.revokeObjectURL(pullUrl); } catch (ignore) {} pullUrl = ''; }
+    lastCounter = 0; lastMs = 0; pullFailures = 0;
     var image = $('youtube-screen');
+    image.onload = image.onerror = null;
+    image.removeAttribute('src');                                  // also closes the push stream; the PC stops it when no client is left
+  }
+  function pullPicture(mine) {
+    if (mine !== serial || !active) return;
+    var controller = typeof AbortController === 'function' ? new AbortController() : null, headersAt = 0;
+    pullAbort = controller;
+    var path = '/tv-api/youtube/frame?ticket=' + encodeURIComponent(ticket) + '&after=' + lastCounter + (lastMs > 0 ? '&ms=' + Math.round(lastMs) : '');
+    lastMs = 0;
+    fetch(path, { cache: 'no-store', signal: controller ? controller.signal : undefined }).then(function (response) {
+      headersAt = Date.now();
+      var counter = Number(response.headers && response.headers.get('X-Frame'));
+      if (counter >= 0) lastCounter = counter;
+      if (response.status === 204) return null;                    // the page did not change: ask again
+      if (!response.ok) throw new Error('picture ' + response.status);
+      return response.blob();
+    }).then(function (blob) {
+      if (mine !== serial || !active) return;
+      pullFailures = 0;
+      if (blob && blob.size) showPulled(mine, blob, headersAt);
+      pullPicture(mine);                                           // the next picture is asked for as soon as this one has arrived
+    }).catch(function () {
+      if (mine !== serial || !active) return;
+      pullFailures += 1;
+      if (pullFailures >= 4) { clearTimeout(firstFrameTimer); setState('error', 'The YouTube picture stopped. Press OK to retry, or Back to return.'); return; }
+      setTimeout(function () { pullPicture(mine); }, 250 * pullFailures);
+    });
+  }
+  function showPulled(mine, blob, headersAt) {
+    var image = $('youtube-screen'), url = URL.createObjectURL(blob), previous = pullUrl;
+    pullUrl = url;
     image.onload = function () {
       if (mine !== serial) return;
-      clearTimeout(firstFrameTimer);
-      if (state !== 'live') {
-        setState('live', notice || 'Press Back twice, or hold Back, to return to KevFLIX');   // how to leave: a single Back belongs to YouTube
-        notice = '';
-        clearTimeout(hintTimer);
-        hintTimer = setTimeout(function () { if (active && state === 'live') setState('live', ''); }, HINT_MS);
-      }
+      lastMs = Date.now() - headersAt;                             // download + decode of this picture, reported with the next request
+      firstPicture(mine);
     };
+    image.onerror = function () { lastMs = 0; };
+    image.src = url;
+    if (previous) setTimeout(function () { try { URL.revokeObjectURL(previous); } catch (ignore) {} }, 1000);
+  }
+  function showStream(mine) {
+    var image = $('youtube-screen');
+    if (pullOk) {
+      lastCounter = 0; lastMs = 0; pullFailures = 0;
+      pullPicture(mine);
+      clearTimeout(firstFrameTimer);
+      firstFrameTimer = setTimeout(function () {
+        if (mine === serial && state !== 'live') setState('error', 'YouTube did not show a picture in time. Press OK to retry, or Back to return.');
+      }, FIRST_FRAME_MS);
+      return;
+    }
+    image.onload = function () { firstPicture(mine); };
     image.onerror = function () {
       if (mine !== serial || !active) return;
       clearTimeout(firstFrameTimer);
@@ -126,9 +187,7 @@
     Object.keys(downNow).forEach(function (code) { held[code] = 'stale'; });   // the OK that picked the video must not leak into the player
     active = false; serial += 1; state = 'handoff';
     clearTimeout(hintTimer); clearTimeout(firstFrameTimer); clearInterval(statusTimer);
-    var image = $('youtube-screen');
-    image.onload = image.onerror = null;
-    image.removeAttribute('src');                                  // the picture stream stops while KevFLIX plays the video
+    stopPicture();                                                 // the picture stream stops while KevFLIX plays the video
     $('youtube-view').hidden = true;
     if (!player || typeof player.openYoutube !== 'function') { resume('The KevFLIX player is not ready.'); return; }
     var opened;
@@ -165,9 +224,7 @@
     releaseAll(true);
     active = false; serial += 1; state = 'idle'; lastBackAt = 0;
     clearTimeout(hintTimer); clearTimeout(firstFrameTimer); clearInterval(statusTimer);
-    var image = $('youtube-screen');
-    image.onload = image.onerror = null;
-    image.removeAttribute('src');                                  // closes the stream; the PC stops it when no client is left
+    stopPicture();                                                 // closes the stream; the PC stops it when no client is left
     $('youtube-view').hidden = true;
     swallowBack = wasBack;                                         // the rest of a held Back press must not reach KevFLIX
     var target = returnFocus && document.contains(returnFocus) && !returnFocus.hidden ? returnFocus : $('youtube-tile');

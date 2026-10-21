@@ -24,6 +24,7 @@ from .tv_probe import ProbeClips
 from .buffer_policy import buffer_metrics, next_request, note_heartbeat
 from . import producer_policy as _producer
 from . import embedded_subtitles as _subs
+from . import youtube_stream as _ystream
 
 
 # A stereo dub of a 5.1 film that has no surround mix for that chunk. The stereo dub is on the ITU-normalised scale (the downmix is divided
@@ -146,6 +147,8 @@ class TVService:
             ids = list(self.sessions)
         for ident in ids:
             self.stop(ident)
+        if self._yt_source is not None:
+            self._yt_source.cancel()                    # a download or start-up no session owns any more
         self.wake.set()
         if self.thread:
             self.thread.join(timeout=20)
@@ -239,14 +242,16 @@ class TVService:
             return {"items": items, "parent": parent, "more": offset + 60 < len(entries),
                     "offset": offset, "folder": node}
 
-    def open_movie(self, device, node, audio_index=None):
+    def open_movie(self, device, node, audio_index=None, _preset=None):
+        """_preset (YouTube progressive sessions only): {metadata, fingerprint, spec}. The growing file cannot be probed or fingerprinted
+        (its length and bytes change), so the caller supplies the probe result, a stable id-based fingerprint and spec overrides."""
         with self.lock:
             source = self.nodes.get(node)
         if source is None or source.suffix.lower() not in MEDIA_EXTENSIONS:
             raise ValueError("Choose a movie from the library")
         self._node(source)
         source = self.config.media_path(source)
-        metadata = probe(self.config, ProcessOwner(), source)
+        metadata = probe(self.config, ProcessOwner(), source) if _preset is None else _preset["metadata"]
         streams = metadata["audio"]
         dub_unsupported = None
         if audio_index is None:
@@ -265,7 +270,7 @@ class TVService:
             self.stop(ident)
         ident = uuid.uuid4().hex
         spec = {"id": ident, "device_id": device, "source": str(source),
-                "fingerprint": fingerprint(source), "title": source.stem,
+                "fingerprint": fingerprint(source) if _preset is None else _preset["fingerprint"], "title": source.stem,
                 "duration": metadata["duration"], "streams": metadata["streams"],
                 "audio_index": audio_index, "segment_seconds": int(self.config["segment_seconds"]),
                 "position": 0.0, "start_index": 0, "generation": 1, "epoch": 0,
@@ -283,6 +288,8 @@ class TVService:
             settings = getattr(self.config, "data", self.config)
             spec.update(speech_engine=self.config["speech_engine"], generic_prebuffer_seconds=settings.get("generic_prebuffer_seconds", 120.0),
                         generic_producer_queue=settings.get("generic_producer_queue", 4))
+        if _preset is not None:
+            spec.update(_preset["spec"])
         with self.lock:
             self.sessions[ident] = spec
         self.wake.set()
@@ -293,29 +300,124 @@ class TVService:
             if self._yt_source is None:
                 from .youtube_source import YouTubeSource
                 self._yt_source = YouTubeSource(self.config["youtube"], python=self.config["python"], ffmpeg=self.config["ffmpeg"],
-                                                in_use=self._youtube_in_use)
+                                                in_use=self._youtube_in_use, notify=self.wake.set)
             return self._yt_source
+
+    def _yt_opt(self, key):
+        """A YouTube fast-start setting: youtube.<key> of the config, else its default in relay/youtube_source.STREAM_DEFAULTS."""
+        from .youtube_source import STREAM_DEFAULTS
+        value = self.config["youtube"].get(key)
+        return STREAM_DEFAULTS[key] if value is None else value
 
     def _youtube_in_use(self):
         with self.lock:
-            return {Path(v["source"]).parent.name for v in self.sessions.values() if v.get("youtube")}
+            return {v["youtube"].get("id") or Path(v["source"]).parent.name for v in self.sessions.values() if v.get("youtube")}
+
+    def youtube_prefetch(self, video_id):
+        """Begin resolving a video the YouTube view just navigated to, before the TV's open request arrives (it comes about a second
+        later), so the start of playback does not wait for yt-dlp twice. Safe to call for any id; never raises."""
+        try:
+            settings = self.config["youtube"]
+            if settings.get("enabled") and settings.get("handoff", True):
+                return bool(self.youtube_source().prefetch(video_id))
+        except Exception:
+            logging.exception("YouTube prefetch failed")
+        return False
 
     def youtube_cancel(self):
-        """Stop a running YouTube download (the TV's Back while 'Downloading from YouTube')."""
-        return bool(self._yt_source is not None and self._yt_source.cancel())
+        """Stop a running YouTube download or start-up (the TV's Back while 'Starting the video' / 'Downloading from YouTube'), and the
+        sessions that were created for it but never handed to the TV."""
+        with self.lock:
+            pending = [ident for ident, v in self.sessions.items() if v.get("yt_pending")]
+        for ident in pending:
+            self.stop(ident)
+        return bool((self._yt_source is not None and self._yt_source.cancel()) or pending)
 
-    def open_youtube(self, device, video_id):
-        """Hand a video picked in the YouTube view to the normal player. While the PC still downloads it this returns
-        {preparing: true, youtube: {state, percent, text}} (the TV asks again about once a second); when the file is staged it opens a
-        session exactly like a library movie and returns that session's status. Dubbing defaults to ON unless the video is known to be English."""
+    def open_youtube(self, device, video_id, wait=None):
+        """Hand a video picked in the YouTube view to the player.
+
+        Ordinary (English or otherwise not-to-be-dubbed) videos START WHILE THEY ARRIVE: as soon as the first seconds of the video are in
+        the growing local file a session is created with the YouTube profile (4 s segments, a ~6 s start lead, 1080p / 6 Mbit/s cap) and
+        the reply is the session status once its first segment exists. A live stream gets a per-session live relay (2 s segments, status
+        `live: true`). A video that defaults to dubbing, or one the progressive path cannot read, is downloaded completely first and
+        then opens like a library movie (dubbing needs the whole file).
+
+        Until a session can start the reply is {preparing: true, youtube: {video_id, state, percent, text}}; the request itself waits up to
+        `wait` seconds (youtube.open_wait_seconds) for the answer to change, so the TV does not lose time between its once-a-second asks."""
         settings = self.config["youtube"]
         if not settings.get("enabled") or not settings.get("handoff", True):
             raise ValueError("YouTube hand-off is turned off (youtube.enabled / youtube.handoff)")
-        info = self.youtube_source().ensure(video_id)
-        if info["state"] == "error":
-            raise ValueError(info["error"])
-        if info["state"] != "ready":
-            return {"preparing": True, "youtube": {key: info[key] for key in ("video_id", "state", "percent", "text")}}
+        deadline = time.monotonic() + max(0.0, float(self._yt_opt("open_wait_seconds") if wait is None else wait))
+        while True:
+            reply = self._open_youtube_once(device, video_id)
+            if not reply.get("preparing") or time.monotonic() >= deadline:
+                return reply
+            time.sleep(0.04)
+
+    def _open_youtube_once(self, device, video_id):
+        value = self._youtube_pending(device, video_id)
+        if value is None:
+            info = self.youtube_source().ensure(video_id)
+            if info["state"] == "error":
+                raise ValueError(info["error"])
+            if info["state"] == "live":
+                value = self._open_live(device, info)
+            elif info["state"] in ("streaming", "ready") and self._youtube_fast(info):
+                if not (info["complete"] or info["readable"] >= self._first_segment_end(info)):
+                    return self._youtube_preparing(info)
+                value = self._open_youtube_stream(device, info)
+            elif info["state"] == "ready":
+                return self._open_youtube_library(device, info)
+            else:
+                return self._youtube_preparing(info)
+        return self._youtube_announce(device, value)
+
+    @staticmethod
+    def _youtube_preparing(info):
+        if info["state"] in ("streaming", "ready", "live"):
+            return {"preparing": True, "youtube": {"video_id": info["video_id"], "state": "starting", "percent": 0,
+                                                   "text": "Starting the live stream…" if info["state"] == "live" else "Starting the video…"}}
+        return {"preparing": True, "youtube": {key: info[key] for key in ("video_id", "state", "percent", "text")}}
+
+    def _youtube_fast(self, info):
+        """True when this video plays with the YouTube profile: fast start enabled and not a video that defaults to dubbing."""
+        return bool(self._yt_opt("stream")) and (bool(self._yt_opt("stream_foreign")) or not info["dub_default"])
+
+    def _first_segment_end(self, info):
+        return float(self._yt_opt("stream_segment_seconds")) + _ystream.READABLE_MARGIN
+
+    def _youtube_pending(self, device, video_id):
+        """The session an earlier ask of this same open created and the TV has not been given yet (None when there is none)."""
+        with self.lock:
+            for value in self.sessions.values():
+                if value["device_id"] == device and value.get("yt_pending") and value["youtube"].get("id") == video_id:
+                    value["touched"] = time.time()
+                    return value
+        return None
+
+    def _youtube_announce(self, device, value):
+        """The session's status once the viewer can start (first segment published / live relay has its first segments), else 'preparing'."""
+        with self.lock:
+            if value.get("live"):
+                ready = len(value["segments"]) >= max(1, int(self._yt_opt("live_start_segments")))
+            else:
+                # the first reply the TV gets is already startable: first segment published and the start lead (about 6 s) prepared
+                lead = max(0.0, self.ready_through(value) - value["position"])
+                required = min(float(self._yt_opt("stream_start_seconds")), max(0.0, value["duration"] - value["position"]))
+                ready = value["start_index"] in value["segments"] and (lead + 1e-9 >= required or lead + value["position"] >= value["duration"] - 1e-9)
+            if ready:
+                value["yt_pending"] = False
+            error = value["error"]
+        if error and not ready:
+            self.stop(value["id"])
+            raise ValueError(error)
+        if not ready:
+            return {"preparing": True, "youtube": {"video_id": value["youtube"]["id"], "state": "starting", "percent": 0,
+                                                   "text": "Starting the live stream…" if value.get("live") else "Starting the video…"}}
+        return self.status(value["id"], device)
+
+    def _open_youtube_library(self, device, info):
+        """The original hand-off: a completely downloaded file opens exactly like a library movie (30 s segments, dubbing default)."""
         opened = self.open_movie(device, self._node(Path(info["path"]))["id"], None)
         value = self.session(opened["id"], device)
         with self.lock:
@@ -323,6 +425,251 @@ class TVService:
             value["youtube"] = {"id": info["video_id"], "language": info["language"], "uploader": info["uploader"],
                                 "dub_default": bool(info["dub_default"])}
         return self.status(opened["id"], device)
+
+    @staticmethod
+    def _yt_stream_dicts(formats):
+        """ffprobe-style stream dicts for the file the Streamer writes (video is stream 0, audio stream 1)."""
+        video = next((f for f in formats if f.get("kind") == "video"), {})
+        audio = next((f for f in formats if f.get("kind") == "audio"), {})
+        channels = int(audio.get("channels") or 2)
+        fps = float(video.get("fps") or 0)
+        streams = [{"index": 0, "codec_type": "video", "codec_name": video.get("codec") or "h264", "width": int(video.get("width") or 0),
+                    "height": int(video.get("height") or 0), "avg_frame_rate": "%d/1" % round(fps) if fps else "0/0", "disposition": {}},
+                   {"index": 1, "codec_type": "audio", "codec_name": audio.get("codec") or "aac", "channels": channels,
+                    "channel_layout": {1: "mono", 2: "stereo"}.get(channels, ""), "sample_rate": str(int(audio.get("rate") or 48000)),
+                    "tags": {"language": audio.get("language") or "und"}, "disposition": {}}]
+        return streams
+
+    def _open_youtube_stream(self, device, info):
+        """A YouTube-profile session over media_dir/<id>/<id>.mkv, which may still be growing. Returns the (pending) session."""
+        source = Path(info["path"])
+        node = self._node(source)
+        tv = self.config["tv"]
+        requested = int(tv["max_height"])
+        if info["complete"]:
+            metadata = probe(self.config, ProcessOwner(), source)             # a finished file: the real probe, like a library movie
+        else:
+            streams = self._yt_stream_dicts(info.get("formats") or [])
+            metadata = {"duration": float(info["duration"]), "streams": streams, "audio": [streams[1]]}
+        spec = {"segment_seconds": max(2, int(self._yt_opt("stream_segment_seconds"))), "compatibility": True,
+                "quality": min(requested, int(self._yt_opt("stream_max_height"))), "yt_quality_request": requested,
+                "title": info["title"] or source.stem, "yt_stream": True, "yt_pending": True,
+                "youtube": {"id": info["video_id"], "language": info["language"], "uploader": info["uploader"],
+                            "dub_default": bool(info["dub_default"])}}
+        opened = self.open_movie(device, node["id"], None, _preset={
+            "metadata": metadata, "fingerprint": "youtube:" + info["video_id"], "spec": spec})
+        return self.session(opened["id"], device)
+
+    # ---- YouTube live ----------------------------------------------------------------------------------------------
+    def _open_live(self, device, info):
+        """A live session: ONE ffmpeg (the encoder the library path would choose) turns the YouTube live HLS into a sliding HLS of short
+        segments in cache/tv-live/<session>/, which the signed /tv-media/<id>/ URLs serve. Returns the (pending) session."""
+        video_id = info["video_id"]
+        live = self.youtube_source().live_inputs(video_id)
+        if not live:
+            raise ValueError("The live stream is no longer available")
+        with self.lock:
+            old = [k for k, v in self.sessions.items() if v["device_id"] == device]
+        for ident in old:
+            self.stop(ident)
+        tv = self.config["tv"]
+        ident = uuid.uuid4().hex
+        height = min(int(tv["max_height"]), int(self._yt_opt("live_max_height")))
+        seconds = max(1, int(self._yt_opt("live_segment_seconds")))
+        value = {"id": ident, "device_id": device, "source": "", "fingerprint": "youtube-live:" + video_id,
+                 "title": live.get("title") or info["title"] or "Live", "duration": 0.0, "streams": self._yt_stream_dicts(info.get("formats") or []),
+                 "audio_index": 1, "segment_seconds": seconds, "position": 0.0, "start_index": 0, "generation": 1, "epoch": 0,
+                 "dub": False, "compatibility": True, "quality": height, "upscale": False, "hdr_mode": "sdr", "surround": "stereo",
+                 "subtitles": "off", "watch_mode": "balanced", "encoder": tv["video_encoder"], "encoder_threads": tv["encoder_threads"],
+                 "plex_key": None, "sync_progress": False, "job_id": None, "job_revision": None, "watch": False, "state": "paused",
+                 "resource_wait": None, "touched": time.time(), "segments": {}, "error": None,
+                 "dub_unsupported": "Dubbing is not available for live streams.", "job_attached_at": 0.0,
+                 "expires": int(time.time()) + 12 * 3600, "live": True, "yt_pending": True, "live_window": [], "live_inputs": live["inputs"],
+                 "youtube": {"id": video_id, "language": "", "uploader": live.get("uploader") or info["uploader"], "dub_default": False}}
+        self._start_live_process(value, value["encoder"])
+        with self.lock:
+            self.sessions[ident] = value
+        self.wake.set()
+        return value
+
+    def _start_live_process(self, value, requested):
+        """(Re)start the live ffmpeg of a session with the encoder `requested` ('auto' / 'nvenc' / 'software')."""
+        probe_value = dict(value, encoder=requested)
+        encoder, _ = self._resolve_encoder(probe_value, False)
+        codec, options = self._video_codec(encoder, False, value["encoder_threads"])
+        folder = self.config.cache / "tv-live" / value["id"]
+        command = _ystream.live_command(
+            self.config["ffmpeg"], [item["url"] for item in value["live_inputs"]], folder, codec, options,
+            threads=value["encoder_threads"], segment_seconds=value["segment_seconds"], list_size=int(self._yt_opt("live_list_size")),
+            height=value["quality"], maxrate=self._yt_opt("live_maxrate"), bufsize=self._yt_opt("live_bufsize"))
+        value["_live"] = _ystream.LiveHls(folder, command, segment_seconds=value["segment_seconds"]).start()
+        value["_live_encoder"] = encoder
+
+    # ---- YouTube-profile sessions: status fields, segment scheduling, leaving the profile --------------------------------
+    def _yt_progress(self, value):
+        """{readable, complete, error, running} of the file a progressive YouTube session plays from."""
+        source = self._yt_source
+        if source is None:
+            return {"readable": float(value["duration"]), "complete": True, "error": "", "running": False}
+        return source.progress(value["youtube"]["id"])
+
+    def _youtube_fields(self, value, result):
+        """The start/buffer fields of a YouTube-profile session (progressive or live), computed here instead of by the dubbing gate: the
+        viewer may start once `buffer_required_seconds` (youtube.stream_start_seconds, about 6 s; live: live_start_segments segments) are
+        prepared ahead of the playhead. Caller holds the lock."""
+        position, duration, seg = value["position"], value["duration"], value["segment_seconds"]
+        paused = bool(value.get("paused_intent", value["state"] == "paused"))
+        youtube = dict(value["youtube"])
+        if value.get("live"):
+            lead = float(sum(seconds for _, seconds in value.get("live_window") or ()))
+            required = max(1, int(self._yt_opt("live_start_segments"))) * float(seg)
+            at_end = False
+            youtube["live"] = True
+        else:
+            lead = max(0.0, self.ready_through(value) - position)
+            required = min(float(self._yt_opt("stream_start_seconds")), max(0.0, duration - position))
+            at_end = lead > 0 and position + lead >= duration - 1e-9
+            progress = self._yt_progress(value)
+            youtube.update(streaming=not progress["complete"], complete=bool(progress["complete"]),
+                           readable=round(float(progress["readable"]), 2),
+                           download_percent=100 if progress["complete"] else min(99, int(100 * progress["readable"] / duration)) if duration else 0)
+        startable = bool(result["ready"]) and (lead + 1e-9 >= required or at_end)
+        return {"startable": startable, "buffer_required_seconds": float(required), "contiguous_lead_seconds": float(lead),
+                "paused_intent": paused, "seek_epoch": int(value.get("epoch", 0)), "buffer_seconds": round(lead, 3),
+                "start_threshold_seconds": float(required), "underruns": int(value.get("underruns", 0)),
+                "lead_kind": "original", "lead_reason": "live YouTube stream" if value.get("live") else "YouTube video",
+                "live": bool(value.get("live")), "youtube": youtube}
+
+    def _youtube_tick(self, ident, value):
+        """One scheduler pass for a YouTube-profile session (called by loop(); never blocks on a render)."""
+        if value.get("live"):
+            return self._live_tick(ident, value)
+        now = time.time()
+        seg = value["segment_seconds"]
+        generation = value["generation"]
+        progress = self._yt_progress(value)
+        readable, complete = float(progress["readable"]), bool(progress["complete"])
+        total = math.ceil(value["duration"] / seg)
+        current = max(value["start_index"], int(value["position"] // seg))
+        horizon = min(total, current + max(2, math.ceil(float(self._yt_opt("stream_ahead_seconds")) / seg)))
+        state = self._ahead_state(value)
+        muxed = value["segments"]
+
+        def renderable(index):
+            # a segment is started only when the file really covers it (plus a margin for reordering); the last one waits for the end
+            return complete or (index + 1) * seg + _ystream.READABLE_MARGIN <= readable
+
+        first = next((i for i in range(current, total) if i not in muxed), None)
+        waiting = str(value.get("resource_wait") or "").startswith("Waiting for the video")
+        if first is not None and not renderable(first) and first <= current + 1:
+            # the viewer is about to run out of prepared video because the download has not reached the next part
+            if progress.get("error") and not progress.get("running"):
+                value["error"] = progress["error"]
+                return
+            percent = min(99, int(100 * readable / value["duration"])) if value["duration"] else 0
+            value["resource_wait"] = "Waiting for the video to download that far (%d%%)…" % percent
+        elif waiting:
+            value["resource_wait"] = None
+        if now < state["hold_until"]:
+            return
+        failed = state["failed"]
+        record = failed.get(first)
+        if record and record["count"] >= _producer.MUX_ATTEMPTS and first - current < _producer.URGENT_SPAN:
+            with self.lock:
+                if value["generation"] == generation:
+                    value["error"] = record["message"]
+            return
+        parked = {i for i, r in failed.items() if r["count"] >= _producer.MUX_ATTEMPTS or now < r["next_try"]}
+        ready = {i for i in range(current, horizon) if renderable(i)} - parked
+        with self.lock:
+            inflight = set(state["inflight"])
+        picks = _producer.plan_mux(current=current, total=horizon, muxed=muxed, inflight=inflight, ready=ready,
+                                   workers=_producer.mux_workers(self._tv_cfg()), active=self._encode_total(), ahead_allowed=True)
+        for index in picks:
+            owner = ProcessOwner()
+            with self.lock:
+                if value["generation"] != generation or self.sessions.get(ident) is not value:
+                    return
+                state["inflight"][index] = owner
+                self._encodes.setdefault(ident, set()).add(owner)
+                state["launched"] += 1
+            threading.Thread(target=self._ahead_encode, args=(ident, value, index, generation, owner, state),
+                             name="tv-mux-%d" % index, daemon=True).start()
+
+    def _live_tick(self, ident, value):
+        """Follow the live ffmpeg: publish its finished segments, grow the duration, restart in software when NVENC refused, stop at
+        the 12 h expiry or when the stream ends."""
+        live = value.get("_live")
+        if live is None:
+            return
+        if time.time() > value["expires"]:
+            return self.stop(ident)
+        segments, target = live.segments()
+        with self.lock:
+            if self.sessions.get(ident) is not value:
+                return
+            if segments:
+                value["segments"] = {sequence: str(path) for sequence, _, path in segments}
+                value["live_window"] = [(sequence, seconds) for sequence, seconds, _ in segments]
+                value["start_index"] = segments[0][0]
+                value["live_target"] = max(int(target), int(math.ceil(max(seconds for _, seconds, _ in segments))))
+                last = segments[-1]
+                value["duration"] = last[0] * float(value["segment_seconds"]) + last[1]
+                if value["resource_wait"] and str(value["resource_wait"]).startswith("Starting"):
+                    value["resource_wait"] = None
+            else:
+                value["resource_wait"] = value["resource_wait"] or "Starting the live stream…"
+        if not live.alive():
+            elapsed = time.monotonic() - live.started_at
+            if not segments and elapsed < 30 and value.get("_live_encoder") == "nvenc":
+                live.stop()
+                self._pin_software(value, "live h264_nvenc encode failed: " + live.reason())
+                self._start_live_process(value, "software")
+                return
+            with self.lock:
+                value["error"] = "The live stream has ended." if segments else "The live stream could not be started: " + live.reason()
+
+    def _youtube_quality_unchanged(self, value, quality, upscale, hdr_mode, surround):
+        """True when a 'quality' request leaves a YouTube-profile session exactly as it is (the capped height, upscaling, HDR and
+        surround choices all equal): then no restart is needed. Anything invalid or different takes the normal path (and its checks)."""
+        try:
+            quality = int(quality)
+        except (TypeError, ValueError):
+            return False
+        if quality not in (480, 720, 1080, 2160) or hdr_mode not in ("auto", "sdr") or (surround is not None and surround not in ("auto", "stereo")):
+            return False
+        capped = min(quality, int(self._yt_opt("stream_max_height")))
+        if (capped, bool(upscale), hdr_mode) != (value["quality"], bool(value["upscale"]), value["hdr_mode"]):
+            return False
+        if surround is not None and surround != value.get("surround", "auto"):
+            return False
+        value["yt_quality_request"] = quality
+        return True
+
+    def _youtube_to_library(self, value):
+        """Dubbing needs the complete file: leave the YouTube profile (4 s segments, 1080p cap) for the normal movie profile (the
+        configured segment_seconds, the asked quality) through the usual generation restart that control() performs next. Raises
+        ValueError while the download is still running."""
+        progress = self._yt_progress(value)
+        if not progress["complete"]:
+            raise ValueError("Dubbing needs the whole video and it is still downloading (%d%%). Try again in a moment."
+                             % (min(99, int(100 * progress["readable"] / value["duration"])) if value["duration"] else 0))
+        source = Path(value["source"])
+        metadata = probe(self.config, ProcessOwner(), source)
+        audio_index, dub_unsupported = _subs.select_audio(metadata["audio"])
+        if audio_index is None:
+            audio_index = next((s["index"] for s in metadata["audio"] if not _subs.is_commentary(s)), metadata["audio"][0]["index"])
+        self._drop_stream_segments(value)
+        with self.lock:
+            value.update(segment_seconds=int(self.config["segment_seconds"]), yt_stream=False, fingerprint=fingerprint(source),
+                         duration=metadata["duration"], streams=metadata["streams"], audio_index=audio_index,
+                         dub_unsupported=dub_unsupported, quality=int(value.get("yt_quality_request") or self.config["tv"]["max_height"]))
+            if _full_pcm_on(self.config):
+                settings = getattr(self.config, "data", self.config)
+                value.update(speech_engine=self.config["speech_engine"],
+                             generic_prebuffer_seconds=settings.get("generic_prebuffer_seconds", 120.0),
+                             generic_producer_queue=settings.get("generic_producer_queue", 4))
+            value.pop("_mux_ahead", None)
 
     def session(self, ident, device=None, touch=True):
         with self.lock:
@@ -358,6 +705,16 @@ class TVService:
         elif action == "progress_sync":
             value["sync_progress"] = bool(enabled)
         elif action in ("seek", "dub", "audio", "compatibility", "quality", "processing"):
+            if value.get("live"):
+                # A live picture cannot be seeked, re-timed, dubbed or re-encoded on the fly: only dubbing says so, the rest is ignored
+                # (the TV sends quality / encoder choices right after every open).
+                if action == "dub" and bool(enabled):
+                    raise ValueError("Dubbing is not available for live streams.")
+                return self.status(ident, device)
+            if action == "quality" and value.get("yt_stream") and self._youtube_quality_unchanged(value, quality, upscale, hdr_mode, surround):
+                return self.status(ident, device)       # the TV sends its saved quality right after every open: nothing to restart
+            if action == "dub" and bool(enabled) and value.get("yt_stream"):
+                self._youtube_to_library(value)           # dubbing needs the whole file: leave the short-segment YouTube profile
             old_job = value["job_id"]
             if action == "processing":
                 if encoder not in ("auto", "nvenc", "software") or int(encoder_threads or 0) not in (1, 2, 4, 8):
@@ -380,6 +737,10 @@ class TVService:
                 if surround is not None and surround not in ("auto", "stereo"):
                     raise ValueError("Choose 5.1 surround (automatic) or stereo sound")
                 value.update(quality=quality, upscale=bool(upscale), hdr_mode=hdr_mode, compatibility=True)
+                if value.get("yt_stream"):
+                    # the YouTube profile never exceeds youtube.stream_max_height (a Wi-Fi TV); the asked height is kept for dubbing
+                    value["yt_quality_request"] = quality
+                    value["quality"] = min(quality, int(self._yt_opt("stream_max_height")))
                 if surround is not None:
                     value["surround"] = surround
             new_position = value["position"] if position is None else float(position)
@@ -411,7 +772,7 @@ class TVService:
                 value["resource_wait"] = None
                 value["segments"] = {}
                 value["state"] = "buffering"
-                if action == "compatibility" and not self.config["tv"]["pc_process_all"]:
+                if action == "compatibility" and not self.config["tv"]["pc_process_all"] and not value.get("yt_stream"):
                     value["compatibility"] = bool(enabled)
                 if action in ("dub", "audio"):
                     value["dub"] = bool(enabled) if action == "dub" else value["dub"]
@@ -437,7 +798,7 @@ class TVService:
                 self.cancel_unshared_job(old_job)
         elif action in ("play", "pause"):
             value["state"] = "playing" if action == "play" else "paused"
-            if _playback_buffering_on(self.config):
+            if _playback_buffering_on(self.config) or value.get("yt_stream") or value.get("live"):
                 value["paused_intent"] = action == "pause"
         else:
             raise ValueError("Unsupported TV action")
@@ -459,8 +820,9 @@ class TVService:
             value["position"] = max(0, min(value["duration"], position))
             value["state"] = state if state in ("playing", "paused", "buffering", "ended") else "paused"
             self._note_playback_evidence(value)
-            if _playback_buffering_on(self.config):
-                note_heartbeat(value, value["position"], value["state"], time.time())
+            if _playback_buffering_on(self.config) or value.get("yt_stream") or value.get("live"):
+                if not value.get("live"):
+                    note_heartbeat(value, value["position"], value["state"], time.time())
                 if value["state"] in ("playing", "paused"):
                     value["paused_intent"] = value["state"] == "paused"
         self.store.put_record("sessions", "tv-" + ident, {
@@ -502,6 +864,34 @@ class TVService:
         self._encoder_choice.pop(ident, None)
         if value and value["job_id"]:
             self.cancel_unshared_job(value["job_id"])
+        if value and (value.get("yt_stream") or value.get("live")):
+            self._youtube_session_closed(value)
+
+    def _youtube_session_closed(self, value):
+        """A YouTube session ended (Back, stop, idle, revoke, 12 h expiry, server close): stop its live relay or its still-running
+        download and drop the short segments it made. Nothing it started outlives it."""
+        live = value.pop("_live", None)
+        if live is not None:
+            live.stop()
+        video_id = value["youtube"].get("id")
+        with self.lock:
+            shared = any(other.get("youtube", {}).get("id") == video_id for other in self.sessions.values())
+        if value.get("yt_stream") and not shared:
+            if self._yt_source is not None:
+                self._yt_source.cancel_video(video_id)
+            self._drop_stream_segments(value)
+
+    def _drop_stream_segments(self, value):
+        """Delete the segment files (and receipts) of a YouTube-profile session: 4 s segments of a video nobody replays would pile up."""
+        with self.lock:
+            paths = {Path(p) for p in value["segments"].values()} | {Path(p) for p in value.pop("yt_files", ())}
+            value["segments"] = {}
+        for path in paths:
+            for victim in (path, path.with_suffix(".json")):
+                try:
+                    victim.unlink()
+                except OSError:
+                    pass
 
     def cancel_unshared_job(self, job_id):
         with self.lock:
@@ -555,6 +945,9 @@ class TVService:
                 "audio_index": value["audio_index"], "dub_unsupported": value.get("dub_unsupported")}
             if value.get("youtube"):
                 result["youtube"] = dict(value["youtube"])
+            youtube_fast = bool(value.get("yt_stream") or value.get("live"))
+            if youtube_fast:
+                result.update(self._youtube_fields(value, result))
             if _loudness_on(self.config):
                 result["loudness"] = self._loudness_status(value, job_payload)
             # A detached snapshot: later muxes/heartbeats must not mutate a status response.
@@ -577,7 +970,7 @@ class TVService:
                         **{key: latest.get(key) for key in ("xt_version", "xt_session_uid", "detected_language",
                             "source_language", "speaker_count", "speaker_state_reset_count", "backend_identity",
                             "receipt_path", "receipt_sha256")}}
-            if _playback_buffering_on(self.config):
+            if _playback_buffering_on(self.config) and not youtube_fast:
                 lead = self.store.chunk(value["job_id"], current) if value["job_id"] else None
                 result.update(buffer_metrics(value, time.time(), self.config["tv"], lead))
                 result.update(_producer.status_fields(value, self.store, self.config["tv"], time.time()))
@@ -1113,7 +1506,21 @@ class TVService:
         need = math.ceil((value["position"] + required) / seg - 1e-9)
         return min(total, max(limit, need))
 
+    def _live_playlist(self, value):
+        """The sliding live playlist: the finished segments of the live relay, newest last, no ENDLIST (a live playlist only moves forward)."""
+        with self.lock:
+            window = list(value.get("live_window") or ())
+            if not window:
+                raise ValueError("The first live segment is still being prepared")
+            lines = ["#EXTM3U", "#EXT-X-VERSION:3", "#EXT-X-TARGETDURATION:" + str(int(value.get("live_target") or value["segment_seconds"])),
+                     "#EXT-X-MEDIA-SEQUENCE:" + str(window[0][0]), "#EXT-X-INDEPENDENT-SEGMENTS"]
+            for sequence, seconds in window:
+                lines += ["#EXTINF:%.6f," % seconds, self.media_url(value, str(sequence) + ".ts")]
+            return ("\n".join(lines) + "\n").encode()
+
     def playlist(self, value):
+        if value.get("live"):
+            return self._live_playlist(value)
         with self.lock:
             indexes = []
             index = value["start_index"]
@@ -1192,6 +1599,8 @@ class TVService:
             if (self.sessions.get(ident) is value and value["generation"] == generation and current_job):
                 value["segments"][index] = str(path)
                 value["resource_wait"] = None
+                if value.get("yt_stream"):
+                    value.setdefault("yt_files", set()).add(str(path))       # every short segment this session made (removed when it ends)
                 evidence = self._playback_evidence(value)
                 prepared = render_value.get("_prepared_media_evidence")
                 if prepared is not None:
@@ -1439,8 +1848,13 @@ class TVService:
                                   "-forced-idr", "1"]
         return "libx264", ["-preset", "veryfast", "-crf", "22"]
 
+    def _sweep_live(self):
+        """Folders of live relays a crashed run left behind (no session exists yet when the loop starts)."""
+        shutil.rmtree(self.config.cache / "tv-live", ignore_errors=True)
+
     def loop(self):
         self._sweep_partials()
+        self._sweep_live()
         while not self.stop_event.is_set():
             with self.lock:
                 snapshot = list(self.sessions.items())
@@ -1450,6 +1864,13 @@ class TVService:
                     self.stop(ident)
                     continue
                 if value["error"]:
+                    continue
+                if value.get("yt_stream") or value.get("live"):
+                    try:
+                        self._youtube_tick(ident, value)     # YouTube profile: its own scheduler (progressive file / live relay)
+                    except Exception as error:               # one session's problem must not stop every session's scheduler
+                        logging.exception("YouTube scheduler failed")
+                        value["error"] = "YouTube playback failed: " + (str(error) or error.__class__.__name__)[:160]
                     continue
                 if not value["dub"] and not value["compatibility"]:
                     continue
@@ -1534,10 +1955,17 @@ class TVService:
     def render(self, value, index, owner):
         if shutil.disk_usage(self.config.cache).free < self.config["tv"]["min_free_disk_gib"] * 1024**3:
             raise ResourceBusy("PC cache space is low. Free space before continuing playback.")
-        if fingerprint(value["source"]) != value["fingerprint"]:
+        youtube = bool(value.get("yt_stream"))
+        # A YouTube-profile session reads a file that is still growing: its fingerprint is id-based and stable (the bytes change), and a
+        # segment is rendered only once the file covers it (the scheduler checks too; a truncated segment must never be published).
+        if not youtube and fingerprint(value["source"]) != value["fingerprint"]:
             raise ValueError("The source movie changed; reopen it")
         start = index * value["segment_seconds"]
         duration = min(value["segment_seconds"], value["duration"] - start)
+        if youtube:
+            progress = self._yt_progress(value)
+            if not progress["complete"] and start + duration + _ystream.READABLE_MARGIN > progress["readable"]:
+                raise TimeoutError("The downloaded part of the video is not ready yet")
         audio, audio_hash = None, "original"
         if value["job_id"]:
             job = self.store.job(value["job_id"])
@@ -1572,6 +2000,9 @@ class TVService:
         identity_parts = [value["fingerprint"], value["audio_index"], index, audio_hash,
                           value["quality"], value["upscale"], value["hdr_mode"],
                           encoder, value["encoder_threads"], "tv-mux-cpu-v4" if encoder == "software" else "tv-mux-nvenc-v1"]
+        if youtube:
+            # segment length and rate cap are part of what a cached segment is (a library segment's index implies 30 s; this one does not)
+            identity_parts.append(["youtube", value["segment_seconds"], str(self._yt_opt("stream_maxrate")), str(self._yt_opt("stream_bufsize"))])
         audio_filter = "apad"
         if leveled:
             from . import loudness_job as _lj, playback_loudness as _pl
@@ -1628,14 +2059,16 @@ class TVService:
         if hdr and not preserve_hdr:
             scale = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv," + scale
         codec, codec_options = self._video_codec(encoder, preserve_hdr, value["encoder_threads"])
-        rate = "30M" if height == 2160 else "8M"
+        rate, buffer_size = ("30M" if height == 2160 else "8M"), ("60M" if height == 2160 else "16M")
+        if youtube:
+            rate, buffer_size = str(self._yt_opt("stream_maxrate")), str(self._yt_opt("stream_bufsize"))    # a 10 Mbit/s Wi-Fi TV
         color = (["-color_primaries", "bt2020", "-color_trc", video["color_transfer"],
                   "-colorspace", "bt2020nc"] if preserve_hdr else [])
         args += ["-map", "0:" + str(video["index"]), "-map", "1:a:0" if audio_input else "0:" + str(value["audio_index"]),
                  "-t", "%.6f" % duration, "-vf", scale, "-c:v", codec, *codec_options,
                  "-threads", str(value["encoder_threads"]), "-filter_threads", str(min(2, value["encoder_threads"])),
                  "-pix_fmt", "yuv420p10le" if preserve_hdr else "yuv420p",
-                 "-maxrate", rate, "-bufsize", "60M" if height == 2160 else "16M", *color,
+                 "-maxrate", rate, "-bufsize", buffer_size, *color,
                  "-force_key_frames", "expr:gte(t,n_forced*2)",
                  "-c:a", "aac", "-b:a", audio_rate, "-ar", "48000", *channel_args,
                  "-af", audio_prefix + audio_filter, "-sn", "-dn", "-output_ts_offset", str(start),
@@ -1674,6 +2107,8 @@ class TVService:
         return output
 
     def captions(self, value):
+        if value.get("live"):
+            return b"WEBVTT\n\n"                     # a live stream has no subtitle file
         selection, base = value["subtitles"], value["start_index"] * value["segment_seconds"]
         if not value["dub"] and not value["compatibility"]:
             base = 0

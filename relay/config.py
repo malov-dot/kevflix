@@ -4,6 +4,7 @@ import copy
 import hashlib
 import json
 import os
+import re
 import ipaddress
 from pathlib import Path
 from urllib.parse import urlparse
@@ -276,6 +277,20 @@ class Config:
             raise ValueError("youtube.max_cache_gb must be between 1 and 4000")
         if not 144 <= int(self.data["youtube"]["max_height"]) <= 4320:
             raise ValueError("youtube.max_height must be between 144 and 4320")
+        # YouTube fast start (relay/youtube_source.STREAM_DEFAULTS holds the defaults; these keys are optional overrides)
+        for key, low, high in (("stream_segment_seconds", 2, 30), ("stream_start_seconds", 1, 120), ("stream_ahead_seconds", 8, 600),
+                               ("stream_max_height", 144, 4320), ("open_wait_seconds", 0, 20), ("live_segment_seconds", 1, 10),
+                               ("live_list_size", 3, 60), ("live_start_segments", 1, 10), ("live_max_height", 144, 4320)):
+            value = self.data["youtube"].get(key)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high):
+                raise ValueError("youtube.%s must be a number between %s and %s" % (key, low, high))
+        for key in ("stream", "stream_foreign", "live"):
+            if self.data["youtube"].get(key) is not None and not isinstance(self.data["youtube"][key], bool):
+                raise ValueError("youtube.%s must be true or false" % key)
+        for key in ("stream_maxrate", "stream_bufsize", "live_maxrate", "live_bufsize"):
+            value = self.data["youtube"].get(key)
+            if value is not None and not (isinstance(value, str) and re.fullmatch(r"[0-9]+(\.[0-9]+)?[kKmM]", value)):
+                raise ValueError("youtube.%s must be a bitrate such as 6M or 4500k" % key)
         if self.data["youtube"]["enabled"]:
             media_dir = Path(os.path.expandvars(str(self.data["youtube"]["media_dir"]))).expanduser()
             if not media_dir.is_absolute() or media_dir.parent == media_dir:

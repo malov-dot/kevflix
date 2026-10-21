@@ -327,6 +327,42 @@ class Cdp:
             self.task.cancel()
 
 
+PICTURE_LEVELS = ((1.0, 0), (0.8, -10), (0.667, -15))      # (size factor, JPEG quality change): level 0 is the configured picture
+
+
+class PictureGovernor:
+    """Chooses how heavy each picture is from how long the TV needed for the last ones (download + decode, measured and reported by
+    the TV). Slow on average -> one level lighter (at most every `down_hold` s); fast for `up_hold` s -> one level heavier.
+    observe() returns the new level when it changed, otherwise None."""
+
+    def __init__(self, levels=len(PICTURE_LEVELS), slow_ms=140.0, fast_ms=50.0, down_hold=2.0, up_hold=8.0):
+        self.levels, self.slow_ms, self.fast_ms = int(levels), float(slow_ms), float(fast_ms)
+        self.down_hold, self.up_hold = float(down_hold), float(up_hold)
+        self.level, self.average, self.changed, self.fast_since = 0, None, None, None
+
+    def observe(self, ms, now):
+        ms = float(ms)
+        if not 0 <= ms < 60000:
+            return None
+        self.average = ms if self.average is None else self.average * 0.7 + ms * 0.3
+        held = None if self.changed is None else now - self.changed
+        if self.average > self.slow_ms:
+            self.fast_since = None
+            if self.level < self.levels - 1 and (held is None or held >= self.down_hold):
+                return self._move(self.level + 1, now)
+        elif self.average < self.fast_ms:
+            self.fast_since = now if self.fast_since is None else self.fast_since
+            if self.level > 0 and now - self.fast_since >= self.up_hold and (held is None or held >= self.up_hold):
+                return self._move(self.level - 1, now)
+        else:
+            self.fast_since = None
+        return None
+
+    def _move(self, level, now):
+        self.level, self.changed, self.average, self.fast_since = level, now, None, None     # measure again at the new size
+        return level
+
+
 class YouTubeHost:
     """One lazily started background Chrome showing youtube.com/tv. All public methods are thread-safe (the HTTP server
     is threaded); the DevTools client runs on a private asyncio loop thread that exists only while Chrome runs."""
@@ -346,6 +382,7 @@ class YouTubeHost:
         self.last_command, self._closing = [], False
         self._play = None                                        # {video_id, seq, at}: the newest video picked on the page
         self._play_seq, self._handoff, self._handoff_since = 0, False, 0.0
+        self._governor = PictureGovernor()
 
     # ---- thread-safe API ---------------------------------------------------------------------------------------
     def status(self):
@@ -443,6 +480,36 @@ class YouTubeHost:
                 self._cond.wait(left)
             return self._counter, self._frame
 
+    def pull_frame(self, after, wait, tv_ms=None):
+        """The pull picture transport (/tv-api/youtube/frame): the TV asks for the newest picture after counter `after` and asks again
+        only when it has received it, so nothing queues in the network and the picture is never older than one round trip. Counts as a
+        viewer (keeps the screencast running), restarts the screencast if it stopped, and feeds the TV's reported time per picture
+        (`tv_ms`) to the picture governor. Returns (counter, jpeg), or None when nothing newer arrived within `wait` seconds."""
+        self.touch()
+        if self.state != "running":
+            return None
+        if tv_ms is not None:
+            try:
+                level = self._governor.observe(tv_ms, self._clock())
+            except (TypeError, ValueError):
+                level = None
+            if level is not None and self._loop:
+                logging.info("YouTube host: picture level %d (TV needed %.0f ms per picture)", level, float(tv_ms))
+                asyncio.run_coroutine_threadsafe(self._restart_screencast(), self._loop)
+        if not self._casting and self._loop:
+            asyncio.run_coroutine_threadsafe(self._screencast(True), self._loop)
+        with self._cond:
+            if after > self._counter:
+                after = 0                                         # the host restarted since the TV last saw a picture
+        return self.next_frame(after, wait)
+
+    def picture(self):
+        """(width, height, quality) of the pictures currently sent, after the governor's level."""
+        size, quality = PICTURE_LEVELS[min(self._governor.level, len(PICTURE_LEVELS) - 1)]
+        s = self.settings
+        width, height = int(s.get("stream_width") or s["width"]), int(s.get("stream_height") or s["height"])
+        return (max(2, int(width * size) // 2 * 2), max(2, int(height * size) // 2 * 2), min(95, max(20, int(s["jpeg_quality"]) + quality)))
+
     def cpu_seconds(self):
         return self._proc.cpu_seconds() if self._proc else None
 
@@ -450,7 +517,7 @@ class YouTubeHost:
     def _opened(self):
         status = self.status()
         return {"state": status["state"], "width": status["width"], "height": status["height"],
-                "screen_ticket": self.ticket, "play_seq": self._play_seq}
+                "screen_ticket": self.ticket, "play_seq": self._play_seq, "frame_pull": True}
 
     def _play_view(self):
         play = self._play
@@ -663,11 +730,13 @@ class YouTubeHost:
             try:
                 if on:
                     s = self.settings
+                    width, height, quality = self.picture()
                     await self._cdp.send("Page.startScreencast", {
-                        "format": "jpeg", "quality": int(s["jpeg_quality"]),
+                        "format": "jpeg", "quality": quality,
                         # the page is laid out at width x height; the PICTURE sent to the TV is scaled down to stream_width x stream_height
-                        # (a TV decodes a smaller JPEG much faster than 1080p; the TV scales it up)
-                        "maxWidth": int(s.get("stream_width") or s["width"]), "maxHeight": int(s.get("stream_height") or s["height"]), "everyNthFrame": max(1, int(s["every_nth_frame"]))})
+                        # (a TV decodes a smaller JPEG much faster than 1080p; the TV scales it up). The picture governor lowers it when the
+                        # TV's link is slow (PICTURE_LEVELS).
+                        "maxWidth": width, "maxHeight": height, "everyNthFrame": max(1, int(s["every_nth_frame"]))})
                 else:
                     await self._cdp.send("Page.stopScreencast")
                 self._casting = on
@@ -675,6 +744,12 @@ class YouTubeHost:
             except Exception as error:     # right after a navigation Chrome answers "Not attached to an active page": retry
                 logging.info("YouTube host: screencast %s failed (%s)", "start" if on else "stop", error)
                 await asyncio.sleep(0.5)
+
+    async def _restart_screencast(self):
+        """Apply a new picture level: stop and start the screencast (the next picture arrives at the new size)."""
+        if self.state == "running" and self._casting:
+            await self._screencast(False)
+            await self._screencast(True)
 
     async def _send_keys(self, name, events, action):
         for event in events:

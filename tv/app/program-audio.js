@@ -63,4 +63,6 @@
     label();
   });
   label();
+  // player.js calls this when a YouTube pick opens the player: that OK press is the viewer's own Play, so the saved sound choice applies.
+  window.KevFlixAudio = { apply: apply };
 }());

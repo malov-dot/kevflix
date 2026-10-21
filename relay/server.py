@@ -158,6 +158,8 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         # Never log query strings, stream tickets, media text or Plex credentials.
         path = urlparse(self.path).path
+        if path == "/tv-api/youtube/frame":
+            return                                              # ten or more per second while YouTube is on screen: would drown the log
         logging.info("%s %s", self.command, "/hooks/plex/[redacted]" if path.startswith("/hooks/plex/") else path)
 
     def authorized(self, nas=False):
@@ -240,6 +242,7 @@ class Handler(BaseHTTPRequestHandler):
                 play = host.key(str(data["key"]), str(data.get("action", "press")))
                 if play:
                     reply["play"] = play                          # the page just navigated to a video: the TV hands it to its own player
+                    self.app.tv.youtube_prefetch(play["video_id"])    # start resolving it now: the TV's open request follows about a second later
                 return self.json_response(reply)
             if action == "resume":
                 self.app.tv.youtube_cancel()
@@ -280,6 +283,42 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
         stream_screen(host, write, int(self.app.config["youtube"]["max_fps"]))
 
+    def youtube_frame(self, query):
+        """Pull transport: ONE picture per request. The TV sends ?after=<counter of the last picture it has>&ms=<its download+decode time of
+        the last one>; the answer is the newest JPEG newer than `after` (X-Frame = its counter), or 204 with the current X-Frame when the page
+        did not change for ~1.5 s. The TV asks again only after receiving, so a slow link can never build a backlog (the push stream did:
+        seconds of lag). Same ticket / device-token rule as the screen stream; keep-alive, so no new connection per picture."""
+        if self.app.config["setup_only"] or not self.app.config["youtube"]["enabled"]:
+            return self.json_response({"error": "YouTube is turned off (youtube.enabled)"}, 403)
+        host = self.app.youtube_host(create=False)
+        token = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        if not ((host is not None and host.ticket_valid(query.get("ticket"))) or (token and self.app.tv.device(token))):
+            return self.json_response({"error": "Pair this TV with the worker first"}, 401)
+        if host is None or host.state != "running":
+            return self.json_response({"error": "YouTube is not open"}, 409)
+
+        def number(name, default=None):
+            try:
+                return float(query.get(name))
+            except (TypeError, ValueError):
+                return default
+        after, tv_ms = int(max(0, number("after", 0))), number("ms")
+        found = host.pull_frame(after, 1.5, tv_ms)
+        self.send_response(200 if found else 204)
+        self.cors()
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Access-Control-Expose-Headers", "X-Frame")
+        self.send_header("X-Frame", str(found[0] if found else host.latest()[0]))
+        if not found:
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_header("Content-Type", "image/jpeg")
+        self.send_header("Content-Length", str(len(found[1])))
+        self.end_headers()
+        self.wfile.write(found[1])
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -306,6 +345,8 @@ class Handler(BaseHTTPRequestHandler):
                                            "setup_only": self.app.config["setup_only"]})
             if path == "/tv-api/youtube/screen":
                 return self.youtube_screen(query)
+            if path == "/tv-api/youtube/frame":
+                return self.youtube_frame(query)
             if path.startswith("/tv-api/"):
                 device = self.tv_device()
                 if path == "/tv-api/youtube/status":
