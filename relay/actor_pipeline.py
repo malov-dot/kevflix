@@ -531,7 +531,7 @@ AUDIBLE_MIN_IN_WINDOW_SECONDS=.5
 # (the 6 dB ladder lifted a take that needed 5 dB by 6 and one that needed 9 by 12). Every other take is at exactly the level of the
 # original line (cinematic.actor_mix_levels), and report mix_levels names any lift (audibility_boost_db).
 AUDIBLE_BOOST_STEP_DB=2.
-AUDIBLE_BOOST_MAX_DB=12.
+AUDIBLE_BOOST_MAX_DB=4.   # owner rule 2026-10-21: never more than 4 dB louder than the original line (a take that would need more keeps the original audio instead); was 12
 AUDIBLE_BOOST_REASONS=frozenset({'take masked by the rest of the rendered mix','take is silent inside the render range'})
 # The no-speech bed for that measurement is the SAME protect_dialogue_mix function, bound here at import, so the
 # window's own mix stays one call of the module-level name (tests wrap it to inspect exactly that call).
