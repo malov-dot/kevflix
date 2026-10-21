@@ -184,7 +184,10 @@
   window.addEventListener('blur', function () { if (active) releaseAll(true); });
 
   // ---- home tile ----------------------------------------------------------------------------------------------------
-  function applyTile() { $('youtube-section').hidden = !(enabled && pageName === 'home'); }
+  function applyTile() {
+    $('youtube-section').hidden = !(enabled && pageName === 'home');
+    if ($('nav-youtube')) $('nav-youtube').hidden = !enabled;     // the side menu entry, beside the libraries
+  }
   function refresh() {
     if (!token()) { enabled = false; applyTile(); return Promise.resolve(); }
     return call('youtube/status', undefined, 8000).then(function (value) { enabled = !!value.enabled; applyTile(); },
@@ -192,6 +195,7 @@
   }
   function setPage(next) { pageName = next; applyTile(); if (next === 'home') refresh(); }
   $('youtube-tile').onclick = open;
+  if ($('nav-youtube')) $('nav-youtube').onclick = open;
   try { ['MediaPlay', 'MediaPause', 'MediaPlayPause', 'MediaRewind', 'MediaFastForward'].forEach(function (name) { tizen.tvinputdevice.registerKey(name); }); } catch (ignore) {}
   window.KevFlixYoutube = {
     active: function () { return active; }, state: function () { return state; }, open: open, exit: exit,

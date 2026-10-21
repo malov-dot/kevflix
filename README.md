@@ -2,7 +2,7 @@
 
 A separate TV player for local movies, with PC-assisted English dubbing and optional upscaling.
 
-**Development version 0.4.61 — playback, installer and update acceptance remain untested.**
+**Development version 0.4.62 — playback, installer and update acceptance remain untested.**
 
 KevFLIX keeps the original files intact and uses the PC for source decoding, audio processing, scaling and encoding. A NAS can supply the source files. The TV receives a local-network HLS stream and decodes that final stream for display. The standard Plex installation is not modified.
 
@@ -24,7 +24,7 @@ KevFLIX keeps the original files intact and uses the PC for source decoding, aud
 
 ### Windows PC
 
-Download **KevFLIX-Setup-0.4.61.exe** from [Releases](https://github.com/malov-dot/kevflix/releases). This unsigned development installer supplies the control panel and a private Python runtime. It starts in setup-only mode. Use PC settings to connect Plex, add folders, install video/dubbing components and generate the TV pairing code. Tools and models download separately; setup does not play media or run inference. See [installation](docs/INSTALL.md).
+Download **KevFLIX-Setup-0.4.62.exe** from [Releases](https://github.com/malov-dot/kevflix/releases). This unsigned development installer supplies the control panel and a private Python runtime. It starts in setup-only mode. Use PC settings to connect Plex, add folders, install video/dubbing components and generate the TV pairing code. Tools and models download separately; setup does not play media or run inference. See [installation](docs/INSTALL.md).
 
 ### TizenBrew GitHub module
 

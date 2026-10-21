@@ -871,7 +871,7 @@ var SemTvProbe=(function(){
     }
     if(scope===document&&$('library-nav').contains(active)&&(direction===38||direction===40)){
       var sibling=direction===38?active.previousElementSibling:active.nextElementSibling;
-      (sibling||(direction===38?$('nav-movies'):$('nav-search'))).focus();if(sibling)sibling.scrollIntoView({block:'nearest'});return;
+      (sibling||(direction===38?$('nav-movies'):($('nav-youtube')&&!$('nav-youtube').hidden?$('nav-youtube'):$('nav-search')))).focus();if(sibling)sibling.scrollIntoView({block:'nearest'});return;
     }
     if(scope===document&&$('library').contains(active)&&direction===39&&!$('alphabet').hidden){
       var neighbor=active.nextElementSibling;

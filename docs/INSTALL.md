@@ -143,7 +143,7 @@ Do not open the worker to the public internet. Permit its configured port only f
 
 ## TV installation
 
-Version 0.4.61 remembers a successful PC address and opens directly into KevFLIX on future launches. The address form appears on first use, when the PC is unreachable, or from Settings > Change PC address. A paired TV keeps its pairing and starts on Home. Update the TizenBrew module or standalone WGT to receive bootstrap/launcher changes; worker-only interface updates do not replace the TV launcher.
+Version 0.4.62 remembers a successful PC address and opens directly into KevFLIX on future launches. The address form appears on first use, when the PC is unreachable, or from Settings > Change PC address. A paired TV keeps its pairing and starts on Home. Update the TizenBrew module or standalone WGT to receive bootstrap/launcher changes; worker-only interface updates do not replace the TV launcher.
 
 Target API baseline: Tizen 6.5 or newer. TizenBrew integration was written against its documented application-module format and the v2.0.5 release; installation has not been exercised.
 
