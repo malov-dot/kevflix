@@ -28,3 +28,15 @@ Endpoints (all need the paired TV token): `POST /tv-api/youtube/open`, `GET /tv-
 (`{"key": "Up|Down|Left|Right|Enter|Back|Play|Pause|PlayPause|FastForward|Rewind", "action": "down|up|press"}`),
 `POST /tv-api/youtube/close`, and `GET /tv-api/youtube/screen?ticket=...` (multipart MJPEG; the ticket comes from `open` because an
 `<img>` cannot send a token header). On the TV a LONG Back press (0.7 s or more) returns to the KevFLIX home; a short Back goes to YouTube.
+
+## Userscripts (ad blocking and other page add-ons)
+
+`youtube.userscripts` is a list of JavaScript files that the PC-side Chrome runs in the YouTube TV page. By default (`youtube.userscripts_when: "ready"`)
+each file is evaluated through the browser's debugging connection when the page's DOMContentLoaded fires, because scripts written for TizenBrew
+(for example TizenTube) do nothing when they run at document start; `"start"` injects the file before the page's own scripts. A missing or
+oversized (> 4 MB) file is skipped with a log line and never stops the page from opening.
+
+Third-party scripts are NOT part of this repository. TizenTube (`@foxreis/tizentube`, GPL-3.0-only, https://github.com/reisxd/TizenTube) provides ad
+blocking and SponsorBlock by rewriting the page's own data; download its `dist/userScript.js` from npm yourself, keep it with its LICENSE outside the
+repository (the reference install uses `C:/KevFLIX-Runtime/youtube-mods/tizentube/`), and list its path in `youtube.userscripts`. Running a GPL
+script privately on your own PC does not change KevFLIX's own licence; do not redistribute it inside a KevFLIX release.

@@ -42,8 +42,9 @@ USER_AGENTS = {"tizen": TIZEN_UA, "cobalt": COBALT_UA}
 DEFAULT_SETTINGS = {
     "enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "", "idle_seconds": 120,
     "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen", "start_url": "https://www.youtube.com/tv",
-    "width": 1920, "height": 1080, "jpeg_quality": 65, "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072,
+    "width": 1920, "height": 1080, "jpeg_quality": 65, "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready",
 }
+MAX_USERSCRIPT_BYTES = 4 * 1024 * 1024
 CHROME_CANDIDATES = (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
                      r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
                      r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -305,6 +306,7 @@ class YouTubeHost:
 
     def __init__(self, settings=None, launcher=None, clock=time.monotonic, watch_interval=1.0):
         self.settings = {**DEFAULT_SETTINGS, **(settings or {})}
+        self._ready_scripts = []
         self._launcher, self._clock, self._watch_interval = launcher, clock, float(watch_interval)
         self._lifecycle = threading.Lock()                       # one start/stop at a time -> one instance only
         self._cond = threading.Condition()
@@ -479,6 +481,7 @@ class YouTubeHost:
             pass
         await self._permissions(session, base)
         await self._identity(cdp)
+        await self._inject(cdp, settings)
         await cdp.send("Emulation.setDeviceMetricsOverride", {"width": width, "height": height, "deviceScaleFactor": 1, "mobile": False})
         self.ticket, self._size = secrets.token_urlsafe(24), (width, height)
         await cdp.send("Page.navigate", {"url": settings["start_url"]})
@@ -488,6 +491,28 @@ class YouTubeHost:
             self.state = "running"
         await self._screencast(True)
         self._tasks = [asyncio.ensure_future(self._watch()), asyncio.ensure_future(self._watch_connection(cdp))]
+
+    async def _inject(self, cdp, settings):
+        """Run each configured userscript (youtube.userscripts: list of file paths) in the page BEFORE its own scripts, on every document.
+        Third-party scripts (for example an ad blocker) live OUTSIDE this repository; a missing, unreadable or oversized file is skipped
+        with a log line and never stops the page from opening."""
+        self._ready_scripts = []
+        for entry in settings.get("userscripts") or []:
+            path = Path(str(entry))
+            try:
+                if not path.is_file() or path.stat().st_size > MAX_USERSCRIPT_BYTES:
+                    raise OSError("missing or larger than %d bytes" % MAX_USERSCRIPT_BYTES)
+                source = path.read_text(encoding="utf-8")
+                if str(settings.get("userscripts_when", "ready")) == "ready":
+                    # Scripts written for TizenBrew are injected after the page has loaded; some (for example TizenTube's) do nothing when run at
+                    # document start. They are evaluated through DevTools when the page's DOMContentLoaded fires (page security policy cannot
+                    # block that). "start" instead injects the file as is, before the page's own scripts.
+                    self._ready_scripts.append(source)
+                else:
+                    await cdp.send("Page.addScriptToEvaluateOnNewDocument", {"source": source})
+                logging.info("YouTube host: userscript injected: %s (%d bytes)", path.name, len(source))
+            except (OSError, UnicodeDecodeError, HostError) as error:
+                logging.warning("YouTube host: userscript skipped: %s (%s)", path.name, error)
 
     async def _identity(self, cdp):
         agent = user_agent(self.settings)
@@ -517,6 +542,11 @@ class YouTubeHost:
             logging.info("YouTube host: permission lockdown skipped (%s)", error)
 
     def _on_event(self, method, params):
+        if method == "Page.domContentEventFired":
+            for source in list(self._ready_scripts):
+                if self._cdp:
+                    self._cdp.post("Runtime.evaluate", {"expression": source, "silent": True})
+            return
         if method != "Page.screencastFrame":
             return
         try:

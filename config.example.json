@@ -55,7 +55,9 @@
     "jpeg_quality": 65,
     "every_nth_frame": 3,
     "max_fps": 20,
-    "memory_limit_mb": 3072
+    "memory_limit_mb": 3072,
+    "userscripts": [],
+    "userscripts_when": "ready"
   },
   "tv": {
     "enabled": true,
