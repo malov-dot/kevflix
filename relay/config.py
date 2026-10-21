@@ -509,9 +509,18 @@ class Config:
                    'verified_speech','progressive_actor','live_mux','asr_rescue',
                    'original_audio_policy','short_utterance_policy','media','store',
                    # owner-approved dubbing behaviour (2026-10-19): speed fit, speech-only removal, non-speech lines
-                   'take_fit','speech_activity','nonverbal','loudness_reference','audio_evidence','audio_events','borrowed_reference','take_deess','actor_surround')
+                   'take_fit','speech_activity','nonverbal','loudness_reference','audio_evidence','audio_events','borrowed_reference','take_deess','actor_surround',
+                   # owner decision 2026-10-20: slow a take that ends before the original speaker stopped (relay/slot_fill.py)
+                   'slot_fill',
+                   # owner decision 2026-10-19/20: Diart film-global speaker turns (opt-in actor_beta.diart_turns)
+                   'diart_turns')
             values['actor_implementation']={name:hashlib.sha256(Path(__file__).with_name(name+'.py').read_bytes()).hexdigest()
                                             for name in names}
+            from . import slot_fill as _slot_fill        # stdlib-only; the EFFECTIVE slot-fill / fuller settings (defaults filled in)
+            _beta_options=self.data.get('actor_beta')
+            values['slot_fill']=_slot_fill.fingerprint(_beta_options if isinstance(_beta_options,dict) and _beta_options.get('enabled') is True else None)
+            from . import diart_turns as _diart_turns   # stdlib-only; EFFECTIVE actor_beta.diart_turns + artifact sha256 (None when off)
+            values['diart_turns']=_diart_turns.fingerprint(self)
             # embedded-subtitles-v1: caption selection/extraction changes chunk captions.
             captions=Path(__file__).with_name('embedded_subtitles.py')
             if captions.is_file():

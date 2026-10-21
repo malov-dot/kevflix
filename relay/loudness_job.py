@@ -38,10 +38,10 @@ RATE = 48000
 MAX_CONSECUTIVE_DECODE_FAILURES = 3
 
 #: Defaults of the ``tv.loudness`` config object. Only ``enabled`` has to be present; the code default is off.
-DEFAULTS = {'enabled': False, 'target_lufs': pl.DEFAULT_TARGET_LUFS, 'samples': 16,
+DEFAULTS = {'enabled': False, 'target_lufs': pl.DEFAULT_TARGET_LUFS, 'dialogue_lufs': -22.0, 'samples': 16,
             'excerpt_seconds': 20.0, 'budget_seconds': 45.0, 'layout': 'stereo',
             'knee_dbfs': pl.DEFAULT_KNEE_DBFS, 'ceiling_dbfs': pl.DEFAULT_CEILING_DBFS}
-_BOUNDS = {'target_lufs': (-40.0, -10.0), 'samples': (4, 48), 'excerpt_seconds': (5.0, 60.0),
+_BOUNDS = {'target_lufs': (-40.0, -10.0), 'dialogue_lufs': (-35.0, -12.0), 'samples': (4, 48), 'excerpt_seconds': (5.0, 60.0),
            'budget_seconds': (5.0, 120.0), 'knee_dbfs': (-12.0, -1.5), 'ceiling_dbfs': (-6.0, -0.5)}
 
 
@@ -63,7 +63,7 @@ def settings(raw=None):
     result = {'enabled': raw.get('enabled') is True}
     for name in _BOUNDS:
         result[name] = _bounded(raw.get(name, DEFAULTS[name]), name)
-    result['layout'] = raw.get('layout') if raw.get('layout') in ('stereo', 'native') else 'stereo'
+    result['layout'] = raw.get('layout') if raw.get('layout') in ('stereo', 'native', 'center') else 'stereo'
     if result['ceiling_dbfs'] - result['knee_dbfs'] < 0.5:      # an unusable pair falls back to the default pair
         result['knee_dbfs'], result['ceiling_dbfs'] = DEFAULTS['knee_dbfs'], DEFAULTS['ceiling_dbfs']
     return result
@@ -154,7 +154,10 @@ def decode_layout(stream, layout):
     """``(channels, weights, ffmpeg -ac args, label)`` for one source stream (a probe stream dict or None)."""
     channels = int((stream or {}).get('channels') or 0)
     name = (stream or {}).get('channel_layout')
-    if layout == 'native':
+    if layout == 'center' and channels == 6 and name in ('5.1', '5.1(side)'):
+        # Dialogue loudness: only the CENTER channel counts (EBU R 128 s4: for a 5.1 programme the dialogue basis is the center channel).
+        return 6, pl.SURROUND_51_CENTER_WEIGHTS, [], name + '-center'
+    if layout in ('native', 'center'):
         if channels == 1:
             return 1, pl.MONO_WEIGHTS, [], 'mono'
         if channels == 2:

@@ -282,12 +282,95 @@ def replacement_envelope(frames, rate, origin, intervals, fade_seconds=.04):
     return envelope
 
 
-def replace_dialogue(original, speech, generated, envelope):
-    """Preserve unscheduled samples; reduce only the added voice if peaks collide."""
+ROOM_TONE_FRAME_SECONDS = .02
+ROOM_TONE_CONTEXT_SECONDS = .8        # the room tone is measured this far before and after a replaced run
+ROOM_TONE_MIN_RUN_SECONDS = .04
+ROOM_TONE_MARGIN_DB = -3.0            # the fill reaches 3 dB under the surrounding room tone
+ROOM_TONE_TRIGGER = .5                # ... and only where the bed falls under half (-6 dB) of that level
+
+
+def _room_tone_noise(quiet_blocks, frame, length, seed):
+    """Unit-RMS noise with the average spectrum of the quiet blocks (comfort noise), reproducible from ``seed``."""
+    import numpy as np
+    rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
+    window = np.hanning(frame)
+    power = np.mean(np.abs(np.fft.rfft(quiet_blocks * window[None, :], axis=1)) ** 2, axis=0)
+    amplitude = np.sqrt(power)
+    white = np.fft.rfft(rng.standard_normal(length))
+    shape = np.interp(np.linspace(0, 1, len(white)), np.linspace(0, 1, len(amplitude)), amplitude)
+    noise = np.fft.irfft(white * shape, n=length)
+    level = float(np.sqrt(np.mean(noise ** 2)))
+    return noise / level if level > 0 else noise
+
+
+def fill_room_tone(bed, original, envelope, rate):
+    """(bed, runs_filled). Removing the original speech can take the whole sound with it (a loud line, a quiet scene): the bed inside a
+    replaced run falls to digital silence while the surroundings have a room tone, and the listener hears the sound drop out completely
+    for the length of the original line. Where the bed of a run falls clearly under the room tone measured in the 0.8 s before and after
+    it (outside every replaced run), noise with that room tone's spectrum is added, only as much as is missing. Nothing outside a
+    replaced run changes, and a bed that already holds its room tone is returned unchanged."""
+    import numpy as np
+    out = np.array(bed, copy=True)
+    frames, channels = out.shape
+    active = np.asarray(envelope) > 0
+    index = np.flatnonzero(active)
+    if not index.size:
+        return out, 0
+    frame = max(1, int(ROOM_TONE_FRAME_SECONDS * rate))
+    context = int(ROOM_TONE_CONTEXT_SECONDS * rate)
+    breaks = np.flatnonzero(np.diff(index) > int(.05 * rate))
+    firsts = np.concatenate(([index[0]], index[breaks + 1]))
+    lasts = np.concatenate((index[breaks], [index[-1]])) + 1
+    filled = 0
+    for first, last in zip(firsts, lasts):
+        first, last = int(first), int(last)
+        length = last - first
+        if length < ROOM_TONE_MIN_RUN_SECONDS * rate:
+            continue
+        low, high = max(0, first - context), min(frames, last + context)
+        touched = False
+        for channel in range(channels):
+            sides = [original[a:b, channel][~active[a:b]] for a, b in ((low, first), (last, high)) if (~active[a:b]).any()]
+            if not sides:
+                continue
+            reference = np.concatenate(sides).astype(np.float64)
+            count = len(reference) // frame
+            if count < 3:
+                continue
+            blocks = reference[:count * frame].reshape(count, frame)
+            rms = np.sqrt(np.mean(blocks ** 2, axis=1))
+            floor = float(np.percentile(rms, 25))
+            if floor < 1e-5:                                   # the surroundings are digital silence as well: nothing to keep
+                continue
+            target = floor * 10 ** (ROOM_TONE_MARGIN_DB / 20)
+            segment = out[first:last, channel].astype(np.float64)
+            n = len(segment) // frame
+            if n < 1:
+                continue
+            level = np.sqrt(np.mean(segment[:n * frame].reshape(n, frame) ** 2, axis=1))
+            deficit = np.sqrt(np.maximum(0.0, target ** 2 - level ** 2))
+            if deficit.max() < ROOM_TONE_TRIGGER * target:
+                continue
+            deficit = np.convolve(np.pad(deficit, 2, mode='edge'), np.ones(5) / 5, mode='valid')
+            gain = np.interp(np.arange(length), (np.arange(n) + .5) * frame, deficit)
+            quiet = blocks[rms <= np.percentile(rms, 50)]
+            noise = _room_tone_noise(quiet if len(quiet) >= 2 else blocks, frame, length, seed=first * 8 + channel)
+            out[first:last, channel] = (segment + noise * gain).astype(out.dtype)
+            touched = True
+        filled += int(touched)
+    return out, filled
+
+
+def replace_dialogue(original, speech, generated, envelope, rate=None):
+    """Preserve unscheduled samples; reduce only the added voice if peaks collide. With ``rate`` the room tone is kept where the
+    removal of the original speech would leave the bed silent (see fill_room_tone)."""
     import numpy as np
     if original.shape != speech.shape or generated.shape != original.shape or len(envelope) != len(original):
         raise ValueError('Dialogue tracks must share geometry and timeline')
     bed = original - speech*envelope[:,None]
+    room_tone_runs = 0
+    if rate:
+        bed, room_tone_runs = fill_room_tone(bed, original, envelope, rate)
     # Headroom limiting never turns down the soundtrack to accommodate a dub.
     headroom = np.maximum(0, .999-np.abs(bed))
     gain = np.minimum(1, headroom/np.maximum(1e-8,np.abs(generated))).min(axis=1)
@@ -300,4 +383,5 @@ def replace_dialogue(original, speech, generated, envelope):
                     'original_preserved_outside_replacements':bool(np.array_equal(result[untouched],original[untouched])),
                     'voice_limited_frames':int(np.count_nonzero(gain<.999)),
                     'background_peak':float(np.max(np.abs(bed))) if bed.size else 0,
-                    'overrange_samples':int(np.count_nonzero(np.abs(result)>1))}
+                    'overrange_samples':int(np.count_nonzero(np.abs(result)>1)),
+                    'room_tone_runs':room_tone_runs}

@@ -203,7 +203,7 @@ def protect_dialogue_mix(original, speech, generated, envelope, *, origin, rate,
     effective_envelope = (envelope*allowed).astype(original.dtype)
     effective_generated = (generated*allowed[:, None]).astype(original.dtype)
     if len(original):
-        mixed, receipt = replace_dialogue(original, speech, effective_generated, effective_envelope)
+        mixed, receipt = replace_dialogue(original, speech, effective_generated, effective_envelope, rate=rate)
     else:
         mixed = original.copy()
         receipt = {'unchanged_frames': 0, 'original_preserved_outside_replacements': True,

@@ -3,12 +3,14 @@ from __future__ import annotations
 import gc
 import hashlib
 import json
+import logging
 import math
 import re
 import threading
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from pathlib import Path
 
+from . import diart_turns
 from .dialogue import is_no_speech
 from .language import backend_fault, model_device, prepare_model_runtime, torch_model_device
 from .movie_faults import MovieConfigurationError, MovieContentFallback
@@ -275,6 +277,13 @@ class SpeakerAnalyzer:
             'external_onnx_used': False,
             'embedding_exclude_overlap': True,
             'segmentation_batch_size': 4, 'embedding_batch_size': 4}
+        # Opt-in (actor_beta.diart_turns): film-global speaker ids from the Diart pre-pass artifact. Absent = no key, so the
+        # default policy (and every cache key derived from it) is byte-identical to before.
+        self.diart_decisions = deque(maxlen=64)
+        self._diart_reasons_logged = set()
+        diart_setting = diart_turns.setting(config)
+        if diart_setting is not None:
+            self._policy['diart_turns'] = {'setting': diart_setting, **diart_turns.policy()}
 
     def policy_metadata(self):
         # Callers may serialize this; they may not mutate cache-key state.
@@ -285,7 +294,51 @@ class SpeakerAnalyzer:
                 'embedding': str(self.pipeline._embedding.device), 'cpu_fallback': False,
                 'supporting_cpu_work': ['waveform-io', 'resampling', 'clustering-bookkeeping']}
 
-    def analyze(self, wav, offset=0.0):
+    def _diart_note(self, used, reason, offset, sha256=None):
+        """Record why a window used (or did not use) the Diart artifact; a fallback reason is logged once."""
+        self.diart_decisions.append({'offset': float(offset), 'used': bool(used), 'reason': reason,
+                                     'artifact_sha256': sha256})
+        if not used and reason not in self._diart_reasons_logged:
+            self._diart_reasons_logged.add(reason)
+            logging.getLogger(__name__).warning('Diart turns not used (%s); offline pyannote analysis instead', reason)
+
+    def _diart_analyze(self, wav, offset, source_fingerprint):
+        """(turns, aligned, vectors) from the Diart artifact, or None after recording why pyannote must be used."""
+        try:
+            artifact = diart_turns.open_for(self.config, source_fingerprint)
+            import soundfile as sf
+            data, rate = sf.read(str(wav), dtype='float32', always_2d=True)
+            if rate != diart_turns.SAMPLE_RATE:
+                raise diart_turns.DiartTurnsUnavailable('window_rate_unsupported', str(rate))
+            mono = data.mean(axis=1)
+            start = float(offset)
+            end = start + len(mono) / rate
+            artifact.require_cover(start, end)
+        except diart_turns.DiartTurnsUnavailable as error:
+            self._diart_note(False, error.reason, offset)
+            return None
+        def compute():
+            window = artifact.window(start, end)
+            return [window['turns'], window['aligned'],
+                    diart_turns.label_vectors(window, mono, start, self.embed)]
+        if self.cache is None:
+            result = compute()
+        else:
+            from .analysis_cache import file_identity
+            result = self.cache.get_or_compute(
+                diart_turns.NAMESPACE,
+                {'artifact_sha256': artifact.sha256, 'audio': file_identity(wav), 'offset': round(start, 6),
+                 'embedding_space': self.embedding_space, 'policy': self._policy,
+                 'cache_policy': self.cache_policy_identity}, compute)
+        self._diart_note(True, 'diart', offset, artifact.sha256)
+        turns, aligned, vectors = result
+        return list(turns), list(aligned), dict(vectors)
+
+    def analyze(self, wav, offset=0.0, *, source_fingerprint=None):
+        if 'diart_turns' in self._policy:
+            result = self._diart_analyze(wav, offset, source_fingerprint)
+            if result is not None:
+                return result
         if self.cache is None:
             return diarize(self.config, wav, offset, pipeline=self.pipeline, device=self.device)
         from .analysis_cache import file_identity

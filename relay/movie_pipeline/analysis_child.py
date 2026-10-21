@@ -617,7 +617,7 @@ class Worker:
         if not isinstance(rows, list) or len(rows) > MAX_BATCH_ROWS:
             raise ValueError('english_batch needs a list of at most %d rows' % MAX_BATCH_ROWS)
         operation, results, misses = self.english_operation, [None] * len(rows), []
-        keys, words = [None] * len(rows), {}
+        keys, words, fuller = [None] * len(rows), {}, {}
         for index, row in enumerate(rows):
             if not isinstance(row, dict) or not isinstance(row.get('text'), str):
                 results[index] = {'failure': {'kind': 'recoverable', 'code': 'translation_row_invalid',
@@ -627,7 +627,10 @@ class Worker:
             budget = row.get('max_words')
             budget = budget if isinstance(budget, int) and not isinstance(budget, bool) and 1 <= budget <= 60 else None
             words[index] = budget
-            keys[index] = {'text': row['text'], 'language': code, **({'max_words': budget} if budget else {})}
+            minimum = row.get('min_words')              # fuller retranslation (actor_beta.fuller_retranslation): a MINIMUM budget
+            fuller[index] = minimum if isinstance(minimum, int) and not isinstance(minimum, bool) and 1 <= minimum <= 60 else None
+            keys[index] = {'text': row['text'], 'language': code, **({'max_words': budget} if budget else {}),
+                           **({'min_words': fuller[index]} if fuller[index] else {})}
             if code == 'en' or not code or code in ('und', 'unknown'):
                 misses.append(index)                  # passthrough / unresolved: decided without a model or the cache
                 continue
@@ -637,8 +640,10 @@ class Worker:
             else:
                 results[index] = {'english': str(hit[0]), 'basis': str(hit[1])}
         if misses:
-            outcomes = self.language.english_batch([(rows[i]['text'], rows[i].get('language')) + ((words[i],) if words.get(i) else ())
-                                                    for i in misses])
+            outcomes = self.language.english_batch([
+                {'text': rows[i]['text'], 'language': rows[i].get('language'), 'min_words': fuller[i],
+                 **({'max_words': words[i]} if words.get(i) else {})} if fuller.get(i) else
+                (rows[i]['text'], rows[i].get('language')) + ((words[i],) if words.get(i) else ()) for i in misses])
             for index, outcome in zip(misses, outcomes):
                 if isinstance(outcome, BaseException):
                     results[index] = {'failure': _record(outcome)}
@@ -702,7 +707,8 @@ class Worker:
             return self.english_batch(args)
         if op == 'analyze':
             if self.speakers is None:raise ValueError('speaker analysis is disabled in generic mode')
-            return list(self.speakers.analyze(args['wav'], float(args.get('offset', 0.0))))
+            extra = {'source_fingerprint': str(args['source_fingerprint'])} if args.get('source_fingerprint') else {}
+            return list(self.speakers.analyze(args['wav'], float(args.get('offset', 0.0)), **extra))
         if op == 'embed':
             if self.speakers is None:raise ValueError('speaker embeddings are disabled in generic mode')
             return self.speakers.embed(args['waveform'])

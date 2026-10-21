@@ -35,6 +35,20 @@ again at render against the canonical takes that exist then):
                                      the carried take overlap there. Reported, never labelled as protected or covered.
   * speech_inside_owned_cue / no_speech_in_render_range: accounted, nothing to protect.
 
+Orphan adoption (F-A, 2026-10-20). Per-window ASR timing jitter, or an owner that cannot form a unit because the
+utterance runs past the end of its analysed audio, can leave a cue that NO window owns: the owner never made a unit for
+it and the next window sees it starting a little before its own render start. The original language then plays. The
+next window therefore adopts such a cue (owner_basis 'orphan-adopted', plan(orphans=...), adopt_orphans) only when ALL
+hold: it is real speech (the caller's not_speech test: the same nonverbal / sparse-speech / audio / overlap decisions an
+owned cue meets), it starts less than ORPHAN_LOOKBACK_SECONDS before render_start and reaches into the render range,
+the window holding its start has COMMITTED (else nothing is adopted: the earlier behaviour), no committed window owned
+the same line (their owned_unit_spans), and the canonical takes already published cover less than
+ORPHAN_MAX_COVERED_FRACTION of it and none is the same line. Takes and the window record of this very window are
+ignored, so a re-render of this window adopts the same cue again and reuses its own take. An adopted cue is an ordinary
+owned cue from there on: it is claimed in the atomic line ledger before synthesis, refused by canonical_conflicts when
+a canonical take of the same line exists, and refused by the commit races when one arrives meanwhile, so two windows
+never both dub it. Its placement floor is render_start (the take may start late), never earlier.
+
 Dedupe does not rest on keys. It rests on (1) the single cue-start owner, (2) canonical_conflicts at render: an owned
 cue whose source overlaps a canonical take of another window (>= half the shorter span, v4) is not synthesized
 again, and (3) the atomic line-ledger commit (beta_line_ledger), which re-checks the same overlap rule and the
@@ -67,6 +81,12 @@ OWNED_GUARD_SECONDS = .06
 CANONICAL_OVERLAP_FRACTION = .5
 # plan_dialogue matches a caption to speech regions by more than this overlap (speech_without_transcript).
 CAPTION_SPEECH_OVERLAP_SECONDS = .1
+# Orphan adoption (see the module docstring): how far before render_start an unowned cue may start, how much of it the
+# published takes / earlier owners may already hold, and the least part of it that must reach into the render range.
+ORPHAN_BASIS = 'orphan-adopted'
+ORPHAN_LOOKBACK_SECONDS = 4.
+ORPHAN_MAX_COVERED_FRACTION = .3
+ORPHAN_MIN_IN_RANGE_SECONDS = .25
 EPS = 1e-6
 
 
@@ -144,6 +164,92 @@ def turn_overlap(cue, speech_regions):
     return False
 
 
+def covered_fraction(span, others):
+    """Share (0..1) of ``span`` that the union of the ``others`` covers."""
+    length = float(span[1]) - float(span[0])
+    if length <= 0:
+        return 0.
+    return total(intersect([[float(span[0]), float(span[1])]], others)) / length
+
+
+def line_handled(span, others):
+    """True when ``others`` already hold the line of ``span``: one of them is the same line (significant_overlap, the
+    rule canonical_conflicts and the line ledger enforce), or together they cover ORPHAN_MAX_COVERED_FRACTION or more."""
+    return (any(significant_overlap(span, other) for other in others)
+            or covered_fraction(span, others) >= ORPHAN_MAX_COVERED_FRACTION - EPS)
+
+
+def _same_window(value, render_start, render_end):
+    try:
+        return abs(float(value[0]) - render_start) < 1e-3 and abs(float(value[1]) - render_end) < 1e-3
+    except (TypeError, ValueError, IndexError):
+        return False
+
+
+def adopt_orphans(all_cues, rows, *, render_start, render_end, windows, canonical, not_speech):
+    """Mark the unowned cues of this window that nobody dubs as owned ('orphan-adopted'). Mutates ``rows`` (and the
+    cue's 'owner_basis') for an adopted cue; returns one evidence record per candidate (adopted or refused, with why).
+
+    all_cues/rows: as plan() builds them (rows[id] has 'owned'). windows: committed window records of the line ledger
+    (beta_line_ledger.windows: render_start, render_end, owned_unit_spans) or a callable returning them, None for
+    'not available' (read only if a candidate gets that far); canonical: canonical take payloads of the analysed range;
+    not_speech(cue) -> None for speech, else a reason (the caller's nonverbal / sparse-speech / overlap test).
+    Candidate: not owned, starts in [render_start - ORPHAN_LOOKBACK_SECONDS, render_start) and ends after render_start.
+    Checked in this order, the first failing one refuses: not_speech, too_little_in_range, overlaps_owned_cue,
+    covered_by_take, committed_windows_unavailable, owner_window_not_committed, owner_window_considered_line."""
+    rs, re_ = float(render_start), float(render_end)
+    foreign = [t for t in canonical or () if not _same_window(t.get('line_window'), rs, re_)]
+    take_spans = [s for t in foreign for s in source_spans(t)]
+    resolved = []                       # [windows or None], read at most once
+    evidence = []
+    for cue in sorted(all_cues, key=lambda c: (float(c['start']), float(c['end']), str(c['id']))):
+        row = rows[cue['id']]
+        start, end = float(cue['start']), float(cue['end'])
+        if row['owned'] or not (rs - ORPHAN_LOOKBACK_SECONDS <= start < rs and end > rs):
+            continue
+        span = [start, end]
+        item = {'cue': cue['id'], 'start': start, 'end': end, 'in_range_seconds': end - rs, 'adopted': False,
+                'take_coverage': covered_fraction(span, take_spans)}
+        evidence.append(item)
+        reason = not_speech(cue)
+        if reason:
+            item['reason'] = 'not_speech'
+            item['detail'] = str(reason)
+            continue
+        if end - rs < ORPHAN_MIN_IN_RANGE_SECONDS:
+            item['reason'] = 'too_little_in_range'
+            continue
+        if any(significant_overlap(span, [float(c['start']), float(c['end'])])
+               for c in all_cues if c is not cue and rows[c['id']]['owned']):
+            item['reason'] = 'overlaps_owned_cue'
+            continue
+        if line_handled(span, take_spans):
+            item['reason'] = 'covered_by_take'
+            continue
+        if not resolved:
+            resolved.append(windows() if callable(windows) else windows)
+        committed = resolved[0]
+        if committed is None:
+            item['reason'] = 'committed_windows_unavailable'
+            continue
+        others = [w for w in committed if not _same_window([w.get('render_start'), w.get('render_end')], rs, re_)]
+        owners = [w for w in others
+                  if w.get('render_start') is not None and w.get('render_end') is not None
+                  and float(w['render_start']) <= start < float(w['render_end'])]
+        if not owners:
+            item['reason'] = 'owner_window_not_committed'
+            continue
+        considered = [[float(a), float(b)] for w in others for a, b in (w.get('owned_unit_spans') or ())]
+        if line_handled(span, considered):
+            item['reason'] = 'owner_window_considered_line'
+            continue
+        item.update(adopted=True, reason='orphan', owner_windows=sorted(str(w.get('window_key')) for w in owners))
+        row.update(owned=True, owner_basis=ORPHAN_BASIS,
+                   orphan={'take_coverage': item['take_coverage'], 'owner_windows': item['owner_windows']})
+        cue['owner_basis'] = ORPHAN_BASIS
+    return evidence
+
+
 def caption_key(source_identity, caption):
     """Caption identity shared by every window: source + caption start/end (one subtitle stream, ms)."""
     source = source_identity or {}
@@ -197,12 +303,15 @@ def line_record(unit, *, render_start, render_end, source_identity):
     ident = 'ln1-' + _digest([VERSION, source.get('source_fingerprint'), source.get('audio_index'), window,
                               [_r(span[0]), _r(span[1])], key])
     return {'line_id': ident, 'line_window': [float(render_start), float(render_end)], 'line_caption_key': key,
-            'line_owner_basis': 'cue_start', 'line_source_span': span}
+            'line_owner_basis': unit.get('owner_basis') or 'cue_start', 'line_source_span': span}
 
 
-def plan(all_cues, captions, speech_regions, *, render_start, render_end, source_identity, caption_text):
+def plan(all_cues, captions, speech_regions, *, render_start, render_end, source_identity, caption_text, orphans=None):
     """Ownership of every analysed cue and caption, and the boundary items this window must account for.
-    Annotates each cue dict with 'turn_overlap' (bool, see turn_overlap); nothing else on a cue is changed."""
+    Annotates each cue dict with 'turn_overlap' (bool, see turn_overlap); nothing else on a cue is changed, except
+    that a cue adopted by ``orphans`` (None: no adoption, the earlier behaviour) gets 'owner_basis' 'orphan-adopted'.
+    orphans: {'windows', 'canonical', 'not_speech'} as adopt_orphans takes them; the result then carries
+    'orphan_adoption' (one record per candidate) and 'adopted_cue_ids'."""
     rs, re_ = float(render_start), float(render_end)
     rows = {}
     for cue in all_cues:
@@ -212,6 +321,9 @@ def plan(all_cues, captions, speech_regions, *, render_start, render_end, source
         rows[cue['id']] = {'owner_time': start, 'owner_basis': 'cue_start', 'owned': owns(start, rs, re_),
                            'overlaps_render_range': end > rs and start < re_, 'turn_overlap': cue['turn_overlap'],
                            'caption_key': caption_key(source_identity, caption) if caption else None}
+    adoption = None
+    if orphans is not None:
+        adoption = adopt_orphans(all_cues, rows, render_start=rs, render_end=re_, **orphans)
     owned_spans = [[float(c['start']) - OWNED_GUARD_SECONDS, float(c['end']) + OWNED_GUARD_SECONDS]
                    for c in all_cues if rows[c['id']]['owned']]
     owned_cue_spans = [[float(c['start']), float(c['end'])] for c in all_cues if rows[c['id']]['owned']]
@@ -276,10 +388,14 @@ def plan(all_cues, captions, speech_regions, *, render_start, render_end, source
                       'speech_inside_owned_cues': merge(inside_owned + cue_inside_owned),
                       'speech_basis': 'non-owned cue spans' + (' + speech regions inside the caption, minus owned cues'
                                                                 if caption_pieces or inside_owned else '')})
-    return {'version': VERSION, 'rule': 'cue_start', 'utterance_rule': UTTERANCE_RULE, 'render_range': [rs, re_],
-            'cues': rows,
-            'owned_cue_ids': [c['id'] for c in all_cues if rows[c['id']]['owned']],
-            'items': items, 'captions': accounting}
+    result = {'version': VERSION, 'rule': 'cue_start', 'utterance_rule': UTTERANCE_RULE, 'render_range': [rs, re_],
+              'cues': rows,
+              'owned_cue_ids': [c['id'] for c in all_cues if rows[c['id']]['owned']],
+              'items': items, 'captions': accounting}
+    if adoption is not None:
+        result['orphan_adoption'] = adoption
+        result['adopted_cue_ids'] = [e['cue'] for e in adoption if e['adopted']]
+    return result
 
 
 def source_spans(take):

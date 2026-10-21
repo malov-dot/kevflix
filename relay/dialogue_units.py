@@ -90,6 +90,60 @@ def _raw_label(cue, turns):
     return ranked[0][0]
 
 
+_SENTENCE_FINAL = re.compile(r'[.!?…][\"”’\x27]*$')
+_SENTENCE_FINAL_INSIDE = re.compile(r'[.!?…][\"”’\x27]*\s+\S')
+
+
+def _sentence_final(text):
+    """True when the text ends a sentence (terminal punctuation, optionally followed by closing quotes)."""
+    return bool(_SENTENCE_FINAL.search(str(text).strip()))
+
+
+def _completes_sentence(text):
+    """True when this fragment is the tail of ONE sentence: it ends with terminal punctuation, carries none before its
+    last word, does not open a new question/exclamation (inverted mark) and does not start with a capital letter."""
+    value = str(text).strip()
+    if not value or not _sentence_final(value) or _SENTENCE_FINAL_INSIDE.search(value):
+        return False
+    if value[0] in '¿¡':
+        return False
+    first = next((ch for ch in value if ch.isalpha()), '')
+    return not first.isupper()
+
+
+_DIARIZER_LABEL = re.compile(r'SPEAKER_\d+|DIART_D\d+')       # DIART_Dnnn: film-global label from relay/diart_turns.py
+
+
+def _same_raw_speaker(left, right, turns):
+    """The raw diarization labels of both cues are equal and not None (refined labels are ignored)."""
+    label = _raw_label(left, turns)
+    return label is not None and label == _raw_label(right, turns)
+
+
+def _bare_diarizer_label(cue, turns):
+    """The cue's refined label is just its own raw diarizer label (SPEAKER_nn): the refinement found no embedding
+    identity (KNOWN::x, UTTERANCE_nn) for this fragment, so it contradicts nothing about the neighbouring cue."""
+    label = cue.get('speaker')
+    return isinstance(label, str) and bool(_DIARIZER_LABEL.fullmatch(label)) and label == _raw_label(cue, turns)
+
+
+def _dominant_refined_label(members):
+    """Label of a bridged unit: among the labels that carry embedding evidence (not a bare SPEAKER_nn) the one with the
+    most member speech, else the bare label with the most speech; earliest wins a tie. None when no member has one."""
+    weight = {}
+    for cue in members:
+        label = cue.get('speaker')
+        if label is not None:
+            a, b = _span(cue)
+            weight[label] = weight.get(label, 0.0) + (b - a)
+    pool = {k: v for k, v in weight.items() if not _DIARIZER_LABEL.fullmatch(str(k))} or weight
+    best = None
+    for label, seconds in pool.items():
+        if best is None or seconds > pool[best]:
+            best = label
+    return best
+
+
 def _safe(members, turns, merged_labels, origin, end, render_start, render_end, caption=None, raw_only=False):
     labels = {c.get('speaker') for c in members}
     # raw_only (stub joins): the diarizer's raw turn labels alone must show ONE speaker across the whole span; the
@@ -115,7 +169,7 @@ def _safe(members, turns, merged_labels, origin, end, render_start, render_end, 
     return raw_label
 
 
-def _unit(members, basis, raw_label, *, caption=None, text=None, dash_part=None, evidence=None):
+def _unit(members, basis, raw_label, *, caption=None, text=None, dash_part=None, evidence=None, speaker=None):
     ids = [c['id'] for c in members]
     ident = hashlib.sha256(json.dumps([POLICY_VERSION, ids], separators=(',', ':')).encode()).hexdigest()[:24]
     words = [{**copy.deepcopy(w), 'source_cue_id': c['id']} for c in members for w in c.get('words', [])]
@@ -125,7 +179,9 @@ def _unit(members, basis, raw_label, *, caption=None, text=None, dash_part=None,
     result = copy.deepcopy(members[0])
     for key in ('caption_fallback', 'english', 'translation', 'line_reference', 'voice_source'):
         result.pop(key, None)
-    if result.get('speaker') is None:
+    if speaker is not None:
+        result['speaker'] = speaker
+    elif result.get('speaker') is None:
         result['speaker'] = next((c['speaker'] for c in members if c.get('speaker') is not None), None)
     result.update(id=ident, start=a, end=b, speech_start=a, speech_end=b, words=words,
                   text=' '.join(c['text'].strip() for c in members).strip(),
@@ -161,6 +217,20 @@ fragment_seconds > 0 (owner decision 2026-10-19): a transcript fragment shorter 
 cannot be cloned or read back reliably on its own. It joins its same-speaker neighbour across a pause of up to
 fragment_gap seconds, even after sentence punctuation, while the unit stays within fragment_unit_seconds. Every other
 condition (one raw speaker, no unclear member, no caption, render window) is unchanged; 0 keeps the earlier rule.
+
+Fragment repairs (hotfix 2026-10-20; stubs only, so they need fragment_seconds > 0). Both apply only while the earlier cue
+is NOT sentence-final, i.e. when one sentence is demonstrably still open, and never across a raw speaker change:
+  * refined-label flip: the refined labels of the two cues differ (e.g. KNOWN::x -> SPEAKER_00 for a 0.8 s tail, where the
+    short fragment got no embedding identity and fell back to its bare raw label) but the RAW diarization labels of both
+    cues are equal and not None, and at least one side is only its own bare SPEAKER_nn label. That is no speaker change;
+    the whole span must still show one raw speaker (_safe raw_only). Two cues that BOTH carry an identity (KNOWN::a vs
+    KNOWN::b, UTTERANCE_01 vs UTTERANCE_07, ...) keep the conflict. The unit takes the label that has embedding evidence
+    and records every bridged label in evidence['refined_labels_bridged'].
+  * completing tail: the later cue is the tail of ONE sentence (ends with terminal punctuation, none before its last
+    word, no leading inverted mark or capital letter). It then joins across a silent hole up to fragment_unit_seconds
+    (a Whisper word-time hole inside one segment: 'Como' ... 'la encuentra?') and the unit may reach 12 s, the same
+    ceiling as an ordinary multi-cue unit. Cue data carries no Whisper segment id, so this text shape plus one raw
+    speaker over the whole span stands in for 'same segment'. Joins across sentence-final punctuation keep the 6 s cap.
 """
     raw = sorted(copy.deepcopy(list(cues)), key=lambda c: (float(c['start']), float(c['end']), c['id']))
     by_caption = {}
@@ -245,29 +315,46 @@ condition (one raw speaker, no unclear member, no caption, render window) is unc
             index += 1
             continue
         indices = [index]
-        joined_stub = False
+        joined_stub = bridged = False
         while indices[-1] + 1 < len(raw):
             previous, following = raw[indices[-1]], raw[indices[-1] + 1]
             stub = fragment_seconds > 0 and min(_span(previous)[1] - _span(previous)[0],
                                                 _span(following)[1] - _span(following)[0]) < fragment_seconds
-            conflict = following.get('speaker') != previous.get('speaker') and not (
-                stub and (following.get('speaker') is None or previous.get('speaker') is None))
+            unresolved = following.get('speaker') is None or previous.get('speaker') is None
+            open_head = stub and not _sentence_final(previous['text'])
+            # A refined-label flip inside a sentence that is still open is no speaker change when the RAW diarization
+            # labels of both cues are equal; _safe(raw_only) below still checks one raw speaker over the whole span.
+            bridge = (open_head and not unresolved and following.get('speaker') != previous.get('speaker')
+                      and _same_raw_speaker(previous, following, turns)
+                      and (_bare_diarizer_label(previous, turns) or _bare_diarizer_label(following, turns)))
+            conflict = following.get('speaker') != previous.get('speaker') and not (stub and unresolved) and not bridge
+            # The later cue completes the open sentence: it may follow a longer silent hole and the unit may use the
+            # ordinary 12 s ceiling instead of the stub ceiling.
+            completes = open_head and _completes_sentence(following['text'])
+            gap_limit = (max(fragment_gap, fragment_unit_seconds) if completes else fragment_gap) if stub else .6
+            span_limit = (12 if completes else fragment_unit_seconds) if stub else 12
             if (_caption_key(following) is not None or conflict
                     or following.get('unclear') or previous.get('unclear')
                     or (not stub and re.search(r'[.!?…][\"\u201d\u2019\x27]*$', previous['text'].strip()))
-                    or float(following['start']) - float(previous['end']) > (fragment_gap if stub else .6)
-                    or float(following['end']) - float(raw[index]['start']) > (fragment_unit_seconds if stub else 12)):
+                    or float(following['start']) - float(previous['end']) > gap_limit
+                    or float(following['end']) - float(raw[index]['start']) > span_limit):
                 break
             candidate = [raw[i] for i in indices + [indices[-1] + 1]]
             if _safe(candidate, turns, merged_labels, origin, end, render_start, render_end, raw_only=stub) is None:
                 break
             indices.append(indices[-1] + 1)
             joined_stub = joined_stub or stub
+            bridged = bridged or bridge
         members = [raw[i] for i in indices]
         label = _safe(members, turns, merged_labels, origin, end, render_start, render_end, raw_only=joined_stub)
         if (label is not None and not any(c.get('unclear') for c in members)
                 and float(members[-1]['end']) - float(members[0]['start']) <= 12):
-            commit(indices, _unit(members, 'transcript-utterance', label))
+            if bridged:
+                refined = sorted({c['speaker'] for c in members if c.get('speaker') is not None})
+                commit(indices, _unit(members, 'transcript-utterance', label, speaker=_dominant_refined_label(members),
+                                      evidence={'refined_labels_bridged': refined}))
+            else:
+                commit(indices, _unit(members, 'transcript-utterance', label))
         index = indices[-1] + 1
     units = [replacements.get(i, cue) for i, cue in enumerate(raw) if i not in consumed]
     remapped = []
@@ -294,7 +381,7 @@ def voice_mode(label, bind_evidence, merged_labels, *, cue_seconds=None, prefer_
     Owner decision 2026-10-19: a line long enough to be its own reference (cue_seconds >= prefer_own_seconds) is cloned
     from ITS OWN audio, so a quiet line is dubbed quiet and a shouted line is dubbed from shouting. Shorter lines keep
     the frozen per-speaker bank reference. Default (prefer_own_seconds None) is the unchanged bank-first rule."""
-    if prefer_own_seconds is not None and cue_seconds is not None and cue_seconds >= prefer_own_seconds:
+    if prefer_own_seconds is not None and (prefer_own_seconds <= 0 if cue_seconds is None else cue_seconds >= prefer_own_seconds):   # 0.0 = owner rule 2026-10-20: every line is its own clone
         return 'line-own'
     decision = (bind_evidence or {}).get(label) or {}
     if (label not in merged_labels and decision.get('decision')

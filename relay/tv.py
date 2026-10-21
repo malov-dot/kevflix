@@ -939,12 +939,15 @@ class TVService:
         return None
 
     def _loudness_cfg(self, value):
-        """tv.loudness for this playback: a 5.1 stream is measured in 5.1 (BS.1770 channel weights, LFE excluded), a stereo one
-        in the downmix the dub is built from."""
+        """tv.loudness for this playback. A 5.1 stream is set by its DIALOGUE: the center channel alone is measured (EBU R 128 s4) and the
+        film's gain brings it to tv.loudness.dialogue_lufs (default -22 LUFS), so a film whose dialogue is quiet and one whose dialogue is
+        loud are heard at the same spoken volume. A whole-film target (-14) left the dialogue of one measured film at -17.6 LUFS, far too
+        loud, while another film needed that much. A stereo stream keeps the whole-film target, measured on the downmix the dub is built
+        from."""
         from . import loudness_job as _lj
         cfg = _lj.settings(self.config["tv"]["loudness"])
         if self._surround_stream(value) is not None:
-            cfg = {**cfg, "layout": "native"}
+            cfg = {**cfg, "layout": "center", "target_lufs": cfg["dialogue_lufs"]}
         return cfg
 
     def _surround_mix(self, audio, audio_hash):

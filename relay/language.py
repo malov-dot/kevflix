@@ -156,6 +156,12 @@ QWEN3_PROMPT_TEMPLATE = ('Translate this {language} sentence into natural, accur
 QWEN3_CONCISE_TEMPLATE = ('Translate this {language} sentence into natural English that is short enough to be spoken aloud '
                           'quickly: use at most {words} words. Keep the core meaning, including negation and numbers, and '
                           'drop less important detail if needed. Output only the English translation.\n\n{text}')
+# Optional lever (actor_beta.fuller_retranslation, default off): a line whose English is far shorter than the slot the original
+# speaker occupied is translated again with a MINIMUM word budget. Only a row that carries min_words uses this prompt.
+QWEN3_FULLER_TEMPLATE = ('Translate this {language} sentence into natural English using at least {words} words, with fuller '
+                         'natural phrasing (complete forms instead of terse shortcuts) so that it takes about as long to say as '
+                         'the original. Keep exactly the same meaning, including negation and numbers, and add no new information, '
+                         'names or details. Output only the English translation.\n\n{text}')
 QWEN3_MAX_WORDS = 60
 QWEN3_MAX_NEW_TOKENS = 160
 QWEN3_MAX_BATCH = 16                      # rows per left-padded generate() call
@@ -233,10 +239,13 @@ def row_max_words(value):
     return value
 
 
-def qwen3_prompt(text, language, max_words=None):
-    """The exact user message of the approved demo prompt (max_words: the concise variant for one over-long line)."""
+def qwen3_prompt(text, language, max_words=None, min_words=None):
+    """The exact user message of the approved demo prompt (max_words: the concise variant for one over-long line; min_words, when
+    there is no max_words: the fuller variant for one far-too-short line)."""
     if row_max_words(max_words) is not None:
         return QWEN3_CONCISE_TEMPLATE.format(language=qwen3_language_name(language), words=max_words, text=text)
+    if row_max_words(min_words) is not None:
+        return QWEN3_FULLER_TEMPLATE.format(language=qwen3_language_name(language), words=min_words, text=text)
     return QWEN3_PROMPT_TEMPLATE.format(language=qwen3_language_name(language), text=text)
 
 
@@ -816,22 +825,23 @@ class Qwen3Translator:
         return None
 
     def translate_batch(self, rows):
-        """rows: [(text, iso_language_code) | (text, iso_language_code, max_words)] -> aligned list of (english, basis) | MovieFault."""
+        """rows: [(text, iso_language_code[, max_words[, min_words]])] -> aligned list of (english, basis) | MovieFault."""
         results, work = [None] * len(rows), {}
         for index, row in enumerate(rows):
             text, code = str(row[0]), iso(row[1])
             words = row_max_words(row[2]) if len(row) > 2 else None
+            fuller = row_max_words(row[3]) if len(row) > 3 else None       # same 1..60 range as a maximum
             early = self._precheck(text, code)
             if early is not None:
                 results[index] = early
             else:
-                work.setdefault((text, code, words), []).append(index)
+                work.setdefault((text, code, words, fuller), []).append(index)
         if not work:
             return results
         with self._lock:
             self.load()
             sized = []
-            for (text, code, words), indices in work.items():
+            for (text, code, words, fuller), indices in work.items():
                 try:
                     tokens = len(self.tokenizer(text, add_special_tokens=False)['input_ids'])
                 except Exception as error:
@@ -841,12 +851,12 @@ class Qwen3Translator:
                     self._settle(results, indices, MovieContentFallback('translation_input_too_long',
                                                                         'Dialogue is too long for one translation'))
                 else:
-                    sized.append((tokens, text, code, words, indices))
+                    sized.append((tokens, text, code, words, fuller, indices))
             sized.sort(key=lambda item: item[0])         # similar lengths share a batch: less padding
             for start in range(0, len(sized), QWEN3_MAX_BATCH):
                 chunk = sized[start:start + QWEN3_MAX_BATCH]
-                outcomes = self._run([(text, code, words) for _, text, code, words, _ in chunk])
-                for (_, _, _, _, indices), outcome in zip(chunk, outcomes):
+                outcomes = self._run([(text, code, words, fuller) for _, text, code, words, fuller, _ in chunk])
+                for (_, _, _, _, _, indices), outcome in zip(chunk, outcomes):
                     self._settle(results, indices, outcome)
         return results
 
@@ -871,9 +881,9 @@ class Qwen3Translator:
     def _generate(self, items):
         import torch
         tokenizer, model = self.tokenizer, self.model
-        prompts = [tokenizer.apply_chat_template([{'role': 'user', 'content': qwen3_prompt(text, code, words)}], tokenize=False,
+        prompts = [tokenizer.apply_chat_template([{'role': 'user', 'content': qwen3_prompt(text, code, words, *rest)}], tokenize=False,
                                                  add_generation_prompt=True, enable_thinking=False)
-                   for text, code, words in items]
+                   for text, code, words, *rest in items]          # rest: the optional minimum word budget (fuller variant)
         encoded = tokenizer(prompts, return_tensors='pt', padding=True).to(self.device_name)
         with torch.no_grad():
             generated = model.generate(**encoded, max_new_tokens=QWEN3_MAX_NEW_TOKENS, do_sample=False)
@@ -918,6 +928,18 @@ def _batch_max_words(row):
     if isinstance(row, dict):
         return row_max_words(row.get('max_words'))
     return row_max_words(row[2]) if isinstance(row, (list, tuple)) and len(row) == 3 else None
+
+
+def _batch_min_words(row):
+    """The optional MINIMUM word budget of a batch row ({'min_words'} only; fuller retranslation), validated; None otherwise."""
+    return row_max_words(row.get('min_words')) if isinstance(row, dict) else None
+
+
+def _qwen3_row(text, language, words, fuller):
+    """One Qwen3 row: the 2- or 3-item row of before, plus the minimum budget as a fourth item only when there is one."""
+    if fuller:
+        return (text, language, words or None, fuller)
+    return (text, language) + ((words,) if words else ())
 
 
 class LanguageTools:
@@ -1168,9 +1190,9 @@ class LanguageTools:
             return self.qwen3
 
     def _qwen3_translate(self, rows):
-        """Qwen3 rows [(text, language[, max_words])] -> aligned [(english, basis) | MovieFault]; load failures raise."""
+        """Qwen3 rows [(text, language[, max_words[, min_words]])] -> aligned [(english, basis) | MovieFault]; load failures raise."""
         translator = self._qwen3_translator()
-        results = translator.translate_batch([(row[0], iso(row[1])) + tuple(row[2:3]) for row in rows])
+        results = translator.translate_batch([(row[0], iso(row[1])) + tuple(row[2:4]) for row in rows])
         if translator.model is not None and self.translator is None:
             self.translator = translator               # device_report() shows the loaded Qwen3 model
             self.translation_state = dict(translator.state or {})
@@ -1198,16 +1220,16 @@ class LanguageTools:
             elif not code or code in ('und', 'unknown'):
                 results[index] = MovieContentFallback('source_language_unresolved', 'The source language has not been resolved')
             else:
-                pending.append((index, text, language, _batch_max_words(row)))
+                pending.append((index, text, language, _batch_max_words(row), _batch_min_words(row)))
         if not pending:
             return results
         if self.translation_engine() == 'qwen3':
-            outcomes = self._qwen3_translate([(text, language) + ((words,) if words else ())
-                                              for _, text, language, words in pending])
-            for (index, _, _, _), outcome in zip(pending, outcomes):
+            outcomes = self._qwen3_translate([_qwen3_row(text, language, words, fuller)
+                                              for _, text, language, words, fuller in pending])
+            for (index, _, _, _, _), outcome in zip(pending, outcomes):
                 results[index] = outcome
         else:
-            for index, text, language, _ in pending:
+            for index, text, language, _, _ in pending:
                 try:
                     results[index] = self.english(text, language)
                 except MovieContentFallback as error:

@@ -1146,7 +1146,8 @@ class LanguageClient(_Client):
         for row in rows:
             if isinstance(row, dict):
                 payload.append({'text': row.get('text'), 'language': row.get('language'),
-                                **({'max_words': row['max_words']} if row.get('max_words') is not None else {})})
+                                **({'max_words': row['max_words']} if row.get('max_words') is not None else {}),
+                                **({'min_words': row['min_words']} if row.get('min_words') is not None else {})})
             elif isinstance(row, (list, tuple)) and len(row) in (2, 3):
                 payload.append({'text': row[0], 'language': row[1], **({'max_words': row[2]} if len(row) == 3 else {})})
             else:
@@ -1179,8 +1180,11 @@ class LanguageClient(_Client):
 class SpeakerClient(_Client):
     """SpeakerAnalyzer call signatures and return shapes, served by the lease-owned worker."""
 
-    def analyze(self, wav, offset=0.0):
-        turns, aligned, vectors = self._call('analyze', {'wav': _FileArg(wav), 'offset': float(offset)})
+    def analyze(self, wav, offset=0.0, source_fingerprint=None):
+        args = {'wav': _FileArg(wav), 'offset': float(offset)}
+        if source_fingerprint:                       # only sent when actor_beta.diart_turns is effective
+            args['source_fingerprint'] = str(source_fingerprint)
+        turns, aligned, vectors = self._call('analyze', args)
         return list(turns), list(aligned), dict(vectors)
 
     def embed(self, waveform):

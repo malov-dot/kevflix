@@ -13,7 +13,6 @@ relay/app_runtime/guard-status-read-v1/tolerant_status.py -text
 relay/app_runtime/lease/lease_client.py -text
 relay/beta_stable_gate.py -text
 relay/demucs_bed.py -text
-relay/original_audio_policy.py -text
 relay/resource_budget.py -text
 relay/short_utterance_policy.py -text
 relay/xt_services.py -text

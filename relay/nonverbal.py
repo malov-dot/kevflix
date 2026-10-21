@@ -12,7 +12,7 @@ a wrongly kept REAL SPEECH line is the worse outcome for the viewer, so every ru
 Public API
   nonverbal_text_reason(text)                     -> reason | None   (text only; ru / es / fr / en forms)
   nonverbal_audio_reason(features, events, ...)   -> reason | None   (acoustic + classifier rules)
-  translation_artifact_reason(english, source)    -> reason | None   (translator meta text / transliteration spoken as English)
+  translation_artifact_reason(english, source)    -> reason | None   (translator meta text / transliteration / source-language text left in the English)
   nonverbal_reason(text, features, events, ...)   -> reason | None   (text first, then audio)
   audio_features(samples, rate)                   -> dict | None     (optional extra features; needs numpy)
 
@@ -328,10 +328,106 @@ _TR = dict(zip('абвгдеёжзийклмнопрстуфхцчшщъыьэю
                                                     'r', 's', 't', 'u', 'f', 'kh', 'ts', 'ch', 'sh', 'shch', '', 'y', '', 'e', 'yu', 'ya']))
 
 
+# --- source-language text left in the English answer (any Latin-script source: es, fr, pt, de, it ...) ----------------------
+# Seen in a measured Spanish film (es): source "los hombres solo se hablaba de miedo a la muerte y al dolor pero nunca de la promesa de la
+# inmortalidad y" came back as "menos aun de la promesa de la inmortalidad." and the English voice then spoke Spanish words.
+# Cheap deterministic rules, all conservative (a flagged line is re-asked once and, if still flagged, keeps its original audio, so a
+# false alarm costs a dubbed line): names (capitalised words), cognates and short answers ("Mercedes.", "Captain!") are never flagged.
+_UNTRANSLATED_MIN_TOKENS = 4          # rules (b) and (d) need this many non-name English words; (b) as many source-language ones
+_UNTRANSLATED_RATIO = 0.7             # (b): share of those words that are source words
+_WORD = re.compile(r"[^\W\d_]+(?:['\u2019][^\W\d_]+)*")
+_SENTENCE_END = re.compile(r'[.!?\u2026\n]')
+# English loanwords that carry a diacritic and are fine to speak (accent-folded; a trailing plural "s" is ignored)
+_EN_ACCENTED_LOANS = frozenset((
+    'cafe', 'fiance', 'fiancee', 'naive', 'naivete', 'resume', 'deja', 'touche', 'protege', 'melee', 'cliche', 'facade', 'jalapeno',
+    'pinata', 'senor', 'senora', 'senorita', 'creme', 'brulee', 'entree', 'puree', 'soiree', 'matinee', 'decor', 'ole', 'nee',
+    'canape', 'saute', 'flambe', 'pate', 'role', 'garcon', 'gruyere', 'mate', 'uber', 'fuhrer', 'doner', 'eclair', 'bouquet',
+    'rose', 'premiere', 'communique', 'expose', 'attache', 'blase', 'divorcee', 'elan', 'etude', 'genre', 'regime', 'risque'))
+
+
+def _word_records(text):
+    """[(raw word, accent-folded word, starts a sentence)] for the letter words of `text` (inner apostrophes kept)."""
+    records = []
+    previous_end = 0
+    for match in _WORD.finditer(text):
+        gap = text[previous_end:match.start()]
+        records.append((match.group(0), _fold(match.group(0)), previous_end == 0 or bool(_SENTENCE_END.search(gap))))
+        previous_end = match.end()
+    return records
+
+
+def _capitalised(raw):
+    return raw[:1].isupper() and not (len(raw) > 1 and raw.isupper())
+
+
+def _shouting(records):
+    """An all-capitals line gives no case evidence, so nothing in it counts as a name."""
+    return len(records) >= 2 and all(raw.isupper() for raw, _folded, _start in records if len(raw) > 1)
+
+
+def _is_name(raw, folded, starts_sentence, shouting, source_caps):
+    """A capitalised word inside a sentence is a name, and so is a sentence-initial one that the source also capitalises."""
+    if shouting or not _capitalised(raw):
+        return False
+    return not starts_sentence or folded in source_caps
+
+
+def _has_foreign_letter(raw):
+    return any(not ch.isascii() and ch.isalpha() and unicodedata.name(ch, '').startswith('LATIN') for ch in raw)
+
+
+def _untranslated_source_text(english, source):
+    english_words = _word_records(english)
+    if not english_words:
+        return False
+    # (a) characters that English text does not have: the Spanish inverted ? and ! (U+00BF, U+00A1), and a lowercase word with a
+    # diacritic that is not an English loanword (a-acute n, e-acute in "que", u-acute in "residito"). Capitalised words are names
+    # (Pena with n-tilde, Jose with e-acute) and stay.
+    if '\u00bf' in english or '\u00a1' in english:
+        return True
+    for raw, folded, _start in english_words:
+        if raw[:1].islower() and _has_foreign_letter(raw) and folded not in _EN_ACCENTED_LOANS and folded.rstrip('s') not in _EN_ACCENTED_LOANS:
+            return True
+    if not isinstance(source, str):
+        return False
+    source_words = _word_records(source)
+    if not source_words:
+        return False
+    english_plain = [folded for _raw, folded, _start in english_words]
+    source_plain = [folded for _raw, folded, _start in source_words]
+    if english_plain == source_plain:
+        return False                       # the whole line is the source unchanged: the pipeline's already_english check owns that
+    source_set = set(source_plain)
+    source_caps = set() if _shouting(source_words) else {folded for raw, folded, _start in source_words if _capitalised(raw)}
+    shouting = _shouting(english_words)
+    names = [_is_name(raw, folded, start, shouting, source_caps) for raw, folded, start in english_words]
+    plain_tokens = [folded for folded, name in zip(english_plain, names) if not name]            # the English words that are not names
+    # (c) the English is a run of the source (its tail or any part of it): at least 3 words of which 2 differ, none of them names.
+    # Not when the run is itself recognisable English: a source that mixes languages ("Смотрите, at least hold the rope for me.")
+    # legitimately keeps its English part.
+    count = len(english_plain)
+    english_hits = sum(1 for folded in english_plain if folded in _EN_WORDS)
+    looks_english = english_hits >= 2 and english_hits / count >= 0.4
+    if len(plain_tokens) >= 3 and len(set(plain_tokens)) >= 2 and not looks_english:
+        if any(source_plain[i:i + count] == english_plain for i in range(len(source_plain) - count + 1)):
+            return True
+    # (b) and (d) count the English words (names left out) that are source words and not English: "de la promesa de la inmortalidad"
+    foreign = [folded for folded in plain_tokens if folded in source_set and folded not in _EN_WORDS]
+    if len(plain_tokens) < _UNTRANSLATED_MIN_TOKENS or len(set(foreign)) < 2:
+        return False
+    share = len(foreign) / len(plain_tokens)
+    if len(foreign) >= _UNTRANSLATED_MIN_TOKENS and len(set(foreign)) >= 3 and share >= _UNTRANSLATED_RATIO:
+        return True
+    return len(source_plain) >= 8 and count < len(source_plain) / 2 and share >= 0.5 and not looks_english
+
+
 def translation_artifact_reason(english, source=None):
     """'translator_meta_text' when the English that would be spoken is the model's commentary ("In the Russian sentence
     provided, there is no actual sentence to translate"), 'transliteration_not_translation' when it is the Russian source
-    spelled in Latin letters ("Zhuchen', ya khochu znat'."). None otherwise. Seen 4 + 2 times in the 1048 dubbed lines."""
+    spelled in Latin letters ("Zhuchen', ya khochu znat'."), 'untranslated_source_text' when the answer is (partly) still the
+    source language ("menos aun de la promesa de la inmortalidad." for a 22-word Spanish line: source-only characters, mostly
+    source words, a piece of the source copied, or a short answer made of source words). None otherwise. Seen 4 + 2 times in the
+    1048 dubbed lines, and 3 times in the 89 chunks of a measured Spanish film."""
     try:
         if not isinstance(english, str):
             return None
@@ -347,6 +443,8 @@ def translation_artifact_reason(english, source=None):
                 import difflib
                 if difflib.SequenceMatcher(None, src, eng).ratio() >= 0.8:
                     return 'transliteration_not_translation'
+        if _untranslated_source_text(english, source if isinstance(source, str) else None):
+            return 'untranslated_source_text'
         return None
     except Exception:
         return None

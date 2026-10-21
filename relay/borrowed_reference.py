@@ -15,8 +15,89 @@ A borrow is admitted only when all of these hold (anything else keeps the review
 """
 from __future__ import annotations
 
+import math
+
 REFUSAL = 'line reference belongs to another cue'
 MODE = 'borrowed-reference'
+
+# Donor choice (who lends a reference to a refused line). choose_reference_donors below replaces the ranking of
+# actor_pipeline.choose_reference_donors (same arguments, same pick format, additive fields only).
+DONOR_MAX_GAP_SECONDS = 36.0       # same value as actor_pipeline.REFERENCE_DONOR_MAX_GAP_SECONDS
+DONOR_PITCH_SEMITONES = 5.0        # same value as actor_pipeline.REFERENCE_DONOR_PITCH_SEMITONES
+DONOR_ADJACENT_SECONDS = 2.0       # a donor this close (or closer) to the borrowing line counts as adjacent in time
+PREFERENCE_VERSION = 'borrow-preference-v1'
+
+
+def _refined_label(cue):
+    """The cue's utterance-refined window speaker label (cue['local_speaker']), None when it has none."""
+    label = cue.get('local_speaker')
+    return label if isinstance(label, str) and label.strip() else None
+
+
+def _dominant_raw_label(cue, speech_regions):
+    from .actor_pipeline import dominant_reference_label
+    try:
+        return dominant_reference_label(cue, speech_regions)
+    except ValueError:
+        return None
+
+
+def choose_reference_donors(cues, refused_ids, usable, speech_regions, *, max_gap=DONOR_MAX_GAP_SECONDS, raw_label=None,
+                            strict=False):
+    """Who lends a reference to each refused (too short, overlapped, no embedding) line of this window. Every refused line
+    that has ANY usable donor within max_gap gets one (owner rule: every line is dubbed); a refused line with none is absent
+    and keeps its original audio. Returns {cue_id: {'donor', 'same_raw_label', 'gap_seconds', 'pitch_mismatch'} + additive
+    'label_relation', 'adjacent', 'borrower_local_speaker', 'donor_local_speaker', 'preference'}.
+
+    Ranking, first difference wins (usable(cue) -> bool says which cues own an admitted voice):
+      1. never a donor whose refined speaker label CONTRADICTS the borrower's (both known and different) while any other
+         donor exists; a lone contradicting donor is still used (label_relation 'contradicts' in the pick),
+      2. a donor whose median pitch is within DONOR_PITCH_SEMITONES of the line's (when both are known),
+      3. a donor with the borrower's speaker label (equal refined label; with an unknown label on either side, the same
+         dominant raw diarization label) who is also adjacent in time (gap <= DONOR_ADJACENT_SECONDS),
+      4. any donor with an equal refined label, 5. the same dominant raw label, 6. the nearest in time, 7. the longer cue.
+    ``raw_label(cue, speech_regions) -> label|None`` defaults to actor_pipeline.dominant_reference_label.
+
+    strict=True (owner rule 2026-10-20: every line owns its clone; a borrow is the LAST resort and never a guessed voice):
+    only a PURE donor qualifies - the same dominant raw diarization label as the borrower (an unknown label on either side
+    is not a match), a refined speaker label that does not contradict the borrower's, and a median pitch that is not far
+    from the borrower's. With no pure donor the line is absent from the result and keeps its original audio."""
+    label_of = raw_label or _dominant_raw_label
+
+    def span(cue):
+        return float(cue.get('speech_start') or cue['start']), float(cue.get('speech_end') or cue['end'])
+    donors = [c for c in cues if c['id'] not in refused_ids and not (c.get('overlapped') or c.get('turn_overlap') is True)
+              and usable(c)]
+    picks = {}
+    for cue in cues:
+        if cue['id'] not in refused_ids:
+            continue
+        mine, mine_refined = label_of(cue, speech_regions), _refined_label(cue)
+        begin, stop = span(cue)
+        ranked = []
+        for donor in donors:
+            x, y = span(donor)
+            gap = max(0., x - stop, begin - y)
+            if gap > max_gap:
+                continue
+            same = mine is not None and label_of(donor, speech_regions) == mine
+            theirs = _refined_label(donor)
+            relation = 'unknown' if mine_refined is None or theirs is None else 'same' if mine_refined == theirs else 'contradicts'
+            adjacent = gap <= DONOR_ADJACENT_SECONDS
+            f1, f2 = cue.get('f0_median_hz'), donor.get('f0_median_hz')
+            far = bool(f1 and f2 and abs(12 * math.log2(float(f1) / float(f2))) > DONOR_PITCH_SEMITONES)
+            if strict and (not same or relation == 'contradicts' or far):
+                continue
+            preferred = adjacent and (relation == 'same' or (relation == 'unknown' and same))
+            key = (1 if relation == 'contradicts' else 0, 1 if far else 0, 0 if preferred else 1,
+                   0 if relation == 'same' else 1, 0 if same else 1, round(gap, 6), -(y - x), donor['id'])
+            ranked.append((key, same, gap, far, relation, adjacent, theirs, donor))
+        if ranked:
+            key, same, gap, far, relation, adjacent, theirs, donor = min(ranked, key=lambda item: item[0])
+            picks[cue['id']] = {'donor': donor, 'same_raw_label': same, 'gap_seconds': round(gap, 3), 'pitch_mismatch': bool(far),
+                                'label_relation': relation, 'adjacent': adjacent, 'borrower_local_speaker': mine_refined,
+                                'donor_local_speaker': theirs, 'preference': PREFERENCE_VERSION, 'strict': bool(strict)}
+    return picks
 
 
 def borrowed_voice(cue, voices, all_cues):
