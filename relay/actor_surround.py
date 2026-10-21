@@ -4,10 +4,10 @@ English voice placed where that speech was.
 The dub itself is built in stereo (the first pass works on the ITU downmix of the 5.1 original, relay/demucs_bed.py ``itu_stereo``:
 .414 L + .293 C + .293 SL, no LFE) and the film's own 5.1 is kept next to it (``original-layout.wav``). For a surround dub:
 
-1. The speech inside each of the five full-range channels (FL FR FC SL SR) is estimated by projecting that channel on the speech
-   estimate the stereo mix already subtracts (the removal stem): per replaced line, per frequency bin, a small ridge regression of the
-   channel on the stem's left and right. Only the part of a channel that is coherent with the speech is taken, so music, effects and
-   ambience in the same channel are left alone, and the estimate can never be louder than the channel itself.
+1. The speech inside each of the five full-range channels (FL FR FC SL SR) is estimated with the SAME vocal mask the stereo mix uses:
+   the removal stem relative to the ITU downmix, per time-frequency cell. Applying it to every channel removes the original-language
+   speech from the front, the center and the rear channels alike (a regression on the stem missed it in FL, FR and both rears, where
+   the dialogue's reverb and echo live, and the Russian stayed audible).
 2. The English voice goes into the CENTER channel only (film dialogue lives there; copies in FL/FR/surrounds sounded like an echo), at the
    level that makes the ITU downmix of the 5.1 result carry the same voice as the stereo mix.
 3. Both steps go through the same ``protect_dialogue_mix`` as the stereo mix (same envelope, same protected original spans, same
@@ -34,14 +34,9 @@ _NORM = 1 + 2 * _SIDE
 DOWNMIX_L = (1 / _NORM, 0.0, _SIDE / _NORM, _SIDE / _NORM, 0.0)       # FL FR FC SL SR
 DOWNMIX_R = (0.0, 1 / _NORM, _SIDE / _NORM, 0.0, _SIDE / _NORM)
 NPERSEG, NOVERLAP = 2048, 1536
-RIDGE = 1e-3                                  # regression regularisation, relative to the stem's energy in that bin
-SMOOTH_BINS = 3                               # the normal equations are averaged over +-3 neighbouring bins
 GROUP_GAP_SECONDS = 0.1                       # replaced runs closer than this share one set of weights
 MAX_GROUP_SECONDS = 4.0                       # a longer run is split where the replacement envelope is lowest (one speaker's position per set)
 MIN_GROUP_SECONDS = 0.02
-CHANNEL_GATE = 0.5                            # a channel takes part (speech removed, English voice added) only if its speech is at least 50 %
-                                              # (-6 dB) of the loudest channel's; weaker coherence with the stem is its music leaking into the
-                                              # stem, and a channel that has no speech keeps its audio exactly
 
 
 def enabled(config):
@@ -89,90 +84,48 @@ def _istft(z, rate, length):
     return out if len(out) == length else __import__('numpy').pad(out, (0, length - len(out)))
 
 
-def _smooth(a, bins):
-    """Moving average along the frequency axis (axis 0) of a (freq, ...) array."""
+def processing_stereo(source51):
+    """The ITU stereo downmix the first pass works on (no LFE): L = .414 FL + .293 FC + .293 SL, R = .414 FR + .293 FC + .293 SR. The removal
+    stem of the stereo mix was made from exactly this signal."""
     import numpy as np
-    if bins <= 0:
-        return a
-    kernel = np.ones(2 * bins + 1) / (2 * bins + 1)
-    padded = np.pad(a, [(bins, bins)] + [(0, 0)] * (a.ndim - 1), mode='edge')
-    out = np.zeros_like(a)
-    for i, k in enumerate(kernel):
-        out += k * padded[i:i + a.shape[0]]
-    return out
+    x = np.asarray(source51, dtype=np.float64)[:, list(FULL_RANGE)]
+    return np.stack([x @ np.asarray(DOWNMIX_L), x @ np.asarray(DOWNMIX_R)], axis=1)
 
 
-def speech_in_channel(channel, stem, rate):
-    """The part of ``channel`` (n,) that is coherent with the speech stem ``stem`` (n, 2), same length. Per frequency bin, ridge
-    regression of the channel on the stem's left and right over every time frame of the segment; the estimate is capped at the
-    channel's own magnitude per time-frequency cell."""
+def vocal_mask(processing, stem, rate):
+    """(freq, frames) soft mask in [0, 1]: how much of each time-frequency cell of the stereo downmix is the speech the stereo mix removes
+    (the removal stem relative to the downmix). The stereo dub is clean with this stem; the same mask is applied to every channel of the
+    5.1, so the original-language speech goes from the front, the center AND the rear channels (its reverb and echo included), not only from
+    the channels where a regression happened to find it. (Measured on a real dubbed chunk: before, speech recognition heard the Russian
+    prayer clearly in FL, FR, BL and BR of the published mix; with the mask it hears nothing in any channel.)"""
     import numpy as np
-    length = len(channel)
-    x = _stft(channel.astype(np.float64), rate)
+    xl, xr = _stft(processing[:, 0], rate), _stft(processing[:, 1], rate)
     sl, sr = _stft(stem[:, 0].astype(np.float64), rate), _stft(stem[:, 1].astype(np.float64), rate)
-    # Normal equations per bin: [[<sl,sl> <sl,sr>] [<sr,sl> <sr,sr>]] [a b]^T = [<sl,x> <sr,x>]^T (sums over time frames).
-    ll = np.sum(np.abs(sl) ** 2, axis=1)
-    rr = np.sum(np.abs(sr) ** 2, axis=1)
-    lr = np.sum(np.conj(sl) * sr, axis=1)
-    lx = np.sum(np.conj(sl) * x, axis=1)
-    rx = np.sum(np.conj(sr) * x, axis=1)
-    ll, rr, lr, lx, rx = (_smooth(v, SMOOTH_BINS) for v in (ll, rr, lr, lx, rx))
-    ridge = RIDGE * (ll + rr) + 1e-18
-    det = (ll + ridge) * (rr + ridge) - np.abs(lr) ** 2
-    det = np.where(np.abs(det) < 1e-30, 1e-30, det)
-    a = ((rr + ridge) * lx - lr * rx) / det
-    b = ((ll + ridge) * rx - np.conj(lr) * lx) / det
-    estimate = a[:, None] * sl + b[:, None] * sr
-    magnitude, limit = np.abs(estimate), np.abs(x)
-    scale = np.where(magnitude > limit, limit / np.maximum(magnitude, 1e-30), 1.0)
-    return _istft(estimate * scale, rate, length)
+    return np.clip((np.abs(sl) + np.abs(sr)) / (np.abs(xl) + np.abs(xr) + 1e-9), 0.0, 1.0)
 
 
-def _downmix_matrix():
+def speech_in_channel(channel, mask, rate):
+    """The original speech in one channel (n,): the channel's own spectrum times the vocal mask."""
     import numpy as np
-    return np.array([DOWNMIX_L, DOWNMIX_R], dtype=np.float64)                 # (2, 5) over FL FR FC SL SR
-
-
-def reconcile(speech5, stem, weights):
-    """Make the ITU downmix of the five speech estimates equal the stereo removal stem exactly, so the surround dub removes what the
-    stereo dub removes. The difference is handed back to the channels in proportion to ``weights`` (their speech energy), through
-    the weighted pseudo-inverse of the downmix: a channel without speech receives nothing."""
-    import numpy as np
-    d = _downmix_matrix()
-    w = np.asarray(weights, dtype=np.float64)
-    gram = (d * w) @ d.T                                                      # D W D^T (2, 2)
-    gram = gram + np.eye(2) * (1e-3 * max(np.trace(gram), 1e-12))
-    residual = stem.astype(np.float64) - speech5.astype(np.float64) @ d.T     # (n, 2)
-    share = residual @ np.linalg.inv(gram)                                    # (n, 2)
-    return speech5 + ((share @ d) * w).astype(np.float32)
+    return _istft(_stft(np.asarray(channel, dtype=np.float64), rate) * mask, rate, len(channel))
 
 
 def speech_components(source51, stem, envelope, rate):
     """(n, 6) speech estimate of the original 5.1 (zero in the LFE and outside the replaced runs).
     source51: (n, 6) float32, stem: (n, 2) float32 removal stem of the stereo mix, envelope: (n,) replacement envelope.
-    Per replaced run: the speech coherent with the stem in each channel; channels whose speech is far below the loudest one's are
-    treated as having none (their music and effects stay untouched); then the estimates are reconciled to the stem."""
+    Per replaced run, every full-range channel gets the same vocal mask (see vocal_mask); what the mask does not touch (music, effects,
+    ambience that is not speech-like) stays, and the LFE is never touched."""
     import numpy as np
     n = len(source51)
     out = np.zeros((n, 6), dtype=np.float32)
     margin = NPERSEG * 2
     for first, last in replaced_groups(envelope, rate):
         a, b = max(0, first - margin), min(n, last + margin)
-        parts = np.stack([speech_in_channel(source51[a:b, channel], stem[a:b], rate) for channel in FULL_RANGE], axis=1)
-        inside = slice(first - a, last - a)
-        levels = np.array([_rms(parts[inside, k]) for k in range(5)])
-        top = levels.max()
-        if top <= 0:
-            levels = np.array([0.0, 0.0, 1.0, 0.0, 0.0])                      # nothing coherent found: the center, where film dialogue lives
-            parts[:] = 0
-        else:
-            levels = np.where(levels >= CHANNEL_GATE * top, levels, 0.0)
-            parts = parts * (levels > 0)
+        mask = vocal_mask(processing_stereo(source51[a:b]), stem[a:b], rate)
         keep = np.zeros(b - a, dtype=np.float32)
-        keep[inside] = 1.0
-        parts = reconcile(parts * keep[:, None], stem[a:b] * keep[:, None], levels / max(levels.max(), 1e-12))
-        for k, channel in enumerate(FULL_RANGE):
-            out[a:b, channel] += parts[:, k]
+        keep[first - a:last - a] = 1.0
+        for channel in FULL_RANGE:
+            out[a:b, channel] += (speech_in_channel(source51[a:b, channel], mask, rate) * keep).astype(np.float32)
     return out
 
 
