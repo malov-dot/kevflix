@@ -57,7 +57,9 @@
     "max_fps": 20,
     "memory_limit_mb": 3072,
     "userscripts": [],
-    "userscripts_when": "ready"
+    "userscripts_when": "ready",
+    "stream_width": 1280,
+    "stream_height": 720
   },
   "tv": {
     "enabled": true,

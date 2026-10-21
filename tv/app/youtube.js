@@ -3,14 +3,14 @@
    always returns to the KevFLIX home; a short Back goes to YouTube. Loaded BEFORE player.js so its key listener runs first. */
 (function () {
   'use strict';
-  var LONG_BACK_MS = 700, REPEAT_DELAY_MS = 380, REPEAT_MS = 90, FIRST_FRAME_MS = 25000, STATUS_MS = 5000;
+  var LONG_BACK_MS = 700, DOUBLE_BACK_MS = 900, HINT_MS = 6000, REPEAT_DELAY_MS = 380, REPEAT_MS = 90, FIRST_FRAME_MS = 25000, STATUS_MS = 5000;
   // Samsung remote key codes -> names the PC understands (relay/youtube_host.py KEYS).
   var NAMES = {37: 'Left', 38: 'Up', 39: 'Right', 40: 'Down', 13: 'Enter', 415: 'Play', 19: 'Pause',
     10252: 'PlayPause', 417: 'FastForward', 412: 'Rewind'};
   var BACK = {10009: 1, 27: 1, 8: 1}, ARROWS = {37: 1, 38: 1, 39: 1, 40: 1};
   var $ = function (id) { return document.getElementById(id); };
   var active = false, state = 'idle', ticket = '', serial = 0, returnFocus = null, firstFrameTimer = 0, statusTimer = 0;
-  var held = {}, repeats = {}, downNow = {}, backHeld = false, backTimer = 0, swallowBack = false;
+  var held = {}, repeats = {}, downNow = {}, backHeld = false, backTimer = 0, swallowBack = false, lastBackAt = 0, hintTimer = 0;
   var queue = [], sending = false, failures = 0, enabled = false, pageName = 'home';
 
   function token() { try { return localStorage.getItem('sem-tv-token') || ''; } catch (ignore) { return ''; } }
@@ -80,7 +80,11 @@
     image.onload = function () {
       if (mine !== serial) return;
       clearTimeout(firstFrameTimer);
-      if (state !== 'live') setState('live', '');
+      if (state !== 'live') {
+        setState('live', 'Press Back twice, or hold Back, to return to KevFLIX');   // how to leave: a single Back belongs to YouTube
+        clearTimeout(hintTimer);
+        hintTimer = setTimeout(function () { if (active && state === 'live') setState('live', ''); }, HINT_MS);
+      }
     };
     image.onerror = function () {
       if (mine !== serial || !active) return;
@@ -116,8 +120,8 @@
     if (!active) return;
     var wasBack = backHeld;
     releaseAll(true);
-    active = false; serial += 1; state = 'idle';
-    clearTimeout(firstFrameTimer); clearInterval(statusTimer);
+    active = false; serial += 1; state = 'idle'; lastBackAt = 0;
+    clearTimeout(hintTimer); clearTimeout(firstFrameTimer); clearInterval(statusTimer);
     var image = $('youtube-screen');
     image.onload = image.onerror = null;
     image.removeAttribute('src');                                  // closes the stream; the PC stops it when no client is left
@@ -169,7 +173,12 @@
       backHeld = false;
       if (backTimer) {                                             // released before 700 ms: a normal Back for YouTube
         clearTimeout(backTimer); backTimer = 0;
-        if (state === 'live') send('Back', 'press');
+        if (state === 'live') {
+          var now = Date.now();
+          if (lastBackAt && now - lastBackAt < DOUBLE_BACK_MS) { lastBackAt = 0; exit(); return; }   // two quick Backs leave YouTube
+          lastBackAt = now;
+          send('Back', 'press');
+        }
       }
       return;
     }

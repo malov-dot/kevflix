@@ -42,7 +42,7 @@ USER_AGENTS = {"tizen": TIZEN_UA, "cobalt": COBALT_UA}
 DEFAULT_SETTINGS = {
     "enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "", "idle_seconds": 120,
     "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen", "start_url": "https://www.youtube.com/tv",
-    "width": 1920, "height": 1080, "jpeg_quality": 65, "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready",
+    "width": 1920, "height": 1080, "jpeg_quality": 65, "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1280, "stream_height": 720,
 }
 MAX_USERSCRIPT_BYTES = 4 * 1024 * 1024
 CHROME_CANDIDATES = (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
@@ -571,8 +571,10 @@ class YouTubeHost:
                 if on:
                     s = self.settings
                     await self._cdp.send("Page.startScreencast", {
-                        "format": "jpeg", "quality": int(s["jpeg_quality"]), "maxWidth": int(s["width"]),
-                        "maxHeight": int(s["height"]), "everyNthFrame": max(1, int(s["every_nth_frame"]))})
+                        "format": "jpeg", "quality": int(s["jpeg_quality"]),
+                        # the page is laid out at width x height; the PICTURE sent to the TV is scaled down to stream_width x stream_height
+                        # (a TV decodes a smaller JPEG much faster than 1080p; the TV scales it up)
+                        "maxWidth": int(s.get("stream_width") or s["width"]), "maxHeight": int(s.get("stream_height") or s["height"]), "everyNthFrame": max(1, int(s["every_nth_frame"]))})
                 else:
                     await self._cdp.send("Page.stopScreencast")
                 self._casting = on

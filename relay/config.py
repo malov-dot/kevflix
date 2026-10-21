@@ -115,7 +115,7 @@ DEFAULTS = {
     "youtube": {"enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "",
                 "idle_seconds": 120, "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen",
                 "start_url": "https://www.youtube.com/tv", "width": 1920, "height": 1080, "jpeg_quality": 65,
-                "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready"},
+                "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1280, "stream_height": 720},
     "updates": {"enabled": True, "repository": "malov-dot/kevflix",
                 "branch": "main", "path": "tv", "interval_seconds": 3600,
                 "token_env": "MOVIEDUB_GITHUB_TOKEN"},
