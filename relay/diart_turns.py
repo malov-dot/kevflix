@@ -1,6 +1,6 @@
 """Opt-in reader for a per-film Diart pre-pass artifact (stdlib + numpy; Diart is never imported here).
 
-The pre-pass (tools/diart_prepass.py, run in the held WSL environment) streams the WHOLE film through Diart
+The pre-pass (scripts/diart_prepass.py, run in the held WSL environment) streams the WHOLE film through Diart
 (segmentation + overlap-aware embedding + online clustering) and writes one JSON artifact with film-global speaker ids
 (D000, D001, ...). This module only reads that artifact and answers ``SpeakerAnalyzer.analyze``-shaped questions for one
 analysis window, so the same real person keeps one label across windows (offline pyannote relabels per window).

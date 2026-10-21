@@ -513,7 +513,9 @@ class Config:
                    # owner decision 2026-10-20: slow a take that ends before the original speaker stopped (relay/slot_fill.py)
                    'slot_fill',
                    # owner decision 2026-10-19/20: Diart film-global speaker turns (opt-in actor_beta.diart_turns)
-                   'diart_turns')
+                   'diart_turns',
+                   # owner decision 2026-10-21: live streaming Diart sidecar (actor_beta.diart_stream, default on with the beta)
+                   'diart_stream')
             values['actor_implementation']={name:hashlib.sha256(Path(__file__).with_name(name+'.py').read_bytes()).hexdigest()
                                             for name in names}
             from . import slot_fill as _slot_fill        # stdlib-only; the EFFECTIVE slot-fill / fuller settings (defaults filled in)
@@ -521,6 +523,8 @@ class Config:
             values['slot_fill']=_slot_fill.fingerprint(_beta_options if isinstance(_beta_options,dict) and _beta_options.get('enabled') is True else None)
             from . import diart_turns as _diart_turns   # stdlib-only; EFFECTIVE actor_beta.diart_turns + artifact sha256 (None when off)
             values['diart_turns']=_diart_turns.fingerprint(self)
+            from . import diart_stream as _diart_stream  # stdlib-only; EFFECTIVE actor_beta.diart_stream + parameters + server code hash (None when off)
+            values['diart_stream']=_diart_stream.fingerprint(self)
             # embedded-subtitles-v1: caption selection/extraction changes chunk captions.
             captions=Path(__file__).with_name('embedded_subtitles.py')
             if captions.is_file():

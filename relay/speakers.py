@@ -10,7 +10,7 @@ import threading
 from collections import OrderedDict, deque
 from pathlib import Path
 
-from . import diart_turns
+from . import diart_stream, diart_turns
 from .dialogue import is_no_speech
 from .language import backend_fault, model_device, prepare_model_runtime, torch_model_device
 from .movie_faults import MovieConfigurationError, MovieContentFallback
@@ -284,6 +284,16 @@ class SpeakerAnalyzer:
         diart_setting = diart_turns.setting(config)
         if diart_setting is not None:
             self._policy['diart_turns'] = {'setting': diart_setting, **diart_turns.policy()}
+        # actor_beta.diart_stream (default ON with actor_beta.enabled): live Diart sidecar. Deliberately NOT part of _policy:
+        # the pyannote fallback below must keep its cache keys, and streaming answers are never cached (see _stream_analyze).
+        # The manager only spawns the sidecar on the first analyze() call.
+        self._diart_stream = diart_stream.DiartStream(config) if diart_stream.enabled(config) else None
+
+    def close(self):
+        """Release what this analyzer started outside the process (the Diart sidecar)."""
+        manager = getattr(self, '_diart_stream', None)
+        if manager is not None:
+            manager.close()
 
     def policy_metadata(self):
         # Callers may serialize this; they may not mutate cache-key state.
@@ -334,7 +344,25 @@ class SpeakerAnalyzer:
         turns, aligned, vectors = result
         return list(turns), list(aligned), dict(vectors)
 
+    def _stream_analyze(self, wav, offset, source_fingerprint):
+        """(turns, aligned, vectors) from the live Diart sidecar, or None after recording why the next provider is used.
+
+        The answer depends on the stream's state (which audio came before), so it BYPASSES the analysis cache: nothing
+        derived from it is stored under a key that only names the window audio."""
+        try:
+            result = self._diart_stream.analyze_window(source_fingerprint or 'default', wav, offset, self.embed)
+        except diart_stream.DiartStreamUnavailable as error:
+            self._diart_note(False, 'stream:' + error.reason, offset)
+            return None
+        self._diart_note(True, 'diart-stream', offset)
+        turns, aligned, vectors = result
+        return list(turns), list(aligned), dict(vectors)
+
     def analyze(self, wav, offset=0.0, *, source_fingerprint=None):
+        if getattr(self, '_diart_stream', None) is not None:
+            result = self._stream_analyze(wav, offset, source_fingerprint)
+            if result is not None:
+                return result
         if 'diart_turns' in self._policy:
             result = self._diart_analyze(wav, offset, source_fingerprint)
             if result is not None:

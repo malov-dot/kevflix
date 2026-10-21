@@ -36,7 +36,7 @@ from . import beta_caption_flow as _ctf, beta_first_pass_flow as _fpf   # stdlib
 from . import beta_dialogue_ownership as _own   # stdlib-only; used only with actor_beta.caption_targets
 from . import beta_line_ledger as _lines        # stdlib-only (sqlite3); used only with actor_beta.caption_targets
 from . import kept_speech as _kept              # stdlib-only; numpy only inside the stem check
-from . import diart_turns as _diart             # stdlib-only; actor_beta.diart_turns (default absent = pyannote per window)
+from . import diart_stream as _diart            # stdlib-only; actor_beta.diart_stream (live sidecar, default on with the beta), then actor_beta.diart_turns (file), then pyannote per window
 from .language import iso,aligned_caption_style,word_error
 from .media import atomic_json,file_hash,resolve_channel_layout,wav_format,WAV_MASK_LAYOUTS
 from .speakers import SpeakerBank,cosine,speaker_units
