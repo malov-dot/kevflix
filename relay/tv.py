@@ -132,6 +132,7 @@ class TVService:
         self._encoder_lock = threading.Lock()
         self._premeasure_thread = None
         self._vram_probe = None            # tests inject: callable() -> free MiB | None
+        self._yt_source, self._yt_lock = None, threading.Lock()   # the YouTube hand-off downloader (relay/youtube_source.py), created on first use
         self.probe = ProbeClips(config)    # the "Test this TV" clips (relay/tv_probe.py); nothing runs until the TV asks
 
     def start(self):
@@ -206,7 +207,7 @@ class TVService:
 
     def _node(self, path):
         path = Path(path).resolve()
-        roots = self._roots()
+        roots = self._roots() + self.config.extra_media_roots()
         if not any(path == r or r in path.parents for r in roots):
             raise ValueError("This item is outside the TV library")
         key = hmac.new(self.config["stream_secret"].encode(), str(path).encode(), hashlib.sha256).hexdigest()[:32]
@@ -286,6 +287,42 @@ class TVService:
             self.sessions[ident] = spec
         self.wake.set()
         return self.status(ident, device)
+
+    def youtube_source(self):
+        with self._yt_lock:
+            if self._yt_source is None:
+                from .youtube_source import YouTubeSource
+                self._yt_source = YouTubeSource(self.config["youtube"], python=self.config["python"], ffmpeg=self.config["ffmpeg"],
+                                                in_use=self._youtube_in_use)
+            return self._yt_source
+
+    def _youtube_in_use(self):
+        with self.lock:
+            return {Path(v["source"]).parent.name for v in self.sessions.values() if v.get("youtube")}
+
+    def youtube_cancel(self):
+        """Stop a running YouTube download (the TV's Back while 'Downloading from YouTube')."""
+        return bool(self._yt_source is not None and self._yt_source.cancel())
+
+    def open_youtube(self, device, video_id):
+        """Hand a video picked in the YouTube view to the normal player. While the PC still downloads it this returns
+        {preparing: true, youtube: {state, percent, text}} (the TV asks again about once a second); when the file is staged it opens a
+        session exactly like a library movie and returns that session's status. Dubbing defaults to ON unless the video is known to be English."""
+        settings = self.config["youtube"]
+        if not settings.get("enabled") or not settings.get("handoff", True):
+            raise ValueError("YouTube hand-off is turned off (youtube.enabled / youtube.handoff)")
+        info = self.youtube_source().ensure(video_id)
+        if info["state"] == "error":
+            raise ValueError(info["error"])
+        if info["state"] != "ready":
+            return {"preparing": True, "youtube": {key: info[key] for key in ("video_id", "state", "percent", "text")}}
+        opened = self.open_movie(device, self._node(Path(info["path"]))["id"], None)
+        value = self.session(opened["id"], device)
+        with self.lock:
+            value["title"] = info["title"] or value["title"]
+            value["youtube"] = {"id": info["video_id"], "language": info["language"], "uploader": info["uploader"],
+                                "dub_default": bool(info["dub_default"])}
+        return self.status(opened["id"], device)
 
     def session(self, ident, device=None, touch=True):
         with self.lock:
@@ -516,6 +553,8 @@ class TVService:
                                   "title": s.get("tags", {}).get("title", s.get("codec_name", ""))}
                                  for s in value["streams"] if s.get("codec_type") == "audio"],
                 "audio_index": value["audio_index"], "dub_unsupported": value.get("dub_unsupported")}
+            if value.get("youtube"):
+                result["youtube"] = dict(value["youtube"])
             if _loudness_on(self.config):
                 result["loudness"] = self._loudness_status(value, job_payload)
             # A detached snapshot: later muxes/heartbeats must not mutate a status response.

@@ -236,8 +236,16 @@ class Handler(BaseHTTPRequestHandler):
             if action == "key":
                 if host is None:
                     raise RuntimeError("YouTube is not open")
-                host.key(str(data["key"]), str(data.get("action", "press")))
-                return self.json_response({"ok": True})
+                reply = {"ok": True}
+                play = host.key(str(data["key"]), str(data.get("action", "press")))
+                if play:
+                    reply["play"] = play                          # the page just navigated to a video: the TV hands it to its own player
+                return self.json_response(reply)
+            if action == "resume":
+                self.app.tv.youtube_cancel()
+                return self.json_response(host.resume() if host is not None else {"state": "stopped", "handoff": False})
+            if action == "cancel":
+                return self.json_response({"cancelled": bool(self.app.tv.youtube_cancel())})
             if action == "close":
                 if host is not None:
                     host.close()
@@ -450,6 +458,8 @@ class Handler(BaseHTTPRequestHandler):
                 if path == "/tv-api/plex/watched":
                     return self.json_response(self.app.tv.catalog.watched(data["key"], data.get("enabled", False)))
                 if path == "/tv-api/open":
+                    if data.get("youtube"):
+                        return self.json_response(self.app.tv.open_youtube(device, data["youtube"]))
                     if data.get("plex_key"):
                         return self.json_response(self.app.tv.open_plex(device, data["plex_key"], data.get("resume", True)))
                     return self.json_response(self.app.tv.open_movie(device, data["node"], data.get("audio_index")))

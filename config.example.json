@@ -59,7 +59,13 @@
     "userscripts": [],
     "userscripts_when": "ready",
     "stream_width": 1280,
-    "stream_height": 720
+    "stream_height": 720,
+    "handoff": true,
+    "media_dir": "C:/KevFLIX-Runtime/youtube-media",
+    "max_minutes": 240,
+    "max_cache_gb": 30,
+    "max_height": 1080,
+    "node_path": ""
   },
   "tv": {
     "enabled": true,

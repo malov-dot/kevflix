@@ -515,25 +515,50 @@ var SemTvProbe=(function(){
     if(SemBufferGate.autoResume(bufferGate,value,{loaded:loadedGeneration===value.generation&&!loading,paused:video.paused,ended:video.ended,busy:resuming,error:!!reportedError,wantedPlay:wantedPlay})){resuming=true;$('buffering').hidden=true;playVideo().catch(function(e){playerMessage(e.message);}).then(function(){resuming=false;});}
     updateCaptions(false);
   }
+  // YouTube hand-off (stage 3): the PC downloads the picked video (yt-dlp) and KevFLIX plays it like a film. 'open' answers {preparing:true,youtube:{text,percent}}
+  // until the file is staged; that text goes on the normal buffering card. Back cancels the download. Any failure throws, and youtube.js returns to its view.
+  var youtubeOpening=null;
+  async function openYoutubeValue(item,number){
+    var mine={cancelled:false};youtubeOpening=mine;
+    $('details').hidden=true;$('main').hidden=true;$('sidebar').hidden=true;$('player').hidden=false;$('player-controls').classList.add('controls-hidden');
+    bufferView('Downloading from YouTube','Checking the video on YouTube…',null);
+    try{
+      for(;;){
+        var value=await api('open',{youtube:item.id});
+        if(mine.cancelled||number!==operation){
+          if(!value.preparing&&value.id){try{await api('control',{id:value.id,action:'stop'});}catch(ignore){}}
+          throw Error('Cancelled');
+        }
+        if(!value.preparing)return value;
+        var info=value.youtube||{};
+        bufferView(info.state==='downloading'?'Downloading from YouTube':'Preparing YouTube video',info.text||'',info.state==='downloading'?(info.percent||0)/100:null);
+        await new Promise(function(resolve){setTimeout(resolve,1000);});
+      }
+    }catch(error){
+      $('buffering').hidden=true;$('player').hidden=true;$('player-controls').classList.remove('controls-hidden');$('main').hidden=false;$('sidebar').hidden=false;
+      throw error;
+    }finally{if(youtubeOpening===mine)youtubeOpening=null;}
+  }
+  window.KevFlixPlayer={openYoutube:function(id){return openMovie({id:String(id),youtube:true,title:'YouTube video'},true);}};
   async function openMovie(item,restart){
     if(item.plex&&item.playable===false){message('This library item is available to browse. KevFLIX currently plays videos.');return;}
     if(setupOnly){message('Setup-only mode: TV pairing is available; playback and dubbing remain disabled.');return;}
     var prefs=moviePrefs||defaults;
     await leave();
     var number=++operation;
-    message('Opening movie…');
-    var value=await api('open',item.plex?{plex_key:item.id,resume:!restart}:{node:item.id});
+    message(item.youtube?'':'Opening movie…');
+    var value=item.youtube?await openYoutubeValue(item,number):await api('open',item.plex?{plex_key:item.id,resume:!restart}:{node:item.id});
     if(!item.plex&&!restart&&item.resume>10)value=await api('control',{id:value.id,action:'seek',position:item.resume});
     if(prefs.quality!==value.quality||prefs.upscale!==value.upscale||prefs.hdr_mode!==value.hdr_mode||(prefs.surround||'auto')!==value.surround)
       value=await api('control',{id:value.id,action:'quality',quality:prefs.quality,upscale:prefs.upscale,hdr_mode:prefs.hdr_mode,surround:prefs.surround||'auto',position:value.position});
     if(prefs.encoder!=='default')value=await api('control',{id:value.id,action:'processing',encoder:prefs.encoder,encoder_threads:prefs.threads||2,position:value.position});
-    if(prefs.dub)value=await api('control',{id:value.id,action:'dub',enabled:true,position:value.position});
+    if(item.youtube?(value.youtube&&value.youtube.dub_default):prefs.dub)value=await api('control',{id:value.id,action:'dub',enabled:true,position:value.position});
     if(prefs.watch)value=await api('control',{id:value.id,action:'watch',enabled:true});
     value=await api('control',{id:value.id,action:'watch_mode',watch_mode:prefs.commentary});
     value=await api('control',{id:value.id,action:'progress_sync',enabled:item.plex&&prefs.progress_sync!==false});
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
-    bufferGate=SemBufferGate.create();
+    bufferGate=SemBufferGate.create();$('buffering').hidden=true;
     session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;
     $('details').hidden=true;$('player').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;message('');
     $('audio-track').replaceChildren.apply($('audio-track'),value.audio_tracks.map(function(track){
@@ -790,7 +815,7 @@ var SemTvProbe=(function(){
     var intentId=session.id;api('control',{id:intentId,action:wantedPlay?'play':'pause'}).catch(function(e){playerMessage(e.message);}).then(function(){if(session&&session.id===intentId)void poll();});
   }
   async function leave(){
-    if(session&&selectedItem){
+    if(session&&selectedItem&&!session.youtube){
       var saved=position();resumeMap[selectedItem.id]={position:saved>session.duration-30?0:saved};
       try{localStorage.setItem('kevflix-resume',JSON.stringify(resumeMap));}catch(ignore){}
       selectedItem.resume=resumeMap[selectedItem.id].position;
@@ -804,7 +829,8 @@ var SemTvProbe=(function(){
     $('player').hidden=true;$('header').hidden=false;$('main').hidden=false;$('sidebar').hidden=false;$('library-panel').hidden=!token||page==='settings';
     $('playback-panel').hidden=true;captionKey='';
     if(old){try{await api('control',{id:old.id,action:'stop'});}catch(ignore){}}
-    if(old&&selectedItem)showDetails(selectedItem,selectedCard);
+    if(old&&selectedItem&&!old.youtube)showDetails(selectedItem,selectedCard);
+    if(old&&old.youtube&&window.KevFlixYoutube)window.KevFlixYoutube.resume();   // the hand-off is over: back to the YouTube view
   }
   $('leave-player').onclick=function(){void leave();};
   $('play-pause').onclick=playPause;
@@ -847,7 +873,7 @@ var SemTvProbe=(function(){
   video.addEventListener('playing',function(){$('buffering').hidden=true;showControls();});
   video.addEventListener('pause',function(){if(!wantedPlay)$('buffering').hidden=true;});
   video.addEventListener('timeupdate',function(){if(session){$('time').textContent=clock(position())+' / '+clock(session.duration);$('progress-fill').style.width=100*position()/session.duration+'%';}});
-  video.addEventListener('ended',function(){wantedPlay=false;setPlayState();showControls();void poll();});
+  video.addEventListener('ended',function(){if(session&&session.youtube){void leave();return;}wantedPlay=false;setPlayState();showControls();void poll();});   // a YouTube video that ends returns to the YouTube view
   video.addEventListener('error',function(){if(session&&!loading){reportFailure('playback-error');playerMessage('Playback could not continue. Lower the output limit, select SDR conversion, or turn dubbing off.');showControls();}});
   document.addEventListener('visibilitychange',function(){if(document.hidden&&session){wantedPlay=false;video.pause();void poll();}});
   window.addEventListener('pagehide',function(){
@@ -899,6 +925,7 @@ var SemTvProbe=(function(){
     var active=document.activeElement;
     if(event.isComposing)return;
     if(probeRunning){event.preventDefault();if(key===10009||key===27||key===8)probeCancel=true;return;}
+    if(youtubeOpening){event.preventDefault();if(key===10009||key===27||key===8){youtubeOpening.cancelled=true;api('youtube/cancel',{}).catch(function(){});}return;}   // Back while downloading cancels
     if(session&&$('choice-panel').hidden&&$('playback-panel').hidden&&$('player-controls').classList.contains('controls-hidden')&&[13,37,38,39,40].indexOf(key)>=0){
       event.preventDefault();showControls();$('play-pause').focus();return;
     }

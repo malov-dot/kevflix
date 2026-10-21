@@ -115,7 +115,10 @@ DEFAULTS = {
     "youtube": {"enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "",
                 "idle_seconds": 120, "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen",
                 "start_url": "https://www.youtube.com/tv", "width": 1920, "height": 1080, "jpeg_quality": 65,
-                "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1280, "stream_height": 720},
+                "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1280, "stream_height": 720,
+                # Hand-off of a picked video to the KevFLIX player (relay/youtube_source.py; yt-dlp downloads it into media_dir).
+                "handoff": True, "media_dir": "C:/KevFLIX-Runtime/youtube-media", "max_minutes": 240, "max_cache_gb": 30,
+                "max_height": 1080, "node_path": ""},
     "updates": {"enabled": True, "repository": "malov-dot/kevflix",
                 "branch": "main", "path": "tv", "interval_seconds": 3600,
                 "token_env": "MOVIEDUB_GITHUB_TOKEN"},
@@ -267,6 +270,16 @@ class Config:
             raise ValueError("youtube.idle_seconds must be between 10 and 86400")
         if not 1 <= int(self.data["youtube"]["max_fps"]) <= 30:
             raise ValueError("youtube.max_fps must be between 1 and 30")
+        if not 1 <= int(self.data["youtube"]["max_minutes"]) <= 1440:
+            raise ValueError("youtube.max_minutes must be between 1 and 1440")
+        if not 1 <= float(self.data["youtube"]["max_cache_gb"]) <= 4000:
+            raise ValueError("youtube.max_cache_gb must be between 1 and 4000")
+        if not 144 <= int(self.data["youtube"]["max_height"]) <= 4320:
+            raise ValueError("youtube.max_height must be between 144 and 4320")
+        if self.data["youtube"]["enabled"]:
+            media_dir = Path(os.path.expandvars(str(self.data["youtube"]["media_dir"]))).expanduser()
+            if not media_dir.is_absolute() or media_dir.parent == media_dir:
+                raise ValueError("youtube.media_dir must be an absolute folder (not a drive root)")
         if int(self.data["tv"]["max_height"]) not in (480, 720, 1080, 2160):
             raise ValueError("TV output height must be 480, 720, 1080 or 2160")
         if self.data["tv"]["video_encoder"] not in ("auto", "nvenc", "software"):
@@ -427,6 +440,11 @@ class Config:
     def __getitem__(self, key):
         return self.data[key]
 
+    def extra_media_roots(self):
+        """Folders admitted as media sources without being listed in media_roots: the YouTube hand-off download folder (only while YouTube is enabled)."""
+        youtube = self.data.get("youtube") or {}
+        return [self.resolve(youtube["media_dir"])] if youtube.get("enabled") and youtube.get("media_dir") else []
+
     def media_path(self, value, *, nas=False):
         value = str(value)
         if nas:
@@ -441,7 +459,7 @@ class Config:
             suffix = value[len(match[0]):].lstrip("/")
             value = str(Path(match[1]) / Path(suffix))
         p = self.resolve(value)
-        allowed = [self.resolve(x) for x in self["media_roots"]]
+        allowed = [self.resolve(x) for x in self["media_roots"]] + self.extra_media_roots()
         if not any(p == r or r in p.parents for r in allowed):
             raise ValueError("Media path is outside configured media_roots")
         if not p.is_file():

@@ -43,8 +43,16 @@ DEFAULT_SETTINGS = {
     "enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "", "idle_seconds": 120,
     "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen", "start_url": "https://www.youtube.com/tv",
     "width": 1920, "height": 1080, "jpeg_quality": 65, "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1280, "stream_height": 720,
+    # Hand-off of a picked video to KevFLIX's own player (relay/youtube_source.py): yt-dlp downloads it into media_dir.
+    "handoff": True, "media_dir": "C:/KevFLIX-Runtime/youtube-media", "max_minutes": 240, "max_cache_gb": 30,
+    "max_height": 1080, "node_path": "",
 }
 MAX_USERSCRIPT_BYTES = 4 * 1024 * 1024
+HANDOFF_MAX_SECONDS = 12 * 3600          # a hand-off the TV never ended (crash) stops protecting Chrome from the idle watchdog after this
+KEY_WAIT_SECONDS = 0.2                   # after an OK press: how long key() waits to learn that the page navigated to a video (kept short: the TV sends keys one at a time, so this delay would slow every OK; the TV also polls status each second)
+BLOCKED_MEDIA = ["*://*.googlevideo.com/videoplayback*"]
+PAUSE_PAGE_VIDEO = ("(function(){var v=document.querySelectorAll('video');for(var i=0;i<v.length;i++){try{v[i].pause();v[i].muted=true;}catch(e){}}})()")
+VIDEO_ID = re.compile(r"[A-Za-z0-9_-]{11}")
 CHROME_CANDIDATES = (r"C:\Program Files\Google\Chrome\Application\chrome.exe",
                      r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
                      r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
@@ -68,6 +76,25 @@ ALIASES = {"arrowup": "up", "arrowdown": "down", "arrowleft": "left", "arrowrigh
 
 class HostError(RuntimeError):
     pass
+
+
+def watch_id(url):
+    """The 11-character video id of a youtube.com/tv watch route, else None. youtube.com/tv keeps its routes in the hash (TizenTube reads
+    new URL(location.hash.substring(1)).search for ?v=), e.g. https://www.youtube.com/tv#/watch?v=<id>&list=...; a plain ?v= query is accepted too."""
+    try:
+        from urllib.parse import parse_qs, urlsplit
+        parts = urlsplit(str(url or ""))
+        if (parts.hostname or "").lower() not in ("youtube.com", "www.youtube.com", "m.youtube.com", "tv.youtube.com"):
+            return None
+        route = urlsplit(parts.fragment if parts.fragment.startswith("/") else "")
+        for path, query in ((route.path, route.query), (parts.path, parts.query)):
+            if path.rstrip("/").endswith("/watch") or (path.rstrip("/") == "/tv" and "v=" in query):
+                found = parse_qs(query).get("v", [""])[0]
+                if VIDEO_ID.fullmatch(found):
+                    return found
+    except ValueError:
+        pass
+    return None
 
 
 def key_name(name):
@@ -317,13 +344,16 @@ class YouTubeHost:
         self._size = (int(self.settings["width"]), int(self.settings["height"]))
         self._last_activity, self._down, self.started = clock(), set(), 0
         self.last_command, self._closing = [], False
+        self._play = None                                        # {video_id, seq, at}: the newest video picked on the page
+        self._play_seq, self._handoff, self._handoff_since = 0, False, 0.0
 
     # ---- thread-safe API ---------------------------------------------------------------------------------------
     def status(self):
         with self._cond:
             return {"enabled": True, "state": self.state, "width": self._size[0], "height": self._size[1],
                     "frame": self._counter, "clients": self._clients, "screencast": self._casting,
-                    "error": self.error, "pid": self._proc.pid if self._proc else None}
+                    "error": self.error, "pid": self._proc.pid if self._proc else None,
+                    "play": self._play_view(), "handoff": self._handoff}
 
     def open(self):
         with self._lifecycle:
@@ -355,11 +385,33 @@ class YouTubeHost:
         return bool(self.ticket) and hmac.compare_digest(str(ticket or ""), self.ticket)
 
     def key(self, name, action="press"):
+        """Send one remote key. Returns the newest picked video ({video_id, seq, age}) when the page navigated to one within
+        ~700 ms of an OK press (or within the last 2 s), so the TV learns of a selection immediately; otherwise None."""
         events = key_events(name, action)
         if self.state != "running":
             raise HostError("YouTube is not open")
         self.touch()
+        before = self._play_seq
         self._call(self._send_keys(key_name(name), events, action), 5)
+        if key_name(name) == "enter" and action in ("press", "up") and self.settings.get("handoff", True):
+            deadline = time.monotonic() + KEY_WAIT_SECONDS
+            with self._cond:
+                while self._play_seq == before and self.state == "running":
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        break
+                    self._cond.wait(left)
+        play = self._play_view()
+        return play if play and (play["seq"] > before or play["age"] < 2.0) else None
+
+    def resume(self):
+        """The TV left the hand-off (video ended, Back, or an error): unblock the page's media and send Back so the page leaves its watch screen."""
+        with self._lifecycle:
+            if self.state != "running" or not self._loop:
+                self._handoff = False
+                return {"state": self.state, "handoff": False}
+            self._call(self._resume(), 10)
+        return {"state": self.state, "handoff": False}
 
     def client_enter(self):
         with self._cond:
@@ -398,7 +450,15 @@ class YouTubeHost:
     def _opened(self):
         status = self.status()
         return {"state": status["state"], "width": status["width"], "height": status["height"],
-                "screen_ticket": self.ticket}
+                "screen_ticket": self.ticket, "play_seq": self._play_seq}
+
+    def _play_view(self):
+        play = self._play
+        return None if play is None else {"video_id": play["video_id"], "seq": play["seq"],
+                                          "age": round(max(0.0, self._clock() - play["at"]), 1)}
+
+    def _handoff_active(self):
+        return self._handoff and self._clock() - self._handoff_since < HANDOFF_MAX_SECONDS
 
     def _run_loop(self, loop):
         asyncio.set_event_loop(loop)
@@ -423,6 +483,7 @@ class YouTubeHost:
         self._loop = self._thread = self._cdp = self._proc = None
         self._tasks = []
         self._casting = False
+        self._handoff = False
         with self._cond:
             if self.state != "error":
                 self.state = "stopped"
@@ -541,7 +602,39 @@ class YouTubeHost:
         except Exception as error:
             logging.info("YouTube host: permission lockdown skipped (%s)", error)
 
+    def _navigated(self, url):
+        """A page navigation. A watch route with a valid id is a selection: record it and, when the TV will play the video itself, stop the
+        page's own player at once (pause now, and block its media requests until resume()) so the PC does not decode or stream it in parallel."""
+        video_id = watch_id(url)
+        if not video_id or not self.settings.get("handoff", True) or self._handoff_active():
+            return
+        with self._cond:
+            self._play_seq += 1
+            self._play = {"video_id": video_id, "seq": self._play_seq, "at": self._clock()}
+            self._handoff, self._handoff_since = True, self._clock()
+            self._cond.notify_all()
+        self.touch()
+        if self._cdp:
+            self._cdp.post("Network.enable")
+            self._cdp.post("Network.setBlockedURLs", {"urls": BLOCKED_MEDIA})
+            self._cdp.post("Runtime.evaluate", {"expression": PAUSE_PAGE_VIDEO, "silent": True})
+
+    async def _resume(self):
+        was, self._handoff = self._handoff, False
+        await self._cdp.send("Network.setBlockedURLs", {"urls": []})
+        if was:
+            await self._send_keys("back", key_events("back", "press"), "press")
+        self.touch()
+
     def _on_event(self, method, params):
+        if method == "Page.navigatedWithinDocument":
+            self._navigated(params.get("url"))
+            return
+        if method == "Page.frameNavigated":
+            frame = params.get("frame") or {}
+            if not frame.get("parentId"):                       # the main frame only
+                self._navigated(frame.get("url"))
+            return
         if method == "Page.domContentEventFired":
             for source in list(self._ready_scripts):
                 if self._cdp:
@@ -603,9 +696,11 @@ class YouTubeHost:
             with self._cond:
                 clients = self._clients
             idle = self._clock() - self._last_activity
+            if self._handoff_active() and self._cdp:
+                self._cdp.post("Runtime.evaluate", {"expression": PAUSE_PAGE_VIDEO, "silent": True})   # keep the page's own player stopped
             if clients == 0 and self._casting and idle >= float(self.settings["grace_seconds"]):
                 await self._screencast(False)
-            if clients == 0 and idle >= float(self.settings["idle_seconds"]):
+            if clients == 0 and idle >= float(self.settings["idle_seconds"]) and not self._handoff_active():
                 break
         threading.Thread(target=self.close, daemon=True, name="youtube-close").start()
 

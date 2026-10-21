@@ -3,7 +3,7 @@
    always returns to the KevFLIX home; a short Back goes to YouTube. Loaded BEFORE player.js so its key listener runs first. */
 (function () {
   'use strict';
-  var LONG_BACK_MS = 700, DOUBLE_BACK_MS = 900, HINT_MS = 6000, REPEAT_DELAY_MS = 380, REPEAT_MS = 90, FIRST_FRAME_MS = 25000, STATUS_MS = 5000;
+  var LONG_BACK_MS = 700, DOUBLE_BACK_MS = 900, HINT_MS = 6000, REPEAT_DELAY_MS = 380, REPEAT_MS = 90, FIRST_FRAME_MS = 25000, STATUS_MS = 1000, PLAY_MAX_AGE_S = 20;
   // Samsung remote key codes -> names the PC understands (relay/youtube_host.py KEYS).
   var NAMES = {37: 'Left', 38: 'Up', 39: 'Right', 40: 'Down', 13: 'Enter', 415: 'Play', 19: 'Pause',
     10252: 'PlayPause', 417: 'FastForward', 412: 'Rewind'};
@@ -12,6 +12,9 @@
   var active = false, state = 'idle', ticket = '', serial = 0, returnFocus = null, firstFrameTimer = 0, statusTimer = 0;
   var held = {}, repeats = {}, downNow = {}, backHeld = false, backTimer = 0, swallowBack = false, lastBackAt = 0, hintTimer = 0;
   var queue = [], sending = false, failures = 0, enabled = false, pageName = 'home';
+  // Hand-off (stage 3): when the picked video's id reaches us (key reply or the 1 s status poll) the picture stream stops and KevFLIX's own
+  // player (player.js, window.KevFlixPlayer.openYoutube) downloads and plays it; its exit (Back / end of video / any error) calls resume().
+  var seenSeq = 0, handoff = false, notice = '';
 
   function token() { try { return localStorage.getItem('sem-tv-token') || ''; } catch (ignore) { return ''; } }
   function mapKey(code) { return BACK[code] ? 'Back' : (NAMES[code] || null); }
@@ -47,7 +50,7 @@
     if (sending || !queue.length) return;
     sending = true;
     var item = queue.shift();
-    call('youtube/key', item, 8000).then(function () { failures = 0; }, function () {
+    call('youtube/key', item, 8000).then(function (value) { failures = 0; if (value && value.play) considerPlay(value.play); }, function () {
       failures += 1;
       if (failures >= 3 && active && state === 'live') setState('error', 'Lost the connection to YouTube on the PC. Press OK to retry, or Back to return.');
     }).then(function () { sending = false; pump(); });
@@ -69,6 +72,7 @@
     call('youtube/open', {}, 70000).then(function (result) {
       if (mine !== serial || !active) return;
       ticket = result.screen_ticket || '';
+      seenSeq = Math.max(seenSeq, result.play_seq || 0);         // a selection made before this view opened is not a new pick
       showStream(mine);
     }).catch(function (error) {
       if (mine !== serial || !active) return;
@@ -81,7 +85,8 @@
       if (mine !== serial) return;
       clearTimeout(firstFrameTimer);
       if (state !== 'live') {
-        setState('live', 'Press Back twice, or hold Back, to return to KevFLIX');   // how to leave: a single Back belongs to YouTube
+        setState('live', notice || 'Press Back twice, or hold Back, to return to KevFLIX');   // how to leave: a single Back belongs to YouTube
+        notice = '';
         clearTimeout(hintTimer);
         hintTimer = setTimeout(function () { if (active && state === 'live') setState('live', ''); }, HINT_MS);
       }
@@ -103,12 +108,50 @@
       if (!active || state !== 'live') return;
       call('youtube/status', undefined, 6000).then(function (value) {
         if (active && state === 'live' && value.state !== 'running') setState('error', 'YouTube stopped on the PC. Press OK to start it again, or Back to return.');
+        else if (value.play) considerPlay(value.play);
       }).catch(function () {});
     }, STATUS_MS);
   }
-  function open() {
-    if (active) return;
+  // ---- hand-off to the KevFLIX player ---------------------------------------------------------------------------------
+  function considerPlay(play) {
+    if (!active || state !== 'live' || handoff || !play || !play.video_id || !(play.seq > seenSeq)) return;
+    seenSeq = play.seq;
+    if (play.age > PLAY_MAX_AGE_S) return;                         // an old selection (for example after a reload) is not a request
+    startHandoff(play.video_id);
+  }
+  function startHandoff(videoId) {
+    var player = window.KevFlixPlayer;
+    handoff = true;
+    releaseAll(false); queue = [];
+    Object.keys(downNow).forEach(function (code) { held[code] = 'stale'; });   // the OK that picked the video must not leak into the player
+    active = false; serial += 1; state = 'handoff';
+    clearTimeout(hintTimer); clearTimeout(firstFrameTimer); clearInterval(statusTimer);
+    var image = $('youtube-screen');
+    image.onload = image.onerror = null;
+    image.removeAttribute('src');                                  // the picture stream stops while KevFLIX plays the video
+    $('youtube-view').hidden = true;
+    if (!player || typeof player.openYoutube !== 'function') { resume('The KevFLIX player is not ready.'); return; }
+    var opened;
+    try { opened = player.openYoutube(videoId); } catch (error) { opened = Promise.reject(error); }
+    Promise.resolve(opened).catch(function (error) {
+      resume(error && error.message === 'Cancelled' ? '' : ((error && error.message) || 'This YouTube video could not be played.'));   // never trap the viewer: back to the YouTube view with the reason
+    });
+  }
+  // Called by player.js when the hand-off ends (Back, end of the video) and by the error path above. Safe to call twice.
+  function resume(reason) {
+    if (!handoff || active) return;
+    handoff = false; notice = reason ? String(reason) : '';
+    Object.keys(downNow).forEach(function (code) { held[code] = 'stale'; });
     active = true; failures = 0; queue = []; sending = false;
+    $('youtube-view').hidden = false;
+    setState('connecting', 'Returning to YouTube…');
+    var mine = ++serial;
+    // the PC unblocks the page's media and sends Back to its watch screen FIRST; only then is the picture stream reopened
+    call('youtube/resume', {}, 10000).catch(function () {}).then(function () { if (mine === serial && active) { connect(); watchHost(); } });
+  }
+  function open() {
+    if (active || handoff) return;
+    active = true; failures = 0; queue = []; sending = false; notice = '';
     returnFocus = document.activeElement;
     releaseAll(false);
     Object.keys(downNow).forEach(function (code) { held[code] = 'stale'; });   // the key that opened the view is not a YouTube key
@@ -207,7 +250,8 @@
   if ($('nav-youtube')) $('nav-youtube').onclick = open;
   try { ['MediaPlay', 'MediaPause', 'MediaPlayPause', 'MediaRewind', 'MediaFastForward'].forEach(function (name) { tizen.tvinputdevice.registerKey(name); }); } catch (ignore) {}
   window.KevFlixYoutube = {
-    active: function () { return active; }, state: function () { return state; }, open: open, exit: exit,
+    active: function () { return active; }, state: function () { return state; }, open: open, exit: exit, resume: resume,
+    handingOff: function () { return handoff; },
     page: setPage, refresh: refresh, mapKey: mapKey, longBackMs: LONG_BACK_MS
   };
   refresh();
