@@ -541,7 +541,10 @@ var SemTvProbe=(function(){
   }
   // The OK that picked the video in the YouTube view is the viewer's own Play: apply the saved sound choice now (the player starts muted and a library film
   // is unmuted by its Play button's click, which a YouTube pick never presses: without this the video played silently).
-  window.KevFlixPlayer={openYoutube:function(id){try{if(window.KevFlixAudio)window.KevFlixAudio.apply();}catch(ignore){}return openMovie({id:String(id),youtube:true,title:'YouTube video'},true);}};
+  window.KevFlixPlayer={openYoutube:function(id){try{if(window.KevFlixAudio)window.KevFlixAudio.apply();}catch(ignore){}return openMovie({id:String(id),youtube:true,title:'YouTube video'},true);},
+    // While the YouTube view is on screen the library posters stop loading (a library page fetches and decodes up to ~100 of them, two at a time, on the
+    // TV's one page thread: the YouTube picture and the remote keys waited behind them); they continue when the view closes.
+    pausePosters:function(){posterEpoch+=1;},resumePosters:function(){void loadPosters();}};
   async function openMovie(item,restart){
     if(item.plex&&item.playable===false){message('This library item is available to browse. KevFLIX currently plays videos.');return;}
     if(setupOnly){message('Setup-only mode: TV pairing is available; playback and dubbing remain disabled.');return;}

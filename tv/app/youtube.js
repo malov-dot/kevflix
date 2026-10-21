@@ -20,6 +20,59 @@
   // The TV also reports how long each picture took (download + decode) so the PC can send smaller pictures when the link is slow.
   // The push stream stays as the fallback when the PC or the TV lacks support.
   var pullOk = false, pullAbort = null, pullUrl = '', pullFailures = 0, lastCounter = 0, lastMs = 0;
+  // Timing report: the TV's console cannot be read, so every 10 s while the view is live ONE line goes to the PC's log (diagnostic stage
+  // 'youtube-view'): pictures per second, KB, wait for the PC, download and decode time per picture, how late this page's own timers run
+  // (lag: a busy TV page delays everything, including the remote keys) and the time from a remote key press to the next picture on screen.
+  var stats = null, statsTimer = 0, lagTimer = 0, lagLast = 0, keyAt = 0;
+  function resetStats() { stats = { n: 0, bytes: 0, wait: 0, xfer: 0, xferMax: 0, dec: 0, decMax: 0, lag: 0, lagMax: 0, lagN: 0, keys: [], since: Date.now() }; }
+  function startStats() {
+    stopStats(); resetStats(); lagLast = Date.now();
+    lagTimer = setInterval(function () {
+      var now = Date.now(), late = Math.max(0, now - lagLast - 100);
+      lagLast = now;
+      if (stats) { stats.lag += late; stats.lagN += 1; if (late > stats.lagMax) stats.lagMax = late; }
+    }, 100);
+    statsTimer = setInterval(reportStats, 10000);
+  }
+  function stopStats() { clearInterval(lagTimer); clearInterval(statsTimer); lagTimer = statsTimer = 0; stats = null; keyAt = 0; }
+  function reportStats() {
+    if (!stats || !active || state !== 'live') { if (stats) resetStats(); return; }
+    var s = stats, seconds = Math.max(1, (Date.now() - s.since) / 1000), n = Math.max(1, s.n);
+    var keys = s.keys.slice().sort(function (a, b) { return a - b; });
+    resetStats();
+    if (!s.n && !keys.length) return;
+    call('diagnostic', { stage: 'youtube-view', youtube: {
+      pictures: s.n, fps: Math.round(10 * s.n / seconds) / 10, kb: Math.round(s.bytes / n / 1024), waitMs: Math.round(s.wait / n),
+      xferMs: Math.round(s.xfer / n), xferMax: s.xferMax, decodeMs: Math.round(s.dec / n), decodeMax: s.decMax,
+      lagAvg: Math.round(s.lag / Math.max(1, s.lagN)), lagMax: s.lagMax,
+      keys: keys.length, keyMedian: keys.length ? keys[keys.length >> 1] : 0, keyMax: keys.length ? keys[keys.length - 1] : 0, pull: pullOk ? 1 : 0 } }, 5000).catch(function () {});
+  }
+  // Once per page load: which browser features this TV has for a future video-based picture (the PC reads it from its log).
+  var capsReported = false;
+  function reportCapabilities() {
+    if (capsReported) return;
+    capsReported = true;
+    var caps = { videoDecoder: typeof VideoDecoder === 'function' ? 1 : 0, imageBitmap: typeof createImageBitmap === 'function' ? 1 : 0,
+      webSocket: typeof WebSocket === 'function' ? 1 : 0, offscreen: typeof OffscreenCanvas === 'function' ? 1 : 0,
+      mse: typeof MediaSource === 'function' ? 1 : 0, streams: typeof ReadableStream === 'function' ? 1 : 0, h264hw: -2 };
+    var send = function () { call('diagnostic', { stage: 'youtube-caps', youtube: caps }, 5000).catch(function () {}); };
+    try {
+      if (caps.videoDecoder && typeof VideoDecoder.isConfigSupported === 'function') {
+        VideoDecoder.isConfigSupported({ codec: 'avc1.640028', codedWidth: 1920, codedHeight: 1080, hardwareAcceleration: 'prefer-hardware' })
+          .then(function (result) { caps.h264hw = result && result.supported ? 1 : 0; }, function () { caps.h264hw = -1; }).then(send);
+        return;
+      }
+    } catch (ignore) {}
+    send();
+  }
+  function notePicture(bytes, requestAt, headersAt, blobAt, shownAt) {
+    if (!stats) return;
+    var xfer = blobAt - headersAt, dec = shownAt - blobAt;
+    stats.n += 1; stats.bytes += bytes; stats.wait += headersAt - requestAt;
+    stats.xfer += xfer; if (xfer > stats.xferMax) stats.xferMax = xfer;
+    stats.dec += dec; if (dec > stats.decMax) stats.decMax = dec;
+    if (keyAt) { stats.keys.push(shownAt - keyAt); keyAt = 0; }
+  }
 
   function token() { try { return localStorage.getItem('sem-tv-token') || ''; } catch (ignore) { return ''; } }
   function mapKey(code) { return BACK[code] ? 'Back' : (NAMES[code] || null); }
@@ -48,6 +101,7 @@
   // ---- keys to the PC (serialised so a key-up can never overtake its key-down) --------------------------------------
   function send(name, action, isRepeat) {
     if (isRepeat && queue.length > 2) return;                     // a slow link drops repeats instead of queueing them
+    if (!isRepeat && action !== 'up') keyAt = Date.now();         // timing report: key press -> next picture on screen
     queue.push({ key: name, action: action });
     pump();
   }
@@ -89,6 +143,7 @@
     if (mine !== serial) return;
     clearTimeout(firstFrameTimer);
     if (state !== 'live') {
+      startStats();
       setState('live', notice || 'Press Back twice, or hold Back, to return to KevFLIX');   // how to leave: a single Back belongs to YouTube
       notice = '';
       clearTimeout(hintTimer);
@@ -99,13 +154,14 @@
     if (pullAbort) { try { pullAbort.abort(); } catch (ignore) {} pullAbort = null; }
     if (pullUrl) { try { URL.revokeObjectURL(pullUrl); } catch (ignore) {} pullUrl = ''; }
     lastCounter = 0; lastMs = 0; pullFailures = 0;
+    stopStats();
     var image = $('youtube-screen');
     image.onload = image.onerror = null;
     image.removeAttribute('src');                                  // also closes the push stream; the PC stops it when no client is left
   }
   function pullPicture(mine) {
     if (mine !== serial || !active) return;
-    var controller = typeof AbortController === 'function' ? new AbortController() : null, headersAt = 0;
+    var controller = typeof AbortController === 'function' ? new AbortController() : null, headersAt = 0, requestAt = Date.now();
     pullAbort = controller;
     var path = '/tv-api/youtube/frame?ticket=' + encodeURIComponent(ticket) + '&after=' + lastCounter + (lastMs > 0 ? '&ms=' + Math.round(lastMs) : '');
     lastMs = 0;
@@ -119,7 +175,7 @@
     }).then(function (blob) {
       if (mine !== serial || !active) return;
       pullFailures = 0;
-      if (blob && blob.size) showPulled(mine, blob, headersAt);
+      if (blob && blob.size) showPulled(mine, blob, requestAt, headersAt, Date.now());
       pullPicture(mine);                                           // the next picture is asked for as soon as this one has arrived
     }).catch(function () {
       if (mine !== serial || !active) return;
@@ -128,13 +184,15 @@
       setTimeout(function () { pullPicture(mine); }, 250 * pullFailures);
     });
   }
-  function showPulled(mine, blob, headersAt) {
+  function showPulled(mine, blob, requestAt, headersAt, blobAt) {
     var image = $('youtube-screen'), url = URL.createObjectURL(blob), previous = pullUrl;
     pullUrl = url;
     image.onload = function () {
       if (mine !== serial) return;
-      lastMs = Date.now() - headersAt;                             // download + decode of this picture, reported with the next request
+      var shownAt = Date.now();
+      lastMs = shownAt - headersAt;                                // download + decode of this picture, reported with the next request
       firstPicture(mine);
+      notePicture(blob.size, requestAt, headersAt, blobAt, shownAt);
     };
     image.onerror = function () { lastMs = 0; };
     image.src = url;
@@ -203,6 +261,7 @@
     Object.keys(downNow).forEach(function (code) { held[code] = 'stale'; });
     active = true; failures = 0; queue = []; sending = false;
     $('youtube-view').hidden = false;
+    pausePosters(true);
     setState('connecting', 'Returning to YouTube…');
     var mine = ++serial;
     // the PC unblocks the page's media and sends Back to its watch screen FIRST; only then is the picture stream reopened
@@ -215,8 +274,15 @@
     releaseAll(false);
     Object.keys(downNow).forEach(function (code) { held[code] = 'stale'; });   // the key that opened the view is not a YouTube key
     $('youtube-view').hidden = false;
+    pausePosters(true);
+    reportCapabilities();
     connect();
     watchHost();
+  }
+  // the library's poster loading steps aside while YouTube is on screen (see player.js pausePosters)
+  function pausePosters(pause) {
+    var player = window.KevFlixPlayer;
+    try { if (player && typeof (pause ? player.pausePosters : player.resumePosters) === 'function') (pause ? player.pausePosters : player.resumePosters)(); } catch (ignore) {}
   }
   function exit() {
     if (!active) return;
@@ -226,6 +292,7 @@
     clearTimeout(hintTimer); clearTimeout(firstFrameTimer); clearInterval(statusTimer);
     stopPicture();                                                 // closes the stream; the PC stops it when no client is left
     $('youtube-view').hidden = true;
+    pausePosters(false);
     swallowBack = wasBack;                                         // the rest of a held Back press must not reach KevFLIX
     var target = returnFocus && document.contains(returnFocus) && !returnFocus.hidden ? returnFocus : $('youtube-tile');
     if (target && target.focus) target.focus();

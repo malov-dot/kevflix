@@ -115,8 +115,8 @@ DEFAULTS = {
     # Background YouTube TV page streamed to the TV (relay/youtube_host.py). OFF until the owner turns it on.
     "youtube": {"enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "",
                 "idle_seconds": 120, "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen",
-                "start_url": "https://www.youtube.com/tv", "width": 1920, "height": 1080, "jpeg_quality": 65,
-                "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1280, "stream_height": 720,
+                "start_url": "https://www.youtube.com/tv", "width": 1920, "height": 1080, "jpeg_quality": 70,
+                "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1920, "stream_height": 1080,
                 # Hand-off of a picked video to the KevFLIX player (relay/youtube_source.py; yt-dlp downloads it into media_dir).
                 "handoff": True, "media_dir": "C:/KevFLIX-Runtime/youtube-media", "max_minutes": 240, "max_cache_gb": 30,
                 "max_height": 1080, "node_path": ""},

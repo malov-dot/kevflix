@@ -42,7 +42,7 @@ USER_AGENTS = {"tizen": TIZEN_UA, "cobalt": COBALT_UA}
 DEFAULT_SETTINGS = {
     "enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "", "idle_seconds": 120,
     "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen", "start_url": "https://www.youtube.com/tv",
-    "width": 1920, "height": 1080, "jpeg_quality": 65, "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1280, "stream_height": 720,
+    "width": 1920, "height": 1080, "jpeg_quality": 70, "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1920, "stream_height": 1080,
     # Hand-off of a picked video to KevFLIX's own player (relay/youtube_source.py): yt-dlp downloads it into media_dir.
     "handoff": True, "media_dir": "C:/KevFLIX-Runtime/youtube-media", "max_minutes": 240, "max_cache_gb": 30,
     "max_height": 1080, "node_path": "",
@@ -327,7 +327,7 @@ class Cdp:
             self.task.cancel()
 
 
-PICTURE_LEVELS = ((1.0, 0), (0.8, -10), (0.667, -15))      # (size factor, JPEG quality change): level 0 is the configured picture
+PICTURE_LEVELS = ((1.0, 0), (0.75, -8), (0.667, -15), (0.5, -20))      # (size factor, JPEG quality change): level 0 is the configured picture (1080p by default)
 
 
 class PictureGovernor:
@@ -383,6 +383,7 @@ class YouTubeHost:
         self._play = None                                        # {video_id, seq, at}: the newest video picked on the page
         self._play_seq, self._handoff, self._handoff_since = 0, False, 0.0
         self._governor = PictureGovernor()
+        self._pull = {"since": None, "n": 0, "bytes": 0, "ms": 0.0, "ms_n": 0}
 
     # ---- thread-safe API ---------------------------------------------------------------------------------------
     def status(self):
@@ -502,6 +503,26 @@ class YouTubeHost:
             if after > self._counter:
                 after = 0                                         # the host restarted since the TV last saw a picture
         return self.next_frame(after, wait)
+
+    def note_pull(self, nbytes, tv_ms=None):
+        """Counts the pictures the pull transport serves; one summary line in the log every 10 s while they flow (the request itself is not logged:
+        ten or more per second)."""
+        now = self._clock()
+        with self._cond:
+            s = self._pull
+            if s["since"] is None:
+                s["since"] = now
+            s["n"] += 1
+            s["bytes"] += int(nbytes)
+            if tv_ms is not None:
+                s["ms"] += float(tv_ms)
+                s["ms_n"] += 1
+            if now - s["since"] < 10.0:
+                return
+            n, size, ms, ms_n, seconds = s["n"], s["bytes"], s["ms"], s["ms_n"], now - s["since"]
+            s.update(since=now, n=0, bytes=0, ms=0.0, ms_n=0)
+        logging.info("YouTube pictures: %d in %.0f s (%.1f per second), %.0f KB each, the TV needed %s per picture, level %d (%dx%d q%d)",
+                     n, seconds, n / seconds, size / n / 1024, ("%.0f ms" % (ms / ms_n)) if ms_n else "(no report)", self._governor.level, *self.picture())
 
     def picture(self):
         """(width, height, quality) of the pictures currently sent, after the governor's level."""

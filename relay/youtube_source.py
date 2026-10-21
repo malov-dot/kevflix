@@ -50,8 +50,8 @@ STREAM_DEFAULTS = {
     "stream_segment_seconds": 4,     # playback segment length of a streaming YouTube session (library films keep segment_seconds)
     "stream_start_seconds": 6.0,     # lead the TV is asked to buffer before it starts
     "stream_ahead_seconds": 48.0,    # how far past the playhead segments are prepared
-    "stream_max_height": 1080,       # output height cap of a streaming session (a 10 Mbit/s Wi-Fi TV)
-    "stream_maxrate": "6M", "stream_bufsize": "12M",
+    "stream_max_height": 2160,       # output height cap of a streaming session: by default the TV's own quality / upscale setting decides (lower it for a slow link)
+    "stream_maxrate": None, "stream_bufsize": None,     # None: the same rate rule as a library film at that height (30M / 60M at 2160, else 8M / 16M)
     "open_wait_seconds": 1.5,        # the TV's open request waits this long for the first segment before answering "preparing"
     "live": True,                    # live streams play
     "live_segment_seconds": 2, "live_list_size": 8, "live_start_segments": 2,

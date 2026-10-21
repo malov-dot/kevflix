@@ -41,7 +41,7 @@ def passthrough_mode(mode):
     original-English... (every producer mode that starts with "original")."""
     return mode == "no-dialogue" or str(mode or "").startswith("original")
 DIAGNOSTIC_KEYS = ("stage", "engine", "code", "message", "ready_state", "network_state", "native_hls", "hls_js", "ua",
-                   "session", "error", "hls", "codecs", "probe")
+                   "session", "error", "hls", "codecs", "probe", "youtube")
 _URL = re.compile(r"https?://\S+", re.I)
 
 
@@ -2061,7 +2061,8 @@ class TVService:
         codec, codec_options = self._video_codec(encoder, preserve_hdr, value["encoder_threads"])
         rate, buffer_size = ("30M" if height == 2160 else "8M"), ("60M" if height == 2160 else "16M")
         if youtube:
-            rate, buffer_size = str(self._yt_opt("stream_maxrate")), str(self._yt_opt("stream_bufsize"))    # a 10 Mbit/s Wi-Fi TV
+            # optional caps (youtube.stream_maxrate / stream_bufsize); unset: the same rate rule as a library film at this height
+            rate, buffer_size = str(self._yt_opt("stream_maxrate") or rate), str(self._yt_opt("stream_bufsize") or buffer_size)
         color = (["-color_primaries", "bt2020", "-color_trc", video["color_transfer"],
                   "-colorspace", "bt2020nc"] if preserve_hdr else [])
         args += ["-map", "0:" + str(video["index"]), "-map", "1:a:0" if audio_input else "0:" + str(value["audio_index"]),

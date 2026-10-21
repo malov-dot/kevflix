@@ -304,6 +304,8 @@ class Handler(BaseHTTPRequestHandler):
                 return default
         after, tv_ms = int(max(0, number("after", 0))), number("ms")
         found = host.pull_frame(after, 1.5, tv_ms)
+        if found:
+            host.note_pull(len(found[1]), tv_ms)
         self.send_response(200 if found else 204)
         self.cors()
         self.send_header("Cache-Control", "no-store")
