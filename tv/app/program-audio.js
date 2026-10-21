@@ -64,5 +64,23 @@
   });
   label();
   // player.js calls this when a YouTube pick opens the player: that OK press is the viewer's own Play, so the saved sound choice applies.
-  window.KevFlixAudio = { apply: apply };
+  // The on-screen skins (controls.js) read and set the sound level here: get() = {muted, volume} (the element's own state once the viewer has played
+  // something, else the saved choice); set(level) = a level from LEVELS, or 0 for Off (muted; the saved volume is kept). Saved like the Sound button does.
+  function get() {
+    if (!gestured) { return load(); }
+    return { muted: video.muted === true, volume: video.volume };
+  }
+  function set(level) {
+    level = Number(level);
+    if (!gestured) { apply(); }
+    var prefs = level > 0 && level <= 1 ? { muted: false, volume: level } : { muted: true, volume: load().volume };
+    save(prefs);
+    applying = true;
+    video.defaultMuted = false;
+    video.volume = prefs.volume;
+    video.muted = prefs.muted;
+    applying = false;
+    label();
+  }
+  window.KevFlixAudio = { apply: apply, get: get, set: set, levels: LEVELS.concat([0]) };
 }());

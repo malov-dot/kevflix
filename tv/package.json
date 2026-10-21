@@ -1,6 +1,6 @@
 {
   "name": "kevflix",
-  "version": "0.4.67",
+  "version": "0.4.68",
   "description": "KevFLIX: local movies with PC-assisted English dubbing and upscaling. Unvalidated development build.",
   "packageType": "app",
   "appName": "KevFLIX",
@@ -30,7 +30,9 @@
       "no-native-hls.js",
       "program-audio.js",
       "program-status.js",
-      "youtube.js"
+      "youtube.js",
+      "controls.js",
+      "controls.css"
     ],
     "capabilities": [
       "program-player-v1"
@@ -39,7 +41,9 @@
       "no-native-hls.js",
       "program-audio.js",
       "program-status.js",
-      "youtube.js"
+      "youtube.js",
+      "controls.js",
+      "controls.css"
     ],
     "playerBase": "6c0dd972bd46e2cb191494d4cd7788d2db571803 + program additions"
   }

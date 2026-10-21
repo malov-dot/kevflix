@@ -16,7 +16,7 @@ from .media import atomic_json
 FILES = ("index.html", "player.css", "player.js")
 # Program player additions (tv/app, W10). The movie worker's player REQUIRES them: a release is used only when its
 # manifest pins every one of REQUIRED_FILES and they are present with those hashes.
-PROGRAM_FILES = ("no-native-hls.js", "program-audio.js", "program-status.js", "youtube.js")
+PROGRAM_FILES = ("no-native-hls.js", "program-audio.js", "program-status.js", "youtube.js", "controls.js", "controls.css")
 REQUIRED_FILES = FILES + PROGRAM_FILES
 BUNDLED_PACKAGE = Path(__file__).resolve().parent.parent / "tv" / "package.json"
 

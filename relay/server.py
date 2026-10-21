@@ -249,6 +249,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self.json_response(host.resume() if host is not None else {"state": "stopped", "handoff": False})
             if action == "cancel":
                 return self.json_response({"cancelled": bool(self.app.tv.youtube_cancel())})
+            if action == "rate":                               # the YouTube-style Like / Dislike buttons: the PC's signed-in YouTube does it
+                from . import youtube_account as account
+                try:
+                    return self.json_response(account.rate(host, data.get("video"), str(data.get("rating", ""))))
+                except account.AccountError as error:
+                    return self.json_response({"error": str(error)}, 409)
             if action == "close":
                 if host is not None:
                     host.close()
@@ -256,6 +262,28 @@ class Handler(BaseHTTPRequestHandler):
         except RuntimeError as error:                      # HostError: Chrome missing / not open / dropped
             return self.json_response({"error": str(error)}, 409)
         return self.json_response({"error": "Unknown TV endpoint"}, 404)
+
+    def youtube_info(self, query):
+        """GET /tv-api/youtube/info?video=<id>: {video, up_next: {id, title}|null, signed_in: bool|null, rating: 'like'|'dislike'|'none'|null}.
+        up_next is public data; the rating is read through the PC's signed-in YouTube (null when it is not open or not signed in)."""
+        if self.app.config["setup_only"] or not self.app.config["youtube"]["enabled"]:
+            return self.json_response({"error": "YouTube is turned off (youtube.enabled)"}, 403)
+        from . import youtube_account as account
+        try:
+            video = account.clean_video(query.get("video"))
+        except account.AccountError as error:
+            return self.json_response({"error": str(error)}, 400)
+        info = {"video": video, "up_next": None, "signed_in": None, "rating": None}
+        try:
+            info["up_next"] = account.up_next(video)
+        except account.AccountError:
+            pass
+        try:
+            state = account.rating(self.app.youtube_host(create=False), video)
+            info["signed_in"], info["rating"] = state["signed_in"], state["rating"]
+        except account.AccountError:
+            pass
+        return self.json_response(info)
 
     def youtube_screen(self, query):
         """Long-lived multipart/x-mixed-replace MJPEG of the latest frames. An <img> cannot send an Authorization header, so
@@ -338,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # The program player (tv/app: derived from release 6c0dd972 with its seek-reload fix) adds three scripts.
             ui_asset = re.fullmatch(r"/tv-ui/(bundled|[0-9a-f]{40})/(index\.html|player\.js|player\.css|"
-                                    r"no-native-hls\.js|program-audio\.js|program-status\.js|youtube\.js)", path)
+                                    r"no-native-hls\.js|program-audio\.js|program-status\.js|youtube\.js|controls\.js|controls\.css)", path)
             if ui_asset:
                 return self.file(self.app.updates.file(ui_asset[1], ui_asset[2]), tv_asset=True)
             if path == "/tv-api/version":
@@ -353,6 +381,8 @@ class Handler(BaseHTTPRequestHandler):
                 device = self.tv_device()
                 if path == "/tv-api/youtube/status":
                     return self.youtube_api(path, {})
+                if path == "/tv-api/youtube/info":
+                    return self.youtube_info(query)
                 if path == "/tv-api/library":
                     return self.json_response(self.app.tv.browse(
                         query.get("folder"), query.get("offset", 0), query.get("query", "")))

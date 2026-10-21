@@ -217,6 +217,11 @@ var SemTvProbe=(function(){
   var filters={genre:'',year:'',collection:'',sort:'titleSort:asc'},filterLabels={},availableFilters=[],availableSorts=[];
   var moviePrefs=null,returnFromAlphabet=null;
   var launcherURL='';
+  // On-screen skins (controls.js): the Plex and YouTube control sets hook in through window.KevFlixPlayerUI (below). uiHooks = their listeners,
+  // uiItem = the library/YouTube item the TV opened, switchOpening = a Plex episode / YouTube video opened FROM a playing session (Back cancels it),
+  // quietNext = the next leave() keeps the player screen up (switching videos inside the player instead of leaving it).
+  var uiHooks={status:[],message:[]},uiItem=null,switchOpening=null,quietNext=false;
+  function uiEmit(kind,value){var list=uiHooks[kind];for(var i=0;i<list.length;i++){try{list[i](value);}catch(ignore){}}}
   try{
     var suppliedLauncher=new URLSearchParams(location.hash.slice(1)).get('launcher');
     launcherURL=suppliedLauncher||localStorage.getItem('kevflix-launcher-url')||'';
@@ -242,7 +247,7 @@ var SemTvProbe=(function(){
     if(text)noticeTimer=setTimeout(function(){$('notice').hidden=true;},8000);
     if(!$('pair-panel').hidden)$('pair-message').textContent=text||'';
   }
-  function playerMessage(text){$('player-message').textContent=text||'';}
+  function playerMessage(text){$('player-message').textContent=text||'';uiEmit('message',text||'');}
   function clock(seconds){
     seconds=Math.floor(Math.max(0,Number(seconds)||0));
     var h=Math.floor(seconds/3600),m=Math.floor(seconds/60)%60,s=seconds%60;
@@ -513,7 +518,7 @@ var SemTvProbe=(function(){
     }
     else if(!verdict.open&&(loadedGeneration!==value.generation||(wantedPlay&&video.paused&&!video.ended))){bufferView('Buffering',bufferDetail(verdict,value),verdict.need?(verdict.lead||0)/verdict.need:null);}
     if(SemBufferGate.autoResume(bufferGate,value,{loaded:loadedGeneration===value.generation&&!loading,paused:video.paused,ended:video.ended,busy:resuming,error:!!reportedError,wantedPlay:wantedPlay})){resuming=true;$('buffering').hidden=true;playVideo().catch(function(e){playerMessage(e.message);}).then(function(){resuming=false;});}
-    updateCaptions(false);
+    updateCaptions(false);uiEmit('status',session);
   }
   // YouTube hand-off (stage 3): the PC downloads the picked video (yt-dlp) and KevFLIX plays it like a film. 'open' answers {preparing:true,youtube:{text,percent}}
   // until the file is staged; that text goes on the normal buffering card. Back cancels the download. Any failure throws, and youtube.js returns to its view.
@@ -541,16 +546,35 @@ var SemTvProbe=(function(){
   }
   // The OK that picked the video in the YouTube view is the viewer's own Play: apply the saved sound choice now (the player starts muted and a library film
   // is unmuted by its Play button's click, which a YouTube pick never presses: without this the video played silently).
-  window.KevFlixPlayer={openYoutube:function(id){try{if(window.KevFlixAudio)window.KevFlixAudio.apply();}catch(ignore){}return openMovie({id:String(id),youtube:true,title:'YouTube video'},true);},
+  window.KevFlixPlayer={openYoutube:function(id){try{if(window.KevFlixAudio)window.KevFlixAudio.apply();}catch(ignore){}return openMovie({id:String(id),youtube:true,title:'YouTube video'},true,!!(session&&session.youtube));},   // from inside a playing YouTube video (Next / Previous / autoplay) the player screen stays up
     // While the YouTube view is on screen the library posters stop loading (a library page fetches and decodes up to ~100 of them, two at a time, on the
     // TV's one page thread: the YouTube picture and the remote keys waited behind them); they continue when the view closes.
-    pausePosters:function(){posterEpoch+=1;},resumePosters:function(){void loadPosters();}};
-  async function openMovie(item,restart){
+    pausePosters:function(){posterEpoch+=1;},resumePosters:function(){void loadPosters();},
+    // Next / Previous episode from the Plex skin: opens the Plex item exactly as the library does (openMovie with item.plex and id = the Plex key), from the start.
+    // Inside a playing session the player screen stays up with a buffering card; any failure returns to the library (never a black screen), Back cancels.
+    openPlex:function(key,title){
+      var quiet=!!session,item={id:String(key),plex:true,title:title||'Plex video'};
+      if(quiet){switchOpening=item;bufferView('Opening',item.title,null);}
+      return openMovie(item,true,quiet).catch(function(error){
+        if(switchOpening!==item)throw error;
+        $('buffering').hidden=true;message((error&&error.message)||'This item could not be opened.');return leave();
+      }).then(function(){if(switchOpening===item)switchOpening=null;});
+    }};
+  // What the on-screen skins (controls.js) may use: the player's own functions, nothing duplicated. change() routes the light settings (subtitles, Watch with Sem,
+  // commentary mode, Plex progress) through setting() like the old controls do (no pause, no reload); everything else through change().
+  window.KevFlixPlayerUI={video:video,session:function(){return session;},item:function(){return uiItem;},position:position,
+    duration:function(){return session?Number(session.duration)||0:0;},isPlaying:function(){return !!wantedPlay;},
+    playPause:function(){return playPause();},seekTo:seekTo,seekBy:function(delta){if(session)seekTo(position()+delta);},
+    change:function(action,fields){return (action==='subtitles'||action==='watch'||action==='watch_mode'||action==='progress_sync')?setting(action,fields||{}):change(action,fields||{});},
+    dub:function(){$('dub').click();},leave:function(){return leave();},message:playerMessage,
+    onStatus:function(fn){uiHooks.status.push(fn);},onMessage:function(fn){uiHooks.message.push(fn);}};
+  if(window.KevFlixControls&&window.KevFlixControls.attach)window.KevFlixControls.attach(window.KevFlixPlayerUI);
+  async function openMovie(item,restart,quiet){
     if(item.plex&&item.playable===false){message('This library item is available to browse. KevFLIX currently plays videos.');return;}
     if(setupOnly){message('Setup-only mode: TV pairing is available; playback and dubbing remain disabled.');return;}
-    var prefs=moviePrefs||defaults;
+    var prefs=moviePrefs||defaults;quietNext=quiet===true;
     await leave();
-    var number=++operation;
+    if(item.cancelled)return;var number=++operation;
     message(item.youtube?'':'Opening movie…');
     var value=item.youtube?await openYoutubeValue(item,number):await api('open',item.plex?{plex_key:item.id,resume:!restart}:{node:item.id});
     if(!item.plex&&!restart&&item.resume>10)value=await api('control',{id:value.id,action:'seek',position:item.resume});
@@ -564,7 +588,7 @@ var SemTvProbe=(function(){
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     bufferGate=SemBufferGate.create();$('buffering').hidden=true;
-    session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;
+    uiItem=item;session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;
     $('details').hidden=true;$('player').hidden=false;$('main').hidden=true;$('sidebar').hidden=true;message('');
     $('audio-track').replaceChildren.apply($('audio-track'),value.audio_tracks.map(function(track){
       var option=document.createElement('option');option.value=track.index;
@@ -819,7 +843,10 @@ var SemTvProbe=(function(){
     setPlayState();showControls();
     var intentId=session.id;api('control',{id:intentId,action:wantedPlay?'play':'pause'}).catch(function(e){playerMessage(e.message);}).then(function(){if(session&&session.id===intentId)void poll();});
   }
-  async function leave(){
+  // quiet (set by openMovie when a Plex episode / YouTube video is opened from a playing session): the player screen stays up, the library is not
+  // touched and the YouTube view is not resumed; selectedItem is hidden from the library bookkeeping below for the length of the call.
+  async function leave(quiet){quiet=quiet===true||quietNext;quietNext=false;var held=selectedItem;if(quiet)selectedItem=null;try{await leaveSession(quiet);}finally{if(quiet)selectedItem=held;}}
+  async function leaveSession(quiet){
     if(session&&selectedItem&&!session.youtube){
       var saved=position();resumeMap[selectedItem.id]={position:saved>session.duration-30?0:saved};
       try{localStorage.setItem('kevflix-resume',JSON.stringify(resumeMap));}catch(ignore){}
@@ -829,13 +856,13 @@ var SemTvProbe=(function(){
     if(session){try{await api('heartbeat',{id:session.id,position:position(),state:video.ended?'ended':'paused',generation:session.generation});}catch(ignore){}}
     operation++;clearInterval(pollTimer);clearTimeout(hideTimer);
     if(loadAbort)loadAbort.abort();loading=false;loadSerial++;
-    var old=session;session=null;wantedPlay=false;loadedGeneration=0;
+    var old=session;session=null;wantedPlay=false;loadedGeneration=0;uiEmit('status',null);
     video.pause();proofDecoder.detach();video.removeAttribute('src');video.load();
-    $('player').hidden=true;$('header').hidden=false;$('main').hidden=false;$('sidebar').hidden=false;$('library-panel').hidden=!token||page==='settings';
+    if(!quiet){$('player').hidden=true;$('header').hidden=false;$('main').hidden=false;$('sidebar').hidden=false;$('library-panel').hidden=!token||page==='settings';}
     $('playback-panel').hidden=true;captionKey='';
     if(old){try{await api('control',{id:old.id,action:'stop'});}catch(ignore){}}
     if(old&&selectedItem&&!old.youtube)showDetails(selectedItem,selectedCard);
-    if(old&&old.youtube&&window.KevFlixYoutube)window.KevFlixYoutube.resume();   // the hand-off is over: back to the YouTube view
+    if(!quiet)if(old&&old.youtube&&window.KevFlixYoutube)window.KevFlixYoutube.resume();   // the hand-off is over: back to the YouTube view
   }
   $('leave-player').onclick=function(){void leave();};
   $('play-pause').onclick=playPause;
@@ -937,6 +964,7 @@ var SemTvProbe=(function(){
     var key=event.keyCode||event.which||({ArrowLeft:37,ArrowUp:38,ArrowRight:39,ArrowDown:40,Enter:13,Backspace:8,Escape:27,Return:10009}[event.key]);
     var active=document.activeElement;
     if(event.isComposing)return;
+    if(switchOpening){event.preventDefault();if(key===10009||key===27||key===8){switchOpening.cancelled=true;switchOpening=null;operation++;$('buffering').hidden=true;void leave();}return;}   // Back while the next Plex episode opens (the player screen is up with no session): cancel and return to the library
     if(probeRunning){event.preventDefault();if(key===10009||key===27||key===8)probeCancel=true;return;}
     if(youtubeOpening){event.preventDefault();if(key===10009||key===27||key===8){youtubeOpening.cancelled=true;api('youtube/cancel',{}).catch(function(){});}return;}   // Back while downloading cancels
     if(session&&$('choice-panel').hidden&&$('playback-panel').hidden&&$('player-controls').classList.contains('controls-hidden')&&[13,37,38,39,40].indexOf(key)>=0){

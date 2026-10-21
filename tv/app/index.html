@@ -2,7 +2,7 @@
 <!-- KevFLIX program player (W10): DERIVED from player release 6c0dd972 index.html (proof banner removed, Sound control, HLS shim + program-audio/program-status scripts); player.js/player.css are the release bytes -->
 <html lang="en">
 <head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KevFLIX</title><link rel="stylesheet" href="player.css"></head>
+<title>KevFLIX</title><link rel="stylesheet" href="player.css"><link rel="stylesheet" href="controls.css"></head>
 <body>
 <aside id="sidebar">
   <div class="brand">Kev<span>FLIX</span></div>
@@ -14,7 +14,7 @@
     <button id="nav-search" class="nav" data-page="search"><span class="symbol">⌕</span>Search</button>
     <button id="nav-settings" class="nav" data-page="settings"><span class="symbol">⚙</span>Settings</button>
   </nav>
-  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.4.67</small></div>
+  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.4.68</small></div>
 </aside>
 <main id="main">
   <header id="header"><div><small id="eyebrow">YOUR COLLECTION</small><h1 id="heading">Home</h1></div><span id="worker-mode"></span></header>
@@ -61,6 +61,7 @@
 <section id="player" hidden>
   <video id="video" playsinline preload="auto"></video>
   <div id="buffering" hidden><div class="spinner"></div><h2 id="buffer-title">Preparing playback</h2><div id="buffer-bar" hidden><span id="buffer-fill"></span></div><p id="buffer-detail"></p></div>
+  <div id="skin" hidden></div>
   <div id="player-controls">
     <div class="pc-top"><button id="leave-player" class="pc-back" aria-label="Back to movie"><svg viewBox="0 0 48 48" aria-hidden="true"><path d="M30 10 16 24l14 14" fill="none" stroke="currentColor" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg></button><div class="play-title"><h2 id="movie-title"></h2><p id="profile"></p></div></div>
     <div class="pc-bottom">
@@ -87,6 +88,7 @@
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <script src="no-native-hls.js"></script>
 <script src="youtube.js"></script>
+<script src="controls.js"></script>
 <script src="player.js"></script>
 <script src="program-audio.js"></script>
 <script src="program-status.js"></script>

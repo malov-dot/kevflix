@@ -419,6 +419,20 @@ class YouTubeHost:
     def touch(self):
         self._last_activity = self._clock()
 
+    def evaluate(self, expression, timeout=20):
+        """Evaluate a JavaScript expression in the YouTube page (a returned promise is awaited) and return its JSON value. Used by
+        relay/youtube_account.py to read or set the signed-in viewer's like from inside youtube.com."""
+        if self.state != "running" or not self._loop:
+            raise HostError("YouTube is not open")
+        self.touch()
+        return self._call(self._evaluate(expression, timeout), timeout + 5)
+
+    async def _evaluate(self, expression, timeout):
+        reply = await self._cdp.send("Runtime.evaluate", {"expression": expression, "returnByValue": True, "awaitPromise": True}, timeout=timeout)
+        if reply.get("exceptionDetails"):
+            raise HostError("The YouTube page could not run the request")
+        return (reply.get("result") or {}).get("value")
+
     def ticket_valid(self, ticket):
         return bool(self.ticket) and hmac.compare_digest(str(ticket or ""), self.ticket)
 

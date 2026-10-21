@@ -44,6 +44,7 @@ SIGN_IN = ("YouTube needs a sign-in to play this video. KevFLIX does not sign in
            "so only public videos can be played.")
 # Fast-start settings. They live here (not in config.DEFAULTS / youtube_host.DEFAULT_SETTINGS, which must stay equal to each other) and
 # a youtube.<key> in relay-config.json overrides them; relay/config.py validates the ranges of the ones that are present.
+CAPTION_CODE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,15}")
 STREAM_DEFAULTS = {
     "stream": True,                  # an ordinary (not-to-be-dubbed) video plays while it downloads
     "stream_foreign": False,         # True: videos that default to dubbing (foreign or unknown language) stream too (dubbing then waits for the file)
@@ -141,6 +142,44 @@ def _clean_headers(headers):
     return {str(k): str(v) for k, v in (headers or {}).items() if str(k).lower() in keep}
 
 
+def caption_list(info):
+    """[{code, name, auto}] of the captions YouTube offers for a video: every uploaded track, plus the automatic track in the video's own
+    language and English. Addresses are not kept (they expire): captions() asks yt-dlp again when one is picked."""
+    def label(tracks, code):
+        first = next((t for t in (tracks or []) if isinstance(t, dict) and t.get("name")), {})
+        return re.sub(r"[\x00-\x1f\x7f]", " ", str(first.get("name") or code))[:60]
+    found = []
+    for code, tracks in (info.get("subtitles") or {}).items():
+        if CAPTION_CODE.fullmatch(str(code)) and str(code) != "live_chat":
+            found.append({"code": str(code), "name": label(tracks, code), "auto": False})
+    # Automatic captions: only the speech recognition of the video's own audio ('<lang>-orig', English first). The other automatic
+    # entries are YouTube's machine TRANSLATIONS of it, which YouTube rate-limits (HTTP 429), so they are offered only when there is no original.
+    auto = info.get("automatic_captions") or {}
+    originals = sorted((str(key) for key in auto if str(key).endswith("-orig") and CAPTION_CODE.fullmatch(str(key))),
+                       key=lambda code: (not code.startswith("en"), code))
+    for code in (originals[:3] or (["en"] if "en" in auto else [])):
+        if not any(item["code"] == code for item in found):
+            found.append({"code": code, "name": label(auto[code], code) + " (automatic)", "auto": True})
+    return found[:12]
+
+
+def parse_json3(text):
+    """[{start, end, text}] (seconds) from a YouTube json3 caption file; empty lines and bare line-break events are skipped."""
+    try:
+        data = json.loads(text)
+    except ValueError:
+        return []
+    cues = []
+    for event in (data.get("events") or []) if isinstance(data, dict) else []:
+        if not isinstance(event, dict) or not event.get("segs"):
+            continue
+        line = " ".join("".join(str(seg.get("utf8") or "") for seg in event["segs"] if isinstance(seg, dict)).split())
+        if line:
+            start = float(event.get("tStartMs") or 0) / 1000
+            cues.append({"start": start, "end": start + float(event.get("dDurationMs") or 2000) / 1000, "text": line})
+    return cues
+
+
 def stream_inputs(info):
     """The inputs the range proxy can read for a resolved video: [{url, headers, length, kind}] (one video and one audio, or one
     muxed file), or None when any selected format is not a plain https googlevideo file (HLS, DASH fragments, DRM...)."""
@@ -202,6 +241,7 @@ class _Job:
         return {"state": self.state, "video_id": self.id, "percent": int(self.percent), "text": self.text, "error": self.error,
                 "path": self.path, "title": meta.get("title", ""), "duration": meta.get("duration", 0),
                 "language": meta.get("language", ""), "uploader": meta.get("uploader", ""),
+                "channel": meta.get("channel") or meta.get("uploader", ""), "captions": list(meta.get("captions") or []),
                 "dub_default": dub_default(meta.get("language")) and not meta.get("live"),      # a live stream is never dubbed
                 # fast start: how the file is obtained, how many seconds of it are readable now, whether it is the finished cached file
                 "mode": self.mode, "readable": float(meta.get("duration", 0)) if done else float(self.readable), "complete": done,
@@ -310,6 +350,33 @@ class YouTubeSource:
             return True
         except SourceError:
             return False
+
+    def captions(self, video_id, code):
+        """The json3 captions of one language as a file: downloaded with yt-dlp the first time (a few seconds), then kept next to the
+        video. SourceError (shown on the TV) when YouTube has none or does not answer."""
+        video_id = clean_id(video_id)
+        code = str(code)
+        if not CAPTION_CODE.fullmatch(code):
+            raise SourceError("Those captions are not available")
+        folder = Path(self.settings["media_dir"]) / video_id
+        target = folder / ("%s.%s.json3" % (video_id, code))
+        if target.is_file():
+            return target
+        folder.mkdir(parents=True, exist_ok=True)
+        command = self.prefix + self._common() + ["--skip-download", "--write-subs", "--write-auto-subs", "--sub-langs", code,
+                                                  "--sub-format", "json3", "-o", str(folder / "%(id)s"), "--",
+                                                  "https://www.youtube.com/watch?v=" + video_id]
+        flags = {"creationflags": CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS} if os.name == "nt" else {}
+        try:
+            done = subprocess.run(command, stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                  timeout=90, env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1", **(self.env or {})}, **flags)
+        except subprocess.TimeoutExpired:
+            raise SourceError("YouTube did not answer in time")
+        if not target.is_file():
+            if "429" in (done.stderr or ""):
+                raise SourceError("YouTube is limiting caption requests right now. Try again in a few minutes.")
+            raise SourceError("YouTube has no captions in that language for this video")
+        return target
 
     def live_inputs(self, video_id):
         """The resolved live stream of the last job ({inputs: [{url, headers, kind}], title, ...}) or None. Addresses never leave the PC."""
@@ -482,6 +549,7 @@ class YouTubeSource:
             raise SourceError("YouTube returned no details for this video")
         title = re.sub(r"[\x00-\x1f\x7f]", " ", str(info.get("title") or "YouTube video")).strip()[:200] or "YouTube video"
         uploader = re.sub(r"[\x00-\x1f\x7f]", " ", str(info.get("uploader") or ""))[:120]
+        channel = re.sub(r"[\x00-\x1f\x7f]", " ", str(info.get("channel") or info.get("uploader") or ""))[:120]
         status = info.get("live_status")
         if info.get("is_live") or status in LIVE_STATES:
             if status == "is_upcoming":
@@ -494,7 +562,7 @@ class YouTubeSource:
             if inputs is None:
                 raise SourceError("YouTube did not offer a live picture this PC can play.")
             job.live = {"inputs": inputs, "title": title, "uploader": uploader}
-            job.meta = {"id": job.id, "title": title, "duration": 0.0, "language": "", "uploader": uploader, "live": True,
+            job.meta = {"id": job.id, "title": title, "duration": 0.0, "language": "", "uploader": uploader, "channel": channel, "live": True,
                         "formats": stream_formats(info)}
             job.live_at = time.time()
             job.state, job.percent, job.text = "live", 0, "Starting the live stream…"
@@ -512,6 +580,7 @@ class YouTubeSource:
         if not language:
             language = next((str(key)[:-5] for key in (info.get("automatic_captions") or {}) if str(key).endswith("-orig")), "")
         meta = {"id": job.id, "title": title, "duration": duration, "language": str(language or "")[:16], "uploader": uploader,
+                "channel": channel, "captions": caption_list(info),
                 "streams": max(1, len(info.get("requested_formats") or [])), "formats": stream_formats(info)}
         inputs = stream_inputs(info) if self.opt("stream") else None
         if inputs and (self.opt("stream_foreign") or not dub_default(meta["language"])):

@@ -424,6 +424,7 @@ class TVService:
             value["title"] = info["title"] or value["title"]
             value["youtube"] = {"id": info["video_id"], "language": info["language"], "uploader": info["uploader"],
                                 "dub_default": bool(info["dub_default"])}
+            value["yt_channel"], value["yt_captions"] = info.get("channel") or info["uploader"], list(info.get("captions") or [])
         return self.status(opened["id"], device)
 
     @staticmethod
@@ -455,7 +456,8 @@ class TVService:
                 "quality": min(requested, int(self._yt_opt("stream_max_height"))), "yt_quality_request": requested,
                 "title": info["title"] or source.stem, "yt_stream": True, "yt_pending": True,
                 "youtube": {"id": info["video_id"], "language": info["language"], "uploader": info["uploader"],
-                            "dub_default": bool(info["dub_default"])}}
+                            "dub_default": bool(info["dub_default"])},
+                "yt_channel": info.get("channel") or info["uploader"], "yt_captions": list(info.get("captions") or [])}
         opened = self.open_movie(device, node["id"], None, _preset={
             "metadata": metadata, "fingerprint": "youtube:" + info["video_id"], "spec": spec})
         return self.session(opened["id"], device)
@@ -485,7 +487,8 @@ class TVService:
                  "resource_wait": None, "touched": time.time(), "segments": {}, "error": None,
                  "dub_unsupported": "Dubbing is not available for live streams.", "job_attached_at": 0.0,
                  "expires": int(time.time()) + 12 * 3600, "live": True, "yt_pending": True, "live_window": [], "live_inputs": live["inputs"],
-                 "youtube": {"id": video_id, "language": "", "uploader": live.get("uploader") or info["uploader"], "dub_default": False}}
+                 "youtube": {"id": video_id, "language": "", "uploader": live.get("uploader") or info["uploader"], "dub_default": False},
+                 "yt_channel": info.get("channel") or live.get("uploader") or info["uploader"], "yt_captions": []}
         self._start_live_process(value, value["encoder"])
         with self.lock:
             self.sessions[ident] = value
@@ -519,7 +522,7 @@ class TVService:
         prepared ahead of the playhead. Caller holds the lock."""
         position, duration, seg = value["position"], value["duration"], value["segment_seconds"]
         paused = bool(value.get("paused_intent", value["state"] == "paused"))
-        youtube = dict(value["youtube"])
+        youtube = dict(value["youtube"], channel=value.get("yt_channel") or value["youtube"].get("uploader", ""))
         if value.get("live"):
             lead = float(sum(seconds for _, seconds in value.get("live_window") or ()))
             required = max(1, int(self._yt_opt("live_start_segments"))) * float(seg)
@@ -697,8 +700,14 @@ class TVService:
             selection = str(subtitles)
             allowed = ["off", "auto", "dub"] + [str(s["index"]) for s in value["streams"]
                 if s.get("codec_type") == "subtitle" and s.get("codec_name") in ("subrip", "ass", "ssa", "webvtt", "mov_text", "text")]
+            allowed += ["yt:" + item["code"] for item in value.get("yt_captions") or []]
             if selection not in allowed:
                 raise ValueError("Choose an available text subtitle track")
+            if selection.startswith("yt:"):
+                try:
+                    self.youtube_source().captions(value["youtube"]["id"], selection[3:])      # fetched once (a few seconds), then cached
+                except Exception as error:
+                    raise ValueError(str(error) or "Those captions could not be loaded")
             if selection == "dub" and not value["job_id"]:
                 raise ValueError("Turn English dubbing on before choosing its subtitles")
             value["subtitles"] = selection
@@ -944,7 +953,11 @@ class TVService:
                                  for s in value["streams"] if s.get("codec_type") == "audio"],
                 "audio_index": value["audio_index"], "dub_unsupported": value.get("dub_unsupported")}
             if value.get("youtube"):
-                result["youtube"] = dict(value["youtube"])
+                result["youtube"] = dict(value["youtube"], channel=value.get("yt_channel") or value["youtube"].get("uploader", ""))
+                result["subtitle_tracks"] = result["subtitle_tracks"] + [{"index": "yt:" + item["code"], "language": item["code"], "title": item["name"]}
+                                                                          for item in value.get("yt_captions") or []]      # YouTube's own captions
+            if value.get("plex"):
+                result["plex"] = dict(value["plex"])             # the Plex-style controls: show / season / episode / previous / next
             youtube_fast = bool(value.get("yt_stream") or value.get("live"))
             if youtube_fast:
                 result.update(self._youtube_fields(value, result))
@@ -2124,6 +2137,12 @@ class TVService:
                             cues.append({**cue, "text": cue.get("english") or cue.get("text", "")})
         elif selection == "off":
             cues = []
+        elif selection.startswith("yt:") and value.get("youtube"):
+            from .youtube_source import parse_json3
+            try:
+                cues = parse_json3(self.youtube_source().captions(value["youtube"]["id"], selection[3:]).read_text(encoding="utf-8"))
+            except Exception:
+                cues = []
         else:
             index = None if selection == "auto" else int(selection)
             cues, _ = subtitle_cues(self.config, ProcessOwner(), value["source"],
@@ -2161,6 +2180,8 @@ class TVService:
         opened = self.open_movie(device, node["id"], None)
         value = self.session(opened["id"], device)
         value["plex_key"], value["title"] = str(key), metadata.get("title", source.stem)
+        from .plex_neighbors import plex_info
+        value["plex"] = plex_info(self.plex, metadata)
         if resume and metadata.get("viewOffset"):
             return self.control(value["id"], device, "seek", float(metadata["viewOffset"]) / 1000)
         return self.status(value["id"], device)
