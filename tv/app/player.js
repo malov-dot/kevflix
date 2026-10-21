@@ -894,6 +894,7 @@ var SemTvProbe=(function(){
     if(best){best.focus();best.scrollIntoView({block:'nearest',inline:'nearest'});}
   }
   window.addEventListener('keydown',function(event){
+    if(window.KevFlixYoutube&&window.KevFlixYoutube.active())return;   // the YouTube view (youtube.js) owns every key while it is open
     var key=event.keyCode||event.which||({ArrowLeft:37,ArrowUp:38,ArrowRight:39,ArrowDown:40,Enter:13,Backspace:8,Escape:27,Return:10009}[event.key]);
     var active=document.activeElement;
     if(event.isComposing)return;
@@ -965,7 +966,7 @@ var SemTvProbe=(function(){
     if(setupOnly)message('Setup-only mode: pairing is available. Playback and dubbing are disabled.');
   }).catch(function(){});
   function navigate(next,load){
-    page=next;$('heading').textContent={home:'Home',movies:'Libraries',search:'Search',settings:'Settings'}[next];
+    page=next;if(window.KevFlixYoutube)window.KevFlixYoutube.page(next);$('heading').textContent={home:'Home',movies:'Libraries',search:'Search',settings:'Settings'}[next];
     $('settings-page').hidden=next!=='settings';$('library-panel').hidden=next==='settings';$('search-bar').hidden=next!=='search';
     Array.prototype.forEach.call(document.querySelectorAll('[data-page]'),function(b){b.classList.toggle('active',b.dataset.page===next);});
     renderLibraryNav();

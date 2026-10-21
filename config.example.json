@@ -41,6 +41,22 @@
     "owner_id": "",
     "poll_seconds": 2
   },
+  "youtube": {
+    "enabled": false,
+    "profile_dir": "C:/KevFLIX-Runtime/youtube-profile",
+    "chrome_path": "",
+    "idle_seconds": 120,
+    "grace_seconds": 5,
+    "user_agent": "",
+    "user_agent_profile": "tizen",
+    "start_url": "https://www.youtube.com/tv",
+    "width": 1920,
+    "height": 1080,
+    "jpeg_quality": 65,
+    "every_nth_frame": 3,
+    "max_fps": 20,
+    "memory_limit_mb": 3072
+  },
   "tv": {
     "enabled": true,
     "roots": [],

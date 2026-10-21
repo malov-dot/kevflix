@@ -111,6 +111,11 @@ DEFAULTS = {
            "mux_ahead_unlimited": True, "mux_ahead_workers": 2, "mux_ahead_disk_margin_gib": 5,
            "adaptive_start_gate": True, "actor_beta_start_seconds": 60, "start_gate_fast_rho": 1.25,
            "low_water_seconds": 10, "rho_window_chunks": 6, "actor_beta_producer_queue": 4},
+    # Background YouTube TV page streamed to the TV (relay/youtube_host.py). OFF until the owner turns it on.
+    "youtube": {"enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "",
+                "idle_seconds": 120, "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen",
+                "start_url": "https://www.youtube.com/tv", "width": 1920, "height": 1080, "jpeg_quality": 65,
+                "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072},
     "updates": {"enabled": True, "repository": "malov-dot/kevflix",
                 "branch": "main", "path": "tv", "interval_seconds": 3600,
                 "token_env": "MOVIEDUB_GITHUB_TOKEN"},
@@ -196,6 +201,7 @@ class Config:
         self.data["plex"] = {**copy.deepcopy(DEFAULTS["plex"]), **raw.get("plex", {})}
         self.data["tv"] = {**copy.deepcopy(DEFAULTS["tv"]), **raw.get("tv", {})}
         self.data["updates"] = {**copy.deepcopy(DEFAULTS["updates"]), **raw.get("updates", {})}
+        self.data["youtube"] = {**copy.deepcopy(DEFAULTS["youtube"]), **raw.get("youtube", {})}
         for key in CT2_COMPUTE_KEYS:
             if raw.get(key) not in (None, "", CUDA_COMPUTE_TYPE):
                 raise ValueError('%s must be "%s" or unset (CT2 policy %s): the movie CUDA path has no int8/auto '
@@ -257,6 +263,10 @@ class Config:
             lease.setdefault("reserve_mib", int(self.data["gpu_lease"]["reserve_mib"]))
         if not 1 <= int(self.data["tv"]["encoder_threads"]) <= 8:
             raise ValueError("TV encoder threads must be between 1 and 8")
+        if not 10 <= int(self.data["youtube"]["idle_seconds"]) <= 86400:
+            raise ValueError("youtube.idle_seconds must be between 10 and 86400")
+        if not 1 <= int(self.data["youtube"]["max_fps"]) <= 30:
+            raise ValueError("youtube.max_fps must be between 1 and 30")
         if int(self.data["tv"]["max_height"]) not in (480, 720, 1080, 2160):
             raise ValueError("TV output height must be 480, 720, 1080 or 2160")
         if self.data["tv"]["video_encoder"] not in ("auto", "nvenc", "software"):

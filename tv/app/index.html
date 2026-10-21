@@ -13,7 +13,7 @@
     <button id="nav-search" class="nav" data-page="search"><span class="symbol">⌕</span>Search</button>
     <button id="nav-settings" class="nav" data-page="settings"><span class="symbol">⚙</span>Settings</button>
   </nav>
-  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.4.60</small></div>
+  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.4.61</small></div>
 </aside>
 <main id="main">
   <header id="header"><div><small id="eyebrow">YOUR COLLECTION</small><h1 id="heading">Home</h1></div><span id="worker-mode"></span></header>
@@ -21,6 +21,7 @@
     <div id="search-bar" hidden><form id="search-form" novalidate><input id="search" aria-label="Movie search" placeholder="Press OK to enter a title" readonly><button id="find-movies" class="primary" type="submit">Search</button></form></div>
     <div class="browse-tools"><button id="back-folder" hidden>‹ Back</button><button id="source-button">Select library</button><button id="filter-genre" hidden>Genre: All</button><button id="filter-year" hidden>Year: All</button><button id="filter-collection" hidden>Collection: All</button><button id="sort-button" hidden>Title A–Z</button><button id="clear-filters" hidden>Clear filters</button><button id="reload">Refresh</button></div>
     <p id="browse-summary" class="muted" aria-live="polite"></p>
+    <section id="youtube-section" hidden><div class="poster-row"><button id="youtube-tile" class="movie youtube-tile" aria-label="YouTube"><div class="poster"><span class="poster-symbol">▶</span></div><strong>YouTube</strong></button></div></section>
     <section id="continue-section" hidden><h2>Continue watching</h2><div id="continue-row" class="poster-row"></div></section>
     <section><h2 id="library-heading">Your movies</h2><div id="library" class="poster-grid"></div><p id="empty" hidden>No matching titles. Try clearing filters or searching another library.</p><button id="more" hidden>Load more</button></section>
     <nav id="alphabet" aria-label="Jump to a letter" hidden></nav>
@@ -81,8 +82,10 @@
   <select id="watch-mode"><option value="balanced">Balanced</option><option value="quiet">Quiet</option><option value="ask-only">Only when asked</option></select>
   <select id="progress-sync"><option value="off">Off</option><option value="on">Save to Plex</option></select>
 </div>
+<section id="youtube-view" hidden aria-label="YouTube"><img id="youtube-screen" alt=""><div id="youtube-status" role="status" hidden></div></section>
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <script src="no-native-hls.js"></script>
+<script src="youtube.js"></script>
 <script src="player.js"></script>
 <script src="program-audio.js"></script>
 <script src="program-status.js"></script>

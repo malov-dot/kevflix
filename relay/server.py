@@ -50,6 +50,15 @@ class Application:
         self.pc_launch_codes = {}
         self.settings = PCSettings(self)
         self.desktop_updates = DesktopUpdates(config)
+        self._youtube, self._youtube_lock = None, threading.Lock()
+
+    def youtube_host(self, create=True):
+        """The single background YouTube host. Imported lazily: the local/Plex startup path never loads it."""
+        with self._youtube_lock:
+            if self._youtube is None and create:
+                from .youtube_host import YouTubeHost
+                self._youtube = YouTubeHost(self.config["youtube"])
+            return self._youtube
 
     def start(self):
         if self.config["setup_only"]:
@@ -61,6 +70,9 @@ class Application:
         self.desktop_updates.start()
 
     def close(self):
+        host = self.youtube_host(create=False)
+        if host is not None:
+            host.close()
         self.tv.close()
         self.updates.close()
         self.desktop_updates.close()
@@ -203,6 +215,63 @@ class Handler(BaseHTTPRequestHandler):
     def do_HEAD(self):
         self.do_GET()
 
+    def youtube_api(self, path, data):
+        """/tv-api/youtube/{status,open,key,close}: the device token was already checked by the caller."""
+        action, enabled = path.rsplit("/", 1)[-1], bool(self.app.config["youtube"]["enabled"])
+        if self.app.config["setup_only"]:
+            return self.json_response({"error": "Setup-only mode: YouTube is disabled"}, 423)
+        host = self.app.youtube_host(create=False)
+        if action == "status":
+            status = host.status() if host else {"state": "stopped", "clients": 0, "frame": 0}
+            status.pop("pid", None)
+            status["enabled"] = enabled
+            if not enabled:
+                status["state"] = "disabled"
+            return self.json_response(status)
+        if not enabled:
+            return self.json_response({"error": "YouTube is turned off (youtube.enabled)"}, 403)
+        try:
+            if action == "open":
+                return self.json_response(self.app.youtube_host().open())
+            if action == "key":
+                if host is None:
+                    raise RuntimeError("YouTube is not open")
+                host.key(str(data["key"]), str(data.get("action", "press")))
+                return self.json_response({"ok": True})
+            if action == "close":
+                if host is not None:
+                    host.close()
+                return self.json_response({"state": "stopped"})
+        except RuntimeError as error:                      # HostError: Chrome missing / not open / dropped
+            return self.json_response({"error": str(error)}, 409)
+        return self.json_response({"error": "Unknown TV endpoint"}, 404)
+
+    def youtube_screen(self, query):
+        """Long-lived multipart/x-mixed-replace MJPEG of the latest frames. An <img> cannot send an Authorization header, so
+        this also accepts the screen_ticket returned by /tv-api/youtube/open (valid while that Chrome instance runs)."""
+        if self.app.config["setup_only"] or not self.app.config["youtube"]["enabled"]:
+            return self.json_response({"error": "YouTube is turned off (youtube.enabled)"}, 403)
+        if self.command == "HEAD":
+            return self.json_response({"error": "GET only"}, 405)
+        host = self.app.youtube_host(create=False)
+        token = self.headers.get("Authorization", "").removeprefix("Bearer ").strip()
+        if not ((host is not None and host.ticket_valid(query.get("ticket"))) or (token and self.app.tv.device(token))):
+            return self.json_response({"error": "Pair this TV with the worker first"}, 401)
+        if host is None or host.state != "running":
+            return self.json_response({"error": "YouTube is not open"}, 409)
+        from .youtube_host import mjpeg_headers, stream_screen
+        self.send_response(200)
+        self.cors()
+        for name, value in mjpeg_headers().items():
+            self.send_header(name, value)
+        self.end_headers()
+        self.close_connection = True
+
+        def write(block):
+            self.wfile.write(block)
+            self.wfile.flush()
+        stream_screen(host, write, int(self.app.config["youtube"]["max_fps"]))
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -220,15 +289,19 @@ class Handler(BaseHTTPRequestHandler):
                 return
             # The program player (tv/app: derived from release 6c0dd972 with its seek-reload fix) adds three scripts.
             ui_asset = re.fullmatch(r"/tv-ui/(bundled|[0-9a-f]{40})/(index\.html|player\.js|player\.css|"
-                                    r"no-native-hls\.js|program-audio\.js|program-status\.js)", path)
+                                    r"no-native-hls\.js|program-audio\.js|program-status\.js|youtube\.js)", path)
             if ui_asset:
                 return self.file(self.app.updates.file(ui_asset[1], ui_asset[2]), tv_asset=True)
             if path == "/tv-api/version":
                 return self.json_response({"product": "KevFLIX", "version": __version__, "validation": "untested",
                                            "player_release": self.app.updates.active,
                                            "setup_only": self.app.config["setup_only"]})
+            if path == "/tv-api/youtube/screen":
+                return self.youtube_screen(query)
             if path.startswith("/tv-api/"):
                 device = self.tv_device()
+                if path == "/tv-api/youtube/status":
+                    return self.youtube_api(path, {})
                 if path == "/tv-api/library":
                     return self.json_response(self.app.tv.browse(
                         query.get("folder"), query.get("offset", 0), query.get("query", "")))
@@ -393,6 +466,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(self.app.tv.diagnostic(device, data))
                 if path == "/tv-api/probe/prepare":
                     return self.json_response(self.app.tv.probe.prepare())
+                if path.startswith("/tv-api/youtube/"):
+                    return self.youtube_api(path, data)
                 return self.json_response({"error": "Unknown TV endpoint"}, 404)
             if path.startswith("/hooks/plex/"):
                 secret = path.removeprefix("/hooks/plex/")
