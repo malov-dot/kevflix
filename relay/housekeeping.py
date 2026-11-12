@@ -42,7 +42,11 @@ from pathlib import Path
 VERSION = "kevflix-housekeeping-v1"
 MODES = ("auto", "dry-run", "on", "off")
 DEFAULTS = {"store_prune": "auto", "tv_media_cap_gib": 40, "tv_media_max_age_days": 30,
-            "keep_intermediates": False, "log_to_file": True}
+            "keep_intermediates": False, "log_to_file": True,
+            # Owner rule (2026-11-12, "never keep a dubbed movie"): a dubbed film is not kept. When false (the default) every dub job
+            # that no TV session uses, its cache folder, its TV segments and its store rows are deleted by the hourly pass (and at
+            # start), from the first pass on (no 24 h dry-run). True restores the old behaviour (finished dubs are kept and reopen at once).
+            "keep_dubbed": False}
 JOB_TABLES = ("chunks", "speakers", "utterances", "events", "protected_originals", "sample_carries",
               "xt_journal_events", "xt_stems", "beta_line_claims")
 TERMINAL = ("complete", "cancelled", "error", "needs_review")
@@ -56,6 +60,7 @@ CHUNK_DIR = re.compile(r"^chunk-(\d{6})$")
 SEGMENT_SUFFIXES = (".ts", ".m4s")
 INIT_SUFFIX = ".init.mp4"
 MIN_AGE_SECONDS = 24 * 3600
+NOT_KEPT_MIN_AGE_SECONDS = 15 * 60                            # keep_dubbed false: a job idle for 15 minutes (past the 180 s linger) can go
 OTHER_ENGINE_MIN_AGE_SECONDS = 14 * 86400
 SEGMENT_MIN_AGE_SECONDS = 3600
 AUTO_ON_AFTER_SECONDS = 24 * 3600
@@ -84,7 +89,7 @@ def validate(block):
     age = merged["tv_media_max_age_days"]
     if isinstance(age, bool) or not isinstance(age, (int, float)) or not 0 <= age <= 3650:
         raise ValueError("housekeeping.tv_media_max_age_days must be a number between 0 (off) and 3650")
-    for key in ("keep_intermediates", "log_to_file"):
+    for key in ("keep_intermediates", "log_to_file", "keep_dubbed"):
         if not isinstance(merged[key], bool):
             raise ValueError("housekeeping.%s must be true or false" % key)
     return merged
@@ -147,6 +152,8 @@ def effective_mode(config, store, now=None):
     """'dry-run' | 'on' | 'off'. 'auto' is 'dry-run' until 24 h after the first listing was written and logged and the
     latest listing passed verify(); then it is 'on' by itself."""
     mode = settings(config)["store_prune"]
+    if mode == "auto" and not settings(config)["keep_dubbed"]:
+        return "on"                                           # never keep a dubbed movie: no waiting period
     if mode != "auto":
         return mode
     now = time.time() if now is None else now
@@ -160,8 +167,10 @@ def effective_mode(config, store, now=None):
 
 # ---- 1. dead jobs ---------------------------------------------------------------------------------------------------
 
-def dead_jobs(store, engine_fingerprint, now, keep=()):
-    """[{id, title, state, updated, reason, chunks, ready}] of the jobs that can never be opened again (module docstring)."""
+def dead_jobs(store, engine_fingerprint, now, keep=(), keep_dubbed=True):
+    """[{id, title, state, updated, reason, chunks, ready}] of the jobs that can never be opened again (module docstring).
+    keep_dubbed False: every job that no TV session uses is dead (reason "not-kept"), except one with a published file and
+    one that is still being produced (not terminal and touched in the last 24 h)."""
     keep = set(keep)
     with store.connect() as db:
         rows = [dict(r) for r in db.execute(
@@ -179,6 +188,13 @@ def dead_jobs(store, engine_fingerprint, now, keep=()):
     dead = []
     for row in rows:
         age = now - float(row["updated"])
+        if not keep_dubbed:
+            if (row["id"] in keep or row["published"] or age < NOT_KEPT_MIN_AGE_SECONDS
+                    or (row["state"] not in TERMINAL and age < MIN_AGE_SECONDS)):
+                continue
+            dead.append({"id": row["id"], "title": row["title"], "state": row["state"], "updated": _stamp(row["updated"]),
+                         "reason": "not-kept", "chunks": counts.get(row["id"], 0), "ready": ready.get(row["id"], 0)})
+            continue
         finished = bool(row["total"]) and ready.get(row["id"], 0) >= int(row["total"])
         if (row["id"] in keep or row["published"] or row["state"] not in TERMINAL or age < MIN_AGE_SECONDS
                 or (finished and row["state"] != "error")):
@@ -367,7 +383,8 @@ def plan(config, store, *, now=None, live_job_ids=(), live_paths=(), store_part=
         known = {r["id"] for r in db.execute("SELECT id FROM jobs")}
         sizes = {r["job_id"]: r["n"] for r in db.execute(
             "SELECT job_id,sum(length(payload)) AS n FROM chunks GROUP BY job_id")}
-    dead = dead_jobs(store, config.engine_fingerprint(), now, keep=live_job_ids) if store_part else []
+    dead = (dead_jobs(store, config.engine_fingerprint(), now, keep=live_job_ids, keep_dubbed=bool(opts["keep_dubbed"]))
+            if store_part else [])
     for item in dead:
         item["receipt_bytes"] = int(sizes.get(item["id"]) or 0)
     dead_ids = {item["id"] for item in dead}
@@ -383,7 +400,7 @@ def plan(config, store, *, now=None, live_job_ids=(), live_paths=(), store_part=
     except (KeyError, TypeError, ValueError):
         floor = DISK_MARGIN_GIB * GIB
     segments, segment_total = ([], 0) if not files_part else tv_segments(
-        cache, now, float(opts["tv_media_cap_gib"]) * GIB, float(opts["tv_media_max_age_days"]) * 86400,
+        cache, now, float(opts["tv_media_cap_gib"]) * GIB if opts["keep_dubbed"] else 0.0, float(opts["tv_media_max_age_days"]) * 86400,
         protected=live_paths, free_bytes=free, floor_bytes=floor)
     reasons = {}
     for item in dead:
@@ -416,6 +433,12 @@ def verify(config, store, listing, live_job_ids=()):
             continue                                      # gone already: nothing to delete
         dead_ids.add(item["id"])
         payload = job["payload"]
+        if item.get("reason") == "not-kept":                  # keep_dubbed false: only a live or published job is protected
+            if item["id"] in live:
+                problems.append("%s is attached to a TV session" % item["id"][:8])
+            elif payload.get("published"):
+                problems.append("%s has a published file" % item["id"][:8])
+            continue
         rows = store.chunk_rows(item["id"])
         total = int(payload.get("chunks_total") or 0)
         done = sum(1 for r in rows if r["state"] in READY)

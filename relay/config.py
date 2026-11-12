@@ -160,7 +160,7 @@ DEFAULTS = {
     # <profile>/logs/housekeeping-plan.json for the first 24 h, then delete it without being asked; 'dry-run' lists
     # only; 'on' deletes from the first start; 'off' does not look.
     "housekeeping": {"store_prune": "auto", "tv_media_cap_gib": 40, "tv_media_max_age_days": 30,
-                     "keep_intermediates": False, "log_to_file": True},
+                     "keep_intermediates": False, "log_to_file": True, "keep_dubbed": False},
     # Movie GPU lease held by the app guard (relay/app_runtime). sem_mode is explicit: 'absent' when Sem is shut
     # down for movies, 'running' (needs status_file) when Sem stays up and must be proved idle.
     # budget_mib 'auto' (v2): fresh free VRAM - reserve_mib - admission_margin_mib at acquire, capped by an optional

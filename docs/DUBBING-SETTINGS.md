@@ -117,3 +117,12 @@ refused while a movie is open. The PC makes eight silent test clips on the CPU (
 seconds advanced, decoded and dropped frames and the MediaCapabilities flags (supported / smooth / power efficient), plus the TV's model and
 firmware when the page can read them, the screen size and the page's animation rate. Routes (device token required): `POST /tv-api/probe/prepare`,
 `GET /tv-api/probe/status`, `GET /tv-api/probe/clip/<name>.mp4` (only the eight known names). The result decides whether HEVC or 4K output is worth building.
+
+## Never keep a dubbed movie
+
+Owner rule (2026-11-12): a dubbed film is not kept. `housekeeping.keep_dubbed` is `false` by default. The hourly housekeeping pass (and
+the pass at server start) then deletes every dub job that no TV session is using and that was last touched more than 15 minutes ago
+(a job still being produced is left alone for 24 h), together with its cache folder, its rows in the store, and every TV media segment
+older than an hour. A film with a published file stays. Deletion is on from the first pass (no 24 h list-only period) and waits while a
+film is playing. Watching the film again dubs it again. `keep_dubbed: true` restores the old behaviour (finished dubs kept, 24 h
+list-only start). `tv.background_finish` (off) would finish and then discard a dub, so leave it off.
