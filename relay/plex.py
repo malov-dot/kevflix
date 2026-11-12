@@ -34,7 +34,7 @@ class Plex:
             "X-Plex-Platform": "Windows",
         }
 
-    def call(self, path, params=None, method="GET", target=None):
+    def call(self, path, params=None, method="GET", target=None, timeout=20):
         if not path.startswith("/") or path.startswith("//"):
             raise ValueError("Invalid Plex API path")
         if not self.config["plex"]["url"] or not self.config["plex"]["token"]:
@@ -48,7 +48,7 @@ class Plex:
         req = request.Request(url, headers=headers, method=method,
                               data=b"" if method in ("POST", "PUT") else None)
         try:
-            with self.opener.open(req, timeout=20) as response:
+            with self.opener.open(req, timeout=timeout) as response:
                 raw = response.read(8 * 1024 * 1024)
                 return json.loads(raw) if raw.strip().startswith(b"{") else {}
         except error.HTTPError as exc:
@@ -81,10 +81,10 @@ class Plex:
             raise ValueError("Plex media item was not found")
         return values[0]
 
-    def children(self, key):
+    def children(self, key, timeout=20):
         if not str(key).isdigit():
             raise ValueError("Invalid Plex item ID")
-        return self.entries(self.call(f"/library/metadata/{key}/children"), "Metadata")
+        return self.entries(self.call(f"/library/metadata/{key}/children", timeout=timeout), "Metadata")
 
     def clients(self):
         return self.entries(self.call("/clients"), "Server")

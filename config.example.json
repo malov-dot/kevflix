@@ -55,6 +55,10 @@
     "jpeg_quality": 65,
     "every_nth_frame": 3,
     "max_fps": 20,
+    "screen_transport": "auto",
+    "video_encoder": "cpu",
+    "video_height": 1080,
+    "video_fps": 30,
     "memory_limit_mb": 3072,
     "userscripts": [],
     "userscripts_when": "ready",
@@ -74,6 +78,8 @@
     "max_height": 2160,
     "video_encoder": "auto",
     "nvenc_min_free_mib": 2048,
+    "video_codec": "auto",
+    "gpu_filters": "auto",
     "encoder_threads": 2,
     "buffer_segments": 2,
     "upscale": false,
@@ -91,7 +97,10 @@
     },
     "mux_ahead_unlimited": true,
     "mux_ahead_workers": 2,
+    "mux_ahead_workers_while_dubbing": 1,
+    "mux_ahead_low_priority": true,
     "mux_ahead_disk_margin_gib": 5,
+    "seamless_joins": true,
     "adaptive_start_gate": true,
     "actor_beta_start_seconds": 60,
     "start_gate_fast_rho": 1.25,
@@ -124,7 +133,9 @@
     "budget_mib": "auto",
     "admission_margin_mib": 512,
     "grace_s": 0.15,
-    "retry_seconds": 30
+    "retry_seconds": 30,
+    "max_gpu_celsius": 85,
+    "resume_gpu_celsius": 78
   },
   "actor_bank_dir": "",
   "actor_beta": {
@@ -175,6 +186,7 @@
     "nonverbal_audio": true,
     "reject_unintelligible": true,
     "deess_takes": true,
+    "slot_fill": true,
     "surround_mix": true
   }
 }

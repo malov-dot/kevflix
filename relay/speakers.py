@@ -327,8 +327,9 @@ class SpeakerAnalyzer:
         except diart_turns.DiartTurnsUnavailable as error:
             self._diart_note(False, error.reason, offset)
             return None
+        cleanup = diart_stream.cleanup_enabled(self.config)
         def compute():
-            window = artifact.window(start, end)
+            window = artifact.window(start, end, cleanup=cleanup)
             return [window['turns'], window['aligned'],
                     diart_turns.label_vectors(window, mono, start, self.embed)]
         if self.cache is None:
@@ -338,6 +339,7 @@ class SpeakerAnalyzer:
             result = self.cache.get_or_compute(
                 diart_turns.NAMESPACE,
                 {'artifact_sha256': artifact.sha256, 'audio': file_identity(wav), 'offset': round(start, 6),
+                 'turn_cleanup': dict(diart_turns.TURN_CLEANUP) if cleanup else None,
                  'embedding_space': self.embedding_space, 'policy': self._policy,
                  'cache_policy': self.cache_policy_identity}, compute)
         self._diart_note(True, 'diart', offset, artifact.sha256)
@@ -357,6 +359,18 @@ class SpeakerAnalyzer:
         self._diart_note(True, 'diart-stream', offset)
         turns, aligned, vectors = result
         return list(turns), list(aligned), dict(vectors)
+
+    def scout_feed(self, waveform, start, source_fingerprint):
+        """F15: one block of the film's dialogue channel for the scout stream of this source (DiartStream.feed_ahead)."""
+        if getattr(self, '_diart_stream', None) is None:
+            raise diart_stream.DiartStreamUnavailable('stream_off')
+        return self._diart_stream.feed_ahead(str(source_fingerprint or 'default') + diart_stream.SCOUT_SUFFIX, waveform, float(start))
+
+    def scout_centers(self, source_fingerprint):
+        """F15: the scout stream's speaker centres (DiartStream.centers)."""
+        if getattr(self, '_diart_stream', None) is None:
+            raise diart_stream.DiartStreamUnavailable('stream_off')
+        return self._diart_stream.centers(str(source_fingerprint or 'default') + diart_stream.SCOUT_SUFFIX)
 
     def analyze(self, wav, offset=0.0, *, source_fingerprint=None):
         if getattr(self, '_diart_stream', None) is not None:

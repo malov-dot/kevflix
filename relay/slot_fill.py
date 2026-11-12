@@ -68,13 +68,22 @@ ORDINARY_ERROR = .25                # the readback gate's word-error limit (acto
 _QUIET_REASONS = frozenset({'disabled', 'fills_slot', 'unusable_slot'})   # the take is returned as is, with no receipt
 
 # Fuller retranslation (second lever, default OFF): lines whose English is much shorter than the slot.
-FULLER_RATIO = .7                   # take / span below this is a target (21 % of the measured lines)
+FULLER_RATIO = .85                  # take / span below this is a target: 1 / 1.18, what the slow-down cannot fill (was .7 until F13)
+FULLER_MAX_GROWTH = 1.6             # F13: never ask for more than 1.6 x the present words; beyond that words must be invented
 FULLER_PACE_SHARE = .95             # aim a little under the take's own pace so the fuller wording does not overshoot
 FULLER_MAX_WORDS_PER_SECOND = 3.2   # never ask for more words per slot second than a brisk natural English pace
 FULLER_MIN_EXTRA_WORDS = 2          # fewer extra words than this is not "fuller", it is noise
 FULLER_MIN_GAIN_SECONDS = .1        # the fuller take must be at least this much closer to the target
 FULLER_SEEDS = (42, 7, 1234)
 FULLER_MAX_WORDS = 60               # relay.language.QWEN3_MAX_WORDS
+
+# F13: the mirror image for a take that fits its window but ends well after the line (the lips have stopped, the voice goes on).
+SHORTER_LATE_SECONDS = .5           # the fitted take ends more than this after the line: ask for a shorter wording
+SHORTER_TARGET_PAD_SECONDS = .15    # aim to end this close after the line (actor_pipeline.LINE_FIT_TOLERANCE_SECONDS)
+SHORTER_MIN_SHARE = .7              # never ask to drop more than 30 % of the words
+SHORTER_MIN_WORDS = 3
+SHORTER_SEEDS = (42, 7, 1234)
+RETRANSLATION_BUDGET_SECONDS = 8.   # wall time one window may spend on measured re-translations (fuller + shorter)
 
 
 def _number(source, key, default, low, high):
@@ -91,21 +100,27 @@ def _number(source, key, default, low, high):
 def settings(beta):
     """Validated slot-fill / fuller settings from the ``actor_beta`` mapping (``None`` or ``{}``: every default).
 
-    ``slot_fill`` (default False until this module has its own tests - 2026-10-20; True turns it on), ``slot_fill_max_slowdown`` (1.0-1.35, default 1.18; 1.0 disables
+    ``slot_fill`` (default ON whenever an ``actor_beta`` mapping is given, owner rule; only an explicit ``false`` turns it off; ``None``
+    = the beta lane is off = off), ``slot_fill_max_slowdown`` (1.0-1.35, default 1.18; 1.0 disables
     the slowdown), ``slot_fill_tolerance_seconds`` (0-2, .25), ``slot_fill_short_seconds`` (0-3, .8),
     ``slot_fill_short_min_gap_seconds`` (0-5, .6), ``slot_fill_short_max_slowdown`` (1.0-1.35, 1.10),
-    ``slot_fill_min_words_per_second`` (0-4, 2.0; 0 switches the floor off), ``fuller_retranslation`` (default False),
-    ``fuller_ratio`` (.3-.95, .7). An invalid value keeps its default."""
-    beta = beta if isinstance(beta, dict) else {}
-    return {'enabled': beta.get('slot_fill') is True,
+    ``slot_fill_min_words_per_second`` (0-4, 2.0; 0 switches the floor off), ``fuller_retranslation`` (F13: default ON with
+    the beta lane, only an explicit ``false`` turns it off), ``fuller_ratio`` (.3-.95, .85), ``late_retranslation`` (F13: default
+    ON the same way; the shorter wording for a take that ends late), ``retranslation_budget_seconds`` (0-60, 8; wall time
+    one window may spend on both; 0 switches both off). An invalid value keeps its default."""
+    given = isinstance(beta, dict)
+    beta = beta if given else {}
+    return {'enabled': given and beta.get('slot_fill') is not False,
             'max_slowdown': _number(beta, 'slot_fill_max_slowdown', DEFAULT_MAX_SLOWDOWN, 1.0, MAX_SLOWDOWN_CEILING),
             'tolerance': _number(beta, 'slot_fill_tolerance_seconds', TOLERANCE_SECONDS, 0., 2.),
             'short_seconds': _number(beta, 'slot_fill_short_seconds', SHORT_TAKE_SECONDS, 0., 3.),
             'short_min_gap': _number(beta, 'slot_fill_short_min_gap_seconds', SHORT_MIN_GAP_SECONDS, 0., 5.),
             'short_max_slowdown': _number(beta, 'slot_fill_short_max_slowdown', SHORT_MAX_SLOWDOWN, 1.0, MAX_SLOWDOWN_CEILING),
             'min_wps': _number(beta, 'slot_fill_min_words_per_second', MIN_WORDS_PER_SECOND, 0., 4.),
-            'fuller': beta.get('fuller_retranslation') is True,
-            'fuller_ratio': _number(beta, 'fuller_ratio', FULLER_RATIO, .3, .95)}
+            'fuller': given and beta.get('fuller_retranslation') is not False,
+            'fuller_ratio': _number(beta, 'fuller_ratio', FULLER_RATIO, .3, .95),
+            'shorter': given and beta.get('late_retranslation') is not False,
+            'retranslation_budget': _number(beta, 'retranslation_budget_seconds', RETRANSLATION_BUDGET_SECONDS, 0., 60.)}
 
 
 def fingerprint(beta):
@@ -330,12 +345,13 @@ def fuller_min_words(english, take_seconds, span_seconds, window_seconds, cfg=No
     count = count_words(english)
     if count < 1:
         return None
-    budget = min(int(count * slot / take * FULLER_PACE_SHARE), int(slot * FULLER_MAX_WORDS_PER_SECOND), FULLER_MAX_WORDS)
+    budget = min(int(count * slot / take * FULLER_PACE_SHARE), int(slot * FULLER_MAX_WORDS_PER_SECOND), FULLER_MAX_WORDS,
+                 math.ceil(count * FULLER_MAX_GROWTH))
     return budget if budget >= count + FULLER_MIN_EXTRA_WORDS else None
 
 
 def fuller_retry(chosen, *, english, span_seconds, window, cfg=None, ask, render, fit, accept, recoverable=lambda error: False,
-                 seeds=FULLER_SEEDS, preferred_factor=1.12):
+                 seeds=FULLER_SEEDS, preferred_factor=1.12, factor_of=None):
     """Owner proposal 2026-10-20 (default OFF): a line whose English is far shorter than its slot is translated again with a
     minimum word budget, "keep exactly the same meaning with fuller natural phrasing, no new information", and rendered like
     any other take. ``chosen`` is the (path, receipt) the take search kept.
@@ -370,7 +386,9 @@ def fuller_retry(chosen, *, english, span_seconds, window, cfg=None, ask, render
             attempt['attempts'].append({'seed': seed, 'unusable': True, 'accepted': False})
             continue
         new_seconds = float(got[1].get('seconds') or 0)
-        factor = float((got[1].get('fit') or {}).get('factor') or 1.)
+        # F13: factor_of(receipt) is the tempo the WINDOW demanded (actor_pipeline.window_fit_factor); tempo spent only to end
+        # on the line (F03) does not make a take "rushed"
+        factor = float(factor_of(got[1])) if factor_of is not None else float((got[1].get('fit') or {}).get('factor') or 1.)
         entry = {'seed': seed, 'seconds': _round(new_seconds), 'factor': _round(factor),
                  'overrun': new_seconds > window + 1e-6, 'closer': abs(goal - new_seconds) < abs(goal - seconds) - FULLER_MIN_GAIN_SECONDS}
         entry['accepted'] = (not entry['overrun'] and factor <= preferred_factor and entry['closer'] and bool(accept(*got)))
@@ -380,3 +398,76 @@ def fuller_retry(chosen, *, english, span_seconds, window, cfg=None, ask, render
                       'after_seconds': _round(new_seconds), 'attempts': attempt['attempts']}
             return got[0], dict(got[1], fuller=record)
     return path, dict(receipt, fuller_attempt=dict(attempt, reason='no_accepted_take'))
+
+
+def unfitted_seconds(receipt):
+    """Length of the take before any speed-up fit (the pace the voice really spoke at)."""
+    fit = receipt.get('fit') or {}
+    try:
+        before = float(fit.get('before_seconds') or 0)
+    except (TypeError, ValueError):
+        before = 0.
+    return before if fit.get('applied') and before > 0 else float(receipt.get('seconds') or 0)
+
+
+def shorter_max_words(english, raw_seconds, take_seconds, span_seconds, window_seconds, cfg=None, preferred_factor=1.12):
+    """Maximum word budget for a shorter wording of ``english``, or None when the line is not a target (F13).
+
+    Targets: the step is on, the fitted take (``take_seconds``) fits its window but ends more than 0.5 s after the line, and
+    the words the same voice speaks until 0.15 s after the line at ITS OWN pace (``raw_seconds`` for the present words) with
+    the preferred tempo are fewer than the present words. Never under 70 % of the present words, never under 3 words."""
+    cfg = cfg or settings(None)
+    raw, take, span, window = (float(x) for x in (raw_seconds, take_seconds, span_seconds, window_seconds))
+    if not cfg.get('shorter') or not all(math.isfinite(x) and x > 0 for x in (raw, take, span, window)):
+        return None
+    if take > window + 1e-6 or take <= span + SHORTER_LATE_SECONDS:
+        return None
+    count = count_words(english)
+    budget = max(int(count * (span + SHORTER_TARGET_PAD_SECONDS) * float(preferred_factor) / raw), math.ceil(count * SHORTER_MIN_SHARE))
+    return budget if SHORTER_MIN_WORDS <= budget <= count - 1 else None
+
+
+def shorter_retry(chosen, *, english, span_seconds, window, cfg=None, ask, render, fit, accept, recoverable=lambda error: False,
+                  seeds=SHORTER_SEEDS, preferred_factor=1.12, factor_of=None):
+    """F13: a line whose accepted take fits its window but ends well after the original speaker stopped is translated again
+    with a maximum word budget and rendered like any other take. ``chosen`` is the (path, receipt) kept so far.
+
+    ``ask(max_words) -> str | None`` is the translator (actor_pipeline.concise_english with that budget); ``render``, ``fit``,
+    ``accept`` and ``factor_of`` as in fuller_retry. A candidate is adopted only when it fits the window, needs no more than
+    ``preferred_factor`` of window tempo, is accepted by the readback gate AND ends closer to the line end by at least 0.1 s.
+    The adopted receipt carries ``concise`` {text, requested, max_words, seed, before_seconds, after_seconds, attempts,
+    'basis': 'late'} (actor_pipeline.adopt_spoken_text makes that wording the cue's English); otherwise ``chosen`` is returned
+    with ``shorter_attempt`` in a copy of its receipt. A take that is itself unaccepted, or already the product of a
+    re-translation, is never touched."""
+    cfg = cfg or settings(None)
+    path, receipt = chosen
+    seconds = float(receipt.get('seconds') or 0)
+    maximum = shorter_max_words(english, unfitted_seconds(receipt), seconds, span_seconds, window, cfg, preferred_factor)
+    if maximum is None or receipt.get('concise') or receipt.get('fuller') or not accept(path, receipt):
+        return chosen
+    goal = float(span_seconds)
+    text = ask(maximum)
+    text = text.strip() if isinstance(text, str) else ''
+    attempt = {'applied': False, 'max_words': maximum, 'requested': english}
+    if not text or text == str(english).strip() or count_words(text) >= count_words(english):
+        return path, dict(receipt, shorter_attempt=dict(attempt, reason='no_shorter_wording', text=text or None))
+    attempt.update(text=text, attempts=[])
+    for seed in seeds:
+        try:
+            got = fit(*render(seed, text))
+        except Exception as error:
+            if not recoverable(error):
+                raise
+            attempt['attempts'].append({'seed': seed, 'unusable': True, 'accepted': False})
+            continue
+        new_seconds = float(got[1].get('seconds') or 0)
+        factor = float(factor_of(got[1])) if factor_of is not None else float((got[1].get('fit') or {}).get('factor') or 1.)
+        entry = {'seed': seed, 'seconds': _round(new_seconds), 'factor': _round(factor),
+                 'overrun': new_seconds > window + 1e-6, 'closer': abs(goal - new_seconds) < abs(goal - seconds) - FULLER_MIN_GAIN_SECONDS}
+        entry['accepted'] = (not entry['overrun'] and factor <= preferred_factor and entry['closer'] and bool(accept(*got)))
+        attempt['attempts'].append(entry)
+        if entry['accepted']:
+            record = {'text': text, 'requested': english, 'max_words': maximum, 'seed': seed, 'before_seconds': _round(seconds),
+                      'after_seconds': _round(new_seconds), 'attempts': attempt['attempts'], 'basis': 'late'}
+            return got[0], dict(got[1], concise=record)
+    return path, dict(receipt, shorter_attempt=dict(attempt, reason='no_accepted_take'))

@@ -13,12 +13,12 @@ var SemProofDecoder=(function(){
     try{return /\.m3u8$/i.test(new URL(url,location.href).pathname);}catch(ignore){return false;}
   }
   function create(video,Hls){
-    var hls=null,failure=null;
+    var hls=null,failure=null,soft={stalled:0,nudge:0,hole:0,other:0};
     function detach(){if(hls){var old=hls;hls=null;old.destroy();}}
     function canFallback(){return !!Hls&&Hls.isSupported();}
     // preferOwn: use hls.js (MSE) even where the browser claims native HLS (a TV whose own HLS player refuses the stream).
     function attach(url,preferOwn){
-      detach();failure=null;
+      detach();failure=null;soft={stalled:0,nudge:0,hole:0,other:0};
       var native=!!video.canPlayType('application/vnd.apple.mpegurl');
       if(!isHls(url)||!canFallback()||(native&&preferOwn!==true)){
         video.src=url;video.load();
@@ -27,6 +27,7 @@ var SemProofDecoder=(function(){
       if(video.getAttribute('src')){video.removeAttribute('src');video.load();}
       var own=hls=new Hls({enableWorker:false,startPosition:0});
       own.on(Hls.Events.ERROR,function(event,data){
+        if(own===hls&&data&&!data.fatal){var d=String(data.details||'');if(d==='bufferStalledError')soft.stalled++;else if(d==='bufferNudgeOnStall')soft.nudge++;else if(d==='bufferSeekOverHole')soft.hole++;else soft.other++;}
         if(own!==hls||!data||!data.fatal)return;
         failure={type:data.type,details:data.details,status:data.response&&data.response.code};
         detach();
@@ -49,11 +50,47 @@ var SemProofDecoder=(function(){
       if(!o.secondAttempt&&(o.ownEngine||o.canFallback))return 'other-engine';
       return 'give-up';
     }
-    return {attach:attach,detach:detach,canFallback:canFallback,watchStall:watchStall,failurePlan:failurePlan,lastError:function(){return failure;},engine:function(){return hls?'hls.js':'native';}};
+    return {attach:attach,detach:detach,canFallback:canFallback,watchStall:watchStall,failurePlan:failurePlan,lastError:function(){return failure;},softErrors:function(){return {stalled:soft.stalled,nudge:soft.nudge,hole:soft.hole,other:soft.other};},engine:function(){return hls?'hls.js':'native';}};
   }
   return {create:create,isHls:isHls};
 }());
 if(typeof module!=='undefined'&&module.exports)module.exports=SemProofDecoder;
+
+// Self-check of the segment joins on the real player (F07). Fed one sample per 'timeupdate', it watches the picture play across three
+// segment boundaries and summarises what the player did there; the PC judges the numbers (relay/segment_join.py joins_verdict). Pure: no
+// DOM, no timers. A pause, a seek or a sleeping page restarts the watch; a stall the player announced ('waiting') is measured, not skipped.
+var SemJoinWatch=(function(){
+  'use strict';
+  var JOINS=3,SETTLE=3,MAX_STEP_MS=2000,SEEK_MS=1500;
+  function create(){return {done:false,start:null,last:null,joins:0,first:null,joinedAt:0,ranges:0,gap:0,jump:0,stall:0,waiting:0,waited:false};}
+  function restart(w,o){w.start=o||null;w.last=o||null;w.joins=0;w.first=null;w.joinedAt=0;w.ranges=0;w.gap=0;w.jump=0;w.stall=0;w.waiting=0;w.waited=false;}
+  function waiting(w){if(w&&w.start&&!w.done){w.waiting++;w.waited=true;}}
+  function delta(a,b,key){return a&&b&&typeof a[key]==='number'&&typeof b[key]==='number'?b[key]-a[key]:null;}
+  // o: {position: film seconds, time: video.currentTime, wall: ms, playing, segment: seconds, buffered: [[start,end],...],
+  //     dropped, frames, soft: {stalled,nudge,hole,other}|null}. Returns null, or (once) the report.
+  function sample(w,o){
+    if(!w||w.done||!o||!(o.segment>0))return null;
+    if(!o.playing){restart(w,null);return null;}
+    if(!w.start){restart(w,o);return null;}
+    var dWall=o.wall-w.last.wall,dTime=(o.time-w.last.time)*1000;
+    var before=Math.floor(w.last.position/o.segment),now=Math.floor(o.position/o.segment),waited=w.waited;
+    w.waited=false;
+    if((dWall>MAX_STEP_MS&&!waited)||dWall<0||dTime-dWall>SEEK_MS||dTime<-50||now<before||now>before+1){restart(w,o);return null;}
+    w.jump=Math.max(w.jump,dTime-dWall);w.stall=Math.max(w.stall,dWall-dTime);
+    var spans=o.buffered||[];w.ranges=Math.max(w.ranges,spans.length);
+    for(var i=1;i<spans.length;i++)if(spans[i-1][1]>=o.time-5)w.gap=Math.max(w.gap,(spans[i][0]-spans[i-1][1])*1000);
+    if(now===before+1){w.joins++;if(w.first===null)w.first=now;w.joinedAt=o.position;}
+    w.last=o;
+    if(w.joins<JOINS||o.position-w.joinedAt<SETTLE)return null;
+    w.done=true;
+    return {v:1,segment:o.segment,first:w.first,joins:w.joins,seconds:Math.round((o.wall-w.start.wall)/1000),
+      drift_ms:Math.round((o.time-w.start.time)*1000-(o.wall-w.start.wall)),jump_ms:Math.round(w.jump),stall_ms:Math.round(w.stall),
+      ranges:w.ranges,gap_ms:Math.round(w.gap),waiting:w.waiting,dropped:delta(w.start,o,'dropped'),frames:delta(w.start,o,'frames'),
+      hls_stalled:delta(w.start.soft,o.soft,'stalled'),hls_nudge:delta(w.start.soft,o.soft,'nudge'),
+      hls_hole:delta(w.start.soft,o.soft,'hole'),hls_other:delta(w.start.soft,o.soft,'other')};
+  }
+  return {create:create,sample:sample,waiting:waiting,JOINS:JOINS};
+}());
 
 // "Test this TV": plays short SILENT test clips (4K, HEVC, AV1, 120 fps) through MediaSource and reports what really happened, because
 // isTypeSupported() says "probably" for everything and Samsung documents MSE as FHD-only on several TV groups. The clips are made by the PC
@@ -220,7 +257,7 @@ var SemTvProbe=(function(){
   // On-screen skins (controls.js): the Plex and YouTube control sets hook in through window.KevFlixPlayerUI (below). uiHooks = their listeners,
   // uiItem = the library/YouTube item the TV opened, switchOpening = a Plex episode / YouTube video opened FROM a playing session (Back cancels it),
   // quietNext = the next leave() keeps the player screen up (switching videos inside the player instead of leaving it).
-  var uiHooks={status:[],message:[]},uiItem=null,switchOpening=null,quietNext=false;
+  var uiHooks={status:[],message:[]},uiItem=null,switchOpening=null,quietNext=false,youtubeSwitch=null;   // youtubeSwitch = a YouTube video opened FROM a playing YouTube video (keys are held back until it is open)
   function uiEmit(kind,value){var list=uiHooks[kind];for(var i=0;i<list.length;i++){try{list[i](value);}catch(ignore){}}}
   try{
     var suppliedLauncher=new URLSearchParams(location.hash.slice(1)).get('launcher');
@@ -421,6 +458,7 @@ var SemTvProbe=(function(){
   }
   async function initializeLibrary(){
     var value=await api('settings');
+    if(value.video_probe)setTimeout(function(){void autoProbe();},5000);   // F19: this TV has not proved yet what it decodes
     if(value.plex_url){$('plex-admin').hidden=false;$('plex-admin').onclick=function(){window.open(value.plex_url.replace(/\/$/,'')+'/web/','_blank');};}
     if(!sourceChosen)sourceMode=value.plex_configured?'plex':'folders';
     if(sourceMode==='plex'){await loadPlexSections();restoreFilters();}
@@ -429,7 +467,10 @@ var SemTvProbe=(function(){
   }
   async function loadPosters(){
     var epoch=++posterEpoch,images=Array.prototype.slice.call($('main').querySelectorAll('img[data-key]'));
-    posterUrls.forEach(function(url){URL.revokeObjectURL(url);});posterUrls=[];
+    // F24: pictures already on screen stay; only the URLs no card uses any more are released and only cards without a picture are fetched.
+    var used={};images.forEach(function(image){if(image.src)used[image.src]=true;});
+    posterUrls=posterUrls.filter(function(url){if(used[url])return true;URL.revokeObjectURL(url);return false;});
+    images=images.filter(function(image){return !image.src;});
     async function next(){
       while(images.length&&epoch===posterEpoch){
         var image=images.shift();
@@ -496,7 +537,7 @@ var SemTvProbe=(function(){
     if(!session||session.id!==value.id)return;
     if(!SemBufferGate.accept(bufferGate,value))return;
     var changed=session.generation!==value.generation;
-    session=value;
+    session=value;window.KevFlixDub={session:value.id,original:value.original_audio_now===true,blocked:value.dub_blocked||null,fallback:value.original_fallback===true};
     $('movie-title').textContent=session.title;
     $('profile').textContent=profileLabel(session);
     $('dub').textContent=session.live?'English dubbing: not for live':'English dubbing: '+(session.dub?'on':'off');
@@ -507,7 +548,7 @@ var SemTvProbe=(function(){
     if(typeof value.ready_through==='number')$('progress-ready').style.width=Math.max(0,Math.min(100,100*value.ready_through/Math.max(1,session.duration)))+'%';
     if(value.error){reportedError=value.error;playerMessage(value.error);video.pause();showControls();}
     else if(value.resource_wait)playerMessage(value.resource_wait);
-    if(changed){proofDecoder.detach();loadedGeneration=0;desiredPosition=value.position;video.pause();if(loadAbort)loadAbort.abort();loading=false;loadSerial++;}
+    if(changed){proofDecoder.detach();loadedGeneration=0;desiredPosition=value.position;video.pause();if(loadAbort)loadAbort.abort();loading=false;loadSerial++;switchedEngine=false;stallWatch=null;}
     var verdict=SemBufferGate.evaluate(bufferGate,value);
     if(SemBufferGate.loadable(bufferGate,value)&&loadedGeneration!==value.generation&&!loading&&!value.error)void loadStream();
     if(!value.ready){
@@ -546,7 +587,7 @@ var SemTvProbe=(function(){
   }
   // The OK that picked the video in the YouTube view is the viewer's own Play: apply the saved sound choice now (the player starts muted and a library film
   // is unmuted by its Play button's click, which a YouTube pick never presses: without this the video played silently).
-  window.KevFlixPlayer={openYoutube:function(id){try{if(window.KevFlixAudio)window.KevFlixAudio.apply();}catch(ignore){}return openMovie({id:String(id),youtube:true,title:'YouTube video'},true,!!(session&&session.youtube));},   // from inside a playing YouTube video (Next / Previous / autoplay) the player screen stays up
+  window.KevFlixPlayer={openYoutube:function(id){try{if(window.KevFlixAudio)window.KevFlixAudio.apply();}catch(ignore){}var item={id:String(id),youtube:true,title:'YouTube video'};if(!(session&&session.youtube))return openMovie(item,true,false);youtubeSwitch=item;return openMovie(item,true,true).then(function(value){if(youtubeSwitch===item)youtubeSwitch=null;return value;},function(error){if(youtubeSwitch===item)youtubeSwitch=null;throw error;});},   // from inside a playing YouTube video (Next / Previous / autoplay) the player screen stays up, and until the new video is open no key reaches the library behind it (youtubeSwitch)
     // While the YouTube view is on screen the library posters stop loading (a library page fetches and decodes up to ~100 of them, two at a time, on the
     // TV's one page thread: the YouTube picture and the remote keys waited behind them); they continue when the view closes.
     pausePosters:function(){posterEpoch+=1;},resumePosters:function(){void loadPosters();},
@@ -572,11 +613,17 @@ var SemTvProbe=(function(){
   async function openMovie(item,restart,quiet){
     if(item.plex&&item.playable===false){message('This library item is available to browse. KevFLIX currently plays videos.');return;}
     if(setupOnly){message('Setup-only mode: TV pairing is available; playback and dubbing remain disabled.');return;}
-    var prefs=moviePrefs||defaults;quietNext=quiet===true;
+    var prefs=moviePrefs||defaults,pressedAt=Date.now();quietNext=quiet===true;item.cancelled=false;posterEpoch+=1;   // F24: a new attempt; the library posters stop loading while a film opens
     await leave();
     if(item.cancelled)return;var number=++operation;
-    message(item.youtube?'':'Opening movie…');
-    var value=item.youtube?await openYoutubeValue(item,number):await api('open',item.plex?{plex_key:item.id,resume:!restart}:{node:item.id});
+    message('');
+    // F24: the player screen with its card comes up at once and Play cannot be pressed twice; Back cancels (switchOpening, as for a Plex episode switch).
+    var opening=!item.youtube&&switchOpening!==item;
+    if(opening){switchOpening=item;$('details').hidden=true;$('main').hidden=true;$('sidebar').hidden=true;$('player').hidden=false;$('player-controls').classList.add('controls-hidden');bufferView('Opening',item.title||'',null);}
+    var sent=item.youtube?null:{quality:prefs.quality,upscale:!!prefs.upscale,hdr_mode:prefs.hdr_mode,surround:prefs.surround||'auto',encoder:prefs.encoder,encoder_threads:prefs.threads||2,dub:!!prefs.dub,watch:!!prefs.watch,watch_mode:prefs.commentary,progress_sync:!!(item.plex&&prefs.progress_sync!==false),subtitles:prefs.subtitles||'off',resume_position:(!item.plex&&!restart&&item.resume>10)?item.resume:null};
+    try{
+    var value=item.youtube?await openYoutubeValue(item,number):await api('open',item.plex?{plex_key:item.id,resume:!restart,prefs:sent}:{node:item.id,prefs:sent});
+    if(!value.prefs_applied){     // a server without F24 ignored "prefs": send them as before
     if(!item.plex&&!restart&&item.resume>10)value=await api('control',{id:value.id,action:'seek',position:item.resume});
     if(prefs.quality!==value.quality||prefs.upscale!==value.upscale||prefs.hdr_mode!==value.hdr_mode||(prefs.surround||'auto')!==value.surround)
       value=await api('control',{id:value.id,action:'quality',quality:prefs.quality,upscale:prefs.upscale,hdr_mode:prefs.hdr_mode,surround:prefs.surround||'auto',position:value.position});
@@ -586,6 +633,11 @@ var SemTvProbe=(function(){
     if(!item.youtube)value=await api('control',{id:value.id,action:'watch_mode',watch_mode:prefs.commentary});          // a YouTube video has neither commentary nor Plex progress: two round trips less before it starts
     if(!item.youtube)value=await api('control',{id:value.id,action:'progress_sync',enabled:item.plex&&prefs.progress_sync!==false});
     if(prefs.subtitles&&prefs.subtitles!=='off')value=await api('control',{id:value.id,action:'subtitles',subtitles:prefs.subtitles});
+    }
+    }catch(error){
+      if(opening&&switchOpening===item){$('buffering').hidden=true;$('player').hidden=true;$('player-controls').classList.remove('controls-hidden');if(selectedItem)showDetails(selectedItem,selectedCard);else{$('main').hidden=false;$('sidebar').hidden=false;}}
+      throw error;
+    }finally{if(opening&&switchOpening===item)switchOpening=null;}
     if(number!==operation){await api('control',{id:value.id,action:'stop'});return;}
     bufferGate=SemBufferGate.create();$('buffering').hidden=true;
     uiItem=item;session=value;desiredPosition=value.position;wantedPlay=true;loadedGeneration=0;reportedError='';openedAt=Date.now();stallWatch=null;switchedEngine=false;engineConfirmed=false;progressMark=null;
@@ -602,7 +654,7 @@ var SemTvProbe=(function(){
     $('subtitle-track').value=value.subtitles;$('watch-mode').value=value.watch_mode;$('progress-sync').value=value.sync_progress?'on':'off';
     updateStatus(value);showControls();$('play-pause').focus();
     clearInterval(pollTimer);pollTimer=setInterval(poll,2000);
-    reportFailure('capabilities');
+    reportFailure('capabilities',{open:{ms:Date.now()-pressedAt,prefs_applied:value.prefs_applied===true,plex:!!item.plex,youtube:!!item.youtube}});   // F24: how long Play -> session took on this TV, in the PC's log
   }
   function waitFor(event,number,timeout,signal){
     return new Promise(function(resolve,reject){
@@ -624,6 +676,20 @@ var SemTvProbe=(function(){
         ready_state:video.readyState,network_state:video.networkState,native_hls:video.canPlayType('application/vnd.apple.mpegurl')||'',
         hls_js:proofDecoder.canFallback(),ua:navigator.userAgent||'',session:session?session.id:'',codecs:codecSupport()},extra||{})).catch(function(){});
     }catch(ignore){}
+  }
+  // F07 self-check: once per session, after three segment joins have played, report what the player did at them (stage 'joins').
+  var joinWatch=SemJoinWatch.create(),joinSession='';
+  function joinSample(){
+    if(!session||session.live||!(session.dub||session.compatibility)||loading||loadedGeneration!==session.generation)return;
+    if(joinSession!==session.id){joinSession=session.id;joinWatch=SemJoinWatch.create();}
+    if(joinWatch.done)return;
+    var spans=[],quality=null;
+    try{for(var i=0;i<video.buffered.length;i++)spans.push([video.buffered.start(i),video.buffered.end(i)]);}catch(ignore){}
+    try{quality=video.getVideoPlaybackQuality?video.getVideoPlaybackQuality():null;}catch(ignore){}
+    var report=SemJoinWatch.sample(joinWatch,{position:position(),time:Number(video.currentTime)||0,wall:Date.now(),
+      playing:!video.paused&&!video.seeking&&!video.ended,segment:Number(session.segment_seconds)||0,buffered:spans,
+      dropped:quality?quality.droppedVideoFrames:null,frames:quality?quality.totalVideoFrames:null,soft:proofDecoder.softErrors()});
+    if(report)reportFailure('joins',{joins:report});
   }
   // ---- "Test this TV" (see SemTvProbe above) --------------------------------------------------------------------------------
   var probeRunning=false,probeCancel=false;
@@ -733,6 +799,29 @@ var SemTvProbe=(function(){
       message('Test failed: '+((error&&error.message)||'unknown error'));
     }finally{probeRunning=false;}
   }
+  // F19: the same test by itself and unseen, once per TV (the PC asks for it with 'video_probe' in /tv-api/settings): three silent clips in a
+  // 2-pixel video while the library is on screen. The report goes to the PC, which then knows whether this TV really decodes HEVC Main10.
+  var AUTO_PROBE_CLIPS=['h264_1080p60','hevc_1080p60','hevc10_2160p24'],autoProbing=false;
+  async function autoProbe(){
+    if(autoProbing||probeRunning||session||setupOnly)return;
+    autoProbing=true;
+    function busy(){return !!session||probeRunning||!$('player').hidden;}
+    try{
+      var status=await api('probe/prepare',{}),begun=Date.now();
+      function wanted(){return (status.clips||[]).filter(function(c){return AUTO_PROBE_CLIPS.indexOf(c.name)>=0;});}
+      while(status.state==='working'&&wanted().some(function(c){return c.state!=='ready'&&c.state!=='failed';})&&Date.now()-begun<600000&&!busy()){
+        await new Promise(function(resolve){setTimeout(resolve,3000);});
+        status=await api('probe/status');
+      }
+      var clips=wanted().filter(function(c){return c.state==='ready';});
+      if(busy()||clips.length<AUTO_PROBE_CLIPS.length)return;          // a film started, or the PC could not make the clips: again at the next start
+      var env=probeEnv(),make=env.createVideo;
+      env.createVideo=function(){var v=make();v.style.cssText='position:fixed;left:0;top:0;width:2px;height:2px;opacity:0.01;pointer-events:none';return v;};
+      var results=await SemTvProbe.create(env).run(clips,null,busy);
+      if(results.length===clips.length)reportFailure('probe',{probe:SemTvProbe.summarize(results,Object.assign(probeEnvironment(),{auto:'1'}))});
+    }catch(ignore){}
+    finally{autoProbing=false;}
+  }
   // What this TV can decode through MSE (the hls.js path) and through the video tag: part of every failure report.
   function codecSupport(){
     var kinds={h264:'video/mp4; codecs="avc1.640028"',hevc:'video/mp4; codecs="hvc1.1.6.L120.90"',av1:'video/mp4; codecs="av01.0.08M.08"',
@@ -749,7 +838,7 @@ var SemTvProbe=(function(){
   // advanced the picture is remembered (kevflix-engine), see checkStall.
   function prefersOwnDecoder(){try{var saved=localStorage.getItem('kevflix-engine');return saved?saved==='hlsjs':true;}catch(ignore){return true;}}
   function rememberEngine(own){try{localStorage.setItem('kevflix-engine',own?'hlsjs':'native');}catch(ignore){}}
-  var STALL_MS=15000,stallWatch=null,switchedEngine=false,engineConfirmed=false,progressMark=null;
+  var STALL_MS=15000,stallWatch=null,switchedEngine=false,engineConfirmed=false,progressMark=null,pictureReported=false;
   // watchStall/failurePlan live on the decoder INSTANCE (proofDecoder), not on the SemProofDecoder module: calling them on the module threw
   // "SemProofDecoder.watchStall is not a function" inside poll() before every heartbeat, so the PC stopped the playback as idle.
   function checkStall(){
@@ -757,6 +846,11 @@ var SemTvProbe=(function(){
     var time=Number(video.currentTime)||0;
     if(!engineConfirmed&&progressMark!==null&&time>progressMark+2){
       engineConfirmed=true;rememberEngine(proofDecoder.engine()==='hls.js');
+    }
+    // F19: after 30 s of real progress tell the PC once what is on screen (codec of this playback, picture size, decoded and dropped frames).
+    if(!pictureReported&&progressMark!==null&&time>progressMark+30){
+      pictureReported=true;var shown=video.getVideoPlaybackQuality?video.getVideoPlaybackQuality():null,plan=(session.run_ahead&&session.run_ahead.encoder)||{};
+      reportFailure('picture',{picture:{codec:plan.codec||'h264',w:video.videoWidth,h:video.videoHeight,adv:Math.round(time-progressMark),dec:shown?shown.totalVideoFrames:null,drop:shown?shown.droppedVideoFrames:null}});
     }
     var lead=(Number(session.ready_through)||0)-position();
     stallWatch=proofDecoder.watchStall(stallWatch,{time:time,lead:lead},Date.now(),STALL_MS);
@@ -791,7 +885,7 @@ var SemTvProbe=(function(){
       }
       if(number!==operation||!session||generation!==session.generation)return;
       $('buffering').hidden=true;reportedError='';playerMessage('');
-      progressMark=Number(video.currentTime)||0;stallWatch=null;
+      progressMark=Number(video.currentTime)||0;stallWatch=null;pictureReported=false;
       if(SemBufferGate.canResume(bufferGate,session,wantedPlay))await playVideo();
       else if(wantedPlay)$('buffering').hidden=false;
       showControls();
@@ -846,6 +940,12 @@ var SemTvProbe=(function(){
   // quiet (set by openMovie when a Plex episode / YouTube video is opened from a playing session): the player screen stays up, the library is not
   // touched and the YouTube view is not resumed; selectedItem is hidden from the library bookkeeping below for the length of the call.
   async function leave(quiet){quiet=quiet===true||quietNext;quietNext=false;var held=selectedItem;if(quiet)selectedItem=null;try{await leaveSession(quiet);}finally{if(quiet)selectedItem=held;}}
+  // The last position and the stop go to the PC without being waited for (keepalive: they are still sent when the page goes away right after), so the screen
+  // changes at once however slowly the PC or Plex answers. They are sent one after the other: the stop waits for the answer to the last position, at most 5 s.
+  function tell(path,body){
+    try{return fetch('/tv-api/'+path,{method:'POST',headers:{Authorization:'Bearer '+token,'Content-Type':'application/json'},body:JSON.stringify(body),keepalive:true,cache:'no-store'}).then(function(){},function(){});}
+    catch(ignore){return Promise.resolve();}
+  }
   async function leaveSession(quiet){
     if(session&&selectedItem&&!session.youtube){
       var saved=position();resumeMap[selectedItem.id]={position:saved>session.duration-30?0:saved};
@@ -853,14 +953,17 @@ var SemTvProbe=(function(){
       selectedItem.resume=resumeMap[selectedItem.id].position;
       if(video.ended)selectedItem.watched=true;
     }
-    if(session){try{await api('heartbeat',{id:session.id,position:position(),state:video.ended?'ended':'paused',generation:session.generation});}catch(ignore){}}
+    var old=session,last=old?{id:old.id,position:position(),state:video.ended?'ended':'paused',generation:old.generation}:null;
     operation++;clearInterval(pollTimer);clearTimeout(hideTimer);
     if(loadAbort)loadAbort.abort();loading=false;loadSerial++;
-    var old=session;session=null;wantedPlay=false;loadedGeneration=0;uiEmit('status',null);
+    session=null;window.KevFlixDub=null;wantedPlay=false;loadedGeneration=0;uiEmit('status',null);
     video.pause();proofDecoder.detach();video.removeAttribute('src');video.load();
     if(!quiet){$('player').hidden=true;$('header').hidden=false;$('main').hidden=false;$('sidebar').hidden=false;$('library-panel').hidden=!token||page==='settings';}
     $('playback-panel').hidden=true;captionKey='';
-    if(old){try{await api('control',{id:old.id,action:'stop'});}catch(ignore){}}
+    if(last){
+      var stopSent=false,sendStop=function(){if(!stopSent){stopSent=true;tell('control',{id:old.id,action:'stop'});}};
+      tell('heartbeat',last).then(sendStop);setTimeout(sendStop,5000);   // the stop follows the last position, and goes no later than 5 s after leaving
+    }
     if(old&&selectedItem&&!old.youtube)showDetails(selectedItem,selectedCard);
     if(!quiet)if(old&&old.youtube&&window.KevFlixYoutube)window.KevFlixYoutube.resume();   // the hand-off is over: back to the YouTube view
   }
@@ -908,11 +1011,11 @@ var SemTvProbe=(function(){
     try{updateStatus(await api('control',{id:session.id,action:'watch',enabled:!session.watch}));playerMessage('Ask Sem to watch with you in an existing voice call.');}
     catch(error){playerMessage(error.message);}
   };
-  video.addEventListener('waiting',function(){if(session)bufferView('Buffering','Waiting for the next part of the movie…',null);});
+  video.addEventListener('waiting',function(){SemJoinWatch.waiting(joinWatch);if(session)bufferView('Buffering','Waiting for the next part of the movie…',null);});
   video.addEventListener('playing',function(){$('buffering').hidden=true;showControls();});
   video.addEventListener('pause',function(){if(!wantedPlay)$('buffering').hidden=true;});
   // The card never stays over a picture that is moving: a 'waiting' the TV never follows with 'playing' (Tizen's native HLS can skip it) would leave it up.
-  video.addEventListener('timeupdate',function(){if(session&&!loading&&!video.paused&&!video.seeking&&video.readyState>=3&&!$('buffering').hidden)$('buffering').hidden=true;if(session&&!session.live){$('time').textContent=clock(position())+' / '+clock(session.duration);$('progress-fill').style.width=100*position()/session.duration+'%';}});
+  video.addEventListener('timeupdate',function(){if(session&&!loading&&!video.paused&&!video.seeking&&video.readyState>=3&&!$('buffering').hidden)$('buffering').hidden=true;if(session&&!session.live){$('time').textContent=clock(position())+' / '+clock(session.duration);$('progress-fill').style.width=100*position()/session.duration+'%';}joinSample();});
   video.addEventListener('ended',function(){if(session&&session.youtube){void leave();return;}wantedPlay=false;setPlayState();showControls();void poll();});   // a YouTube video that ends returns to the YouTube view
   video.addEventListener('error',function(){if(session&&!loading){reportFailure('playback-error');playerMessage('Playback could not continue. Lower the output limit, select SDR conversion, or turn dubbing off.');showControls();}});
   document.addEventListener('visibilitychange',function(){if(document.hidden&&session){wantedPlay=false;video.pause();void poll();}});
@@ -964,6 +1067,7 @@ var SemTvProbe=(function(){
     var key=event.keyCode||event.which||({ArrowLeft:37,ArrowUp:38,ArrowRight:39,ArrowDown:40,Enter:13,Backspace:8,Escape:27,Return:10009}[event.key]);
     var active=document.activeElement;
     if(event.isComposing)return;
+    if(youtubeSwitch&&!youtubeOpening){event.preventDefault();return;}   // a YouTube video is opening from inside the player and its download phase (which Back cancels, below) is over: for that moment no key reaches the library behind the player
     if(switchOpening){event.preventDefault();if(key===10009||key===27||key===8){switchOpening.cancelled=true;switchOpening=null;operation++;$('buffering').hidden=true;void leave();}return;}   // Back while the next Plex episode opens (the player screen is up with no session): cancel and return to the library
     if(probeRunning){event.preventDefault();if(key===10009||key===27||key===8)probeCancel=true;return;}
     if(youtubeOpening){event.preventDefault();if(key===10009||key===27||key===8){youtubeOpening.cancelled=true;api('youtube/cancel',{}).catch(function(){});}return;}   // Back while downloading cancels
@@ -990,6 +1094,7 @@ var SemTvProbe=(function(){
     }
     if(key===10009||key===27){
       event.preventDefault();
+      if(event.repeat)return;   // a held Back acts once: its repeats must not also close the page that appears behind
       if(!$('choice-panel').hidden)closeChoice();
       else if(!$('info-panel').hidden)$('info-back').click();
       else if(!$('movie-options').hidden)$('movie-options-back').click();
@@ -1025,7 +1130,7 @@ var SemTvProbe=(function(){
       focusMove(key);
     }
   },true);
-  try{['MediaPlay','MediaPause','MediaPlayPause','MediaStop','MediaRewind','MediaFastForward','Info','ColorF0Red'].forEach(function(key){tizen.tvinputdevice.registerKey(key);});}catch(ignore){}
+  window.KevFlixKeys={ok:[],failed:[],error:''};['MediaPlay','MediaPause','MediaPlayPause','MediaStop','MediaRewind','MediaFastForward','MediaTrackPrevious','MediaTrackNext','Info','ColorF0Red'].forEach(function(key){try{tizen.tvinputdevice.registerKey(key);window.KevFlixKeys.ok.push(key);}catch(error){window.KevFlixKeys.failed.push(key);if(!window.KevFlixKeys.error)window.KevFlixKeys.error=String((error&&error.name)||error);}});   // one try per key: a name this TV model does not know must not stop the others; the result goes to the PC with the skin's self-check (controls.js)
   $('version').textContent=VERSION+' · development';
   api('version',undefined,true).then(function(value){
     setupOnly=value.setup_only===true;
@@ -1149,7 +1254,7 @@ var SemTvProbe=(function(){
   };
   function closeDetails(){
     $('details').hidden=true;$('main').hidden=false;$('sidebar').hidden=false;
-    if(selectedCard&&selectedItem&&document.contains(selectedCard)){var updated=button(selectedItem);selectedCard.replaceWith(updated);selectedCard=updated;void loadPosters();}
+    if(selectedCard&&selectedItem&&document.contains(selectedCard)){var updated=button(selectedItem),oldPoster=selectedCard.querySelector('img[data-key]'),newPoster=updated.querySelector('img[data-key]');if(oldPoster&&newPoster&&oldPoster.src)newPoster.src=oldPoster.src;selectedCard.replaceWith(updated);selectedCard=updated;void loadPosters();}
     if(selectedCard&&document.contains(selectedCard))selectedCard.focus();else $('nav-'+page).focus();
   }
   $('details-back').onclick=closeDetails;

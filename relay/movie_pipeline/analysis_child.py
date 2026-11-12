@@ -73,7 +73,8 @@ MAX_AUDIO_BYTES = 1 << 30
 MAX_ARRAY_BYTES = 512 << 20
 NPY_HEADER_SLACK = 4096
 OPS = frozenset({'text_language', 'speech', 'english', 'english_batch', 'analyze', 'embed', 'refine_utterances',
-                 'device_report', 'generic_vad', 'generic_synthesize', 'language_id', 'audio_events', 'warmup'})
+                 'device_report', 'generic_vad', 'generic_synthesize', 'language_id', 'audio_events', 'warmup',
+                 'scout_feed', 'scout_centers'})          # F15: the film scout (relay/film_scout.py)
 MAX_BATCH_ROWS = 256                                # rows of one english_batch request (the client sends fewer)
 # Cache operation names of translations. They differ per engine on top of the namespace (which already carries the
 # translator's content identity and policy), so an M2M100 entry can never answer a Qwen3 request or the reverse.
@@ -709,6 +710,12 @@ class Worker:
             if self.speakers is None:raise ValueError('speaker analysis is disabled in generic mode')
             extra = {'source_fingerprint': str(args['source_fingerprint'])} if args.get('source_fingerprint') else {}
             return list(self.speakers.analyze(args['wav'], float(args.get('offset', 0.0)), **extra))
+        if op == 'scout_feed':                              # F15: never cached (stream state), never starts the sidecar
+            if self.speakers is None:raise ValueError('speaker analysis is disabled in generic mode')
+            return dict(self.speakers.scout_feed(args['waveform'], float(args['start']), args.get('source_fingerprint')))
+        if op == 'scout_centers':
+            if self.speakers is None:raise ValueError('speaker analysis is disabled in generic mode')
+            return dict(self.speakers.scout_centers(args.get('source_fingerprint')))
         if op == 'embed':
             if self.speakers is None:raise ValueError('speaker embeddings are disabled in generic mode')
             return self.speakers.embed(args['waveform'])

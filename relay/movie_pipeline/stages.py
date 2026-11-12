@@ -58,6 +58,16 @@ class Separated:
 
 
 @dataclass(frozen=True)
+class Warmed:
+    claim: Claimed
+    ok: bool
+    state: str = ''                 # 'warmed' | 'skipped' | 'failed'
+    timing: dict = field(default_factory=dict)
+    seconds: float = 0.0
+    error: str = ''
+
+
+@dataclass(frozen=True)
 class Prepared:
     claim: Claimed
     state: str                      # 'prepared' or the report state preparation stopped at, or 'failed'
@@ -212,6 +222,34 @@ def prepare_window(config, snapshot_claimed, claim, owner, pipeline, separated, 
         return Prepared(claim=claim, state='failed', capture=cap, seconds=round(time.perf_counter() - started, 3),
                         error='%s: %s' % (type(error).__name__, str(error)[:800]), error_kind=fault['kind'],
                         fault=fault)
+
+
+def warm_window(config, store, claim, owner, pipeline, separated):
+    """Analysis worker, ahead of preparation: ActorPipeline.warm_inference for a separated window (ASR + speaker
+    analysis only). It reads the real store (job and chunk rows, read-only) and writes nothing to it; no snapshot, no
+    plan, no speaker capture. A failure is recorded and changes nothing: the window is prepared later as usual."""
+    started = time.perf_counter()
+    try:
+        from ..embedded_subtitles import chunk_captions
+        from ..media import file_hash
+        w = _chunk_inputs(config, store, claim.job_id, claim.index)
+        spec = w['spec']
+        if Path(separated.original_wav) != Path(w['original']) or file_hash(w['original']) != separated.original_sha256:
+            raise ValueError('original-layout.wav changed after separation')
+        captions, _ = chunk_captions(config, owner, spec, w['origin'], w['end'], w['directory'])
+        report = pipeline.warm_inference(w['original'], w['origin'], captions, w['directory'], owner,
+                                         source_channel_layout=dict(w['audio_stream']),
+                                         source_identity={'source_fingerprint': spec['source_fingerprint'],
+                                                          'audio_index': spec['audio_index']})
+        state = str(report.get('state') or 'unknown')
+        return Warmed(claim=claim, ok=state == 'warmed', state=state,
+                      timing={k: round(float(report[k]), 3) for k in ('asr', 'speakers') if k in report},
+                      seconds=round(time.perf_counter() - started, 3), error=str(report.get('reason') or ''))
+    except BaseException as error:   # noqa: BLE001 - a warm-up decides nothing: its failure is only recorded
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            raise
+        return Warmed(claim=claim, ok=False, state='failed', seconds=round(time.perf_counter() - started, 3),
+                      error='%s: %s' % (type(error).__name__, str(error)[:300]))
 
 
 def render_window(config, real_claimed, claim, owner, pipeline):

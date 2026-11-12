@@ -43,7 +43,7 @@ def _dominant_raw_label(cue, speech_regions):
 
 
 def choose_reference_donors(cues, refused_ids, usable, speech_regions, *, max_gap=DONOR_MAX_GAP_SECONDS, raw_label=None,
-                            strict=False):
+                            strict=False, unknown_pitch_needs_same_label=True):
     """Who lends a reference to each refused (too short, overlapped, no embedding) line of this window. Every refused line
     that has ANY usable donor within max_gap gets one (owner rule: every line is dubbed); a refused line with none is absent
     and keeps its original audio. Returns {cue_id: {'donor', 'same_raw_label', 'gap_seconds', 'pitch_mismatch'} + additive
@@ -87,6 +87,14 @@ def choose_reference_donors(cues, refused_ids, usable, speech_regions, *, max_ga
             f1, f2 = cue.get('f0_median_hz'), donor.get('f0_median_hz')
             far = bool(f1 and f2 and abs(12 * math.log2(float(f1) / float(f2))) > DONOR_PITCH_SEMITONES)
             if strict and (not same or relation == 'contradicts' or far):
+                continue
+            # F15: two lines the film map puts under different film speakers never share a reference (a refusal only: lines
+            # without a film speaker are judged exactly as before)
+            if strict and cue.get('film_speaker') and donor.get('film_speaker') and cue['film_speaker'] != donor['film_speaker']:
+                continue
+            # F14: without a pitch on both sides the raw label is the only witness, and raw labels mix voices. The borrow
+            # then needs the refined labels to agree as well; otherwise the line keeps its original audio.
+            if strict and unknown_pitch_needs_same_label and not (f1 and f2) and relation != 'same':
                 continue
             preferred = adjacent and (relation == 'same' or (relation == 'unknown' and same))
             key = (1 if relation == 'contradicts' else 0, 1 if far else 0, 0 if preferred else 1,

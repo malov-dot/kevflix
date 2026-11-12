@@ -181,6 +181,13 @@ class Holder:
             self.telemetry['refusals'] += 1
             raise MovieResourceWait('breeze_listener', 'a Breeze listener exists on port %d; KevFLIX never runs GPU '
                                     'work beside it' % BREEZE_PORT)
+        block = self._sem_block()
+        if block is not None:
+            # Named BEFORE the VRAM budget and before a watcher process is started: with the other app loaded the
+            # budget is negative as well (free 421-3,583 MiB in the 2026-10-24/25 log), so one hold was reported
+            # under two codes (lease_insufficient_vram 555x, lease_sem_started 309x).
+            self.telemetry['refusals'] += 1
+            raise MovieResourceWait(*block)
         try:
             budget = self._budget_now()
             lease = self.client.acquire(budget['budget_mib'], ttl_s=TTL_S, wait_s=0.0, holder=str(holder))
@@ -243,6 +250,69 @@ class Holder:
         if budget <= 0:
             raise MovieResourceWait('lease_insufficient_vram', 'free %d MiB - reserve %d MiB - margin %d MiB leaves '
                                     'no movie budget' % (free, self.reserve_mib, self.admission_margin_mib))
+        return record
+
+    def _sem_block(self):
+        """sem_mode 'absent' only: (code, detail) when a process of the other app, or one whose identity cannot be
+        read, is running now; else None. A read-only process scan through the pinned client (lc.sem_processes): no
+        lease, no lock, no watcher process. A scan that cannot run answers None, so the watcher decides as before."""
+        if self.sem_mode != 'absent':
+            return None
+        scan = getattr(self.lc, 'sem_processes', None)
+        if not callable(scan):
+            return None
+        try:
+            found = list(scan())
+        except Exception:  # noqa: BLE001 -- unreadable process list: the watcher's own scan decides
+            return None
+        sem = [str(detail) for verdict, detail in found if verdict == 'sem']
+        if sem:
+            return 'lease_sem_started', 'sem_started: ' + '; '.join(sem[:3])
+        unverified = [str(detail) for verdict, detail in found if verdict == 'unverified']
+        if unverified:
+            return 'lease_sem_presence_unverified', 'sem_presence_unverified: ' + '; '.join(unverified[:3])
+        return None
+
+    def probe(self):
+        """Would acquire() be refused right now? Asked WITHOUT acquiring: no watcher process, no machine lock, no
+        lease; nothing is written (last_budget and the telemetry are untouched).
+            -> {'obtainable': bool, 'code': str | None, 'detail': str, 'free_mib': int | None, 'at': float}
+        obtainable False carries the code acquire() would raise: lease_drain_pending, breeze_listener,
+        lease_sem_started, lease_sem_presence_unverified, lease_gpu_probe_failed or lease_insufficient_vram.
+        obtainable True is not a promise: sem_mode 'running' is not examined here (its rule lives in the watcher),
+        and the watcher still applies its own settle time and median free-VRAM check."""
+        record = {'obtainable': True, 'code': None, 'detail': '', 'free_mib': None, 'at': time.time()}
+
+        def refused(code, detail):
+            record.update(obtainable=False, code=str(code), detail=str(detail)[:400])
+            return record
+
+        with self._lock:
+            if self._held:
+                return record                    # the lease is ours already: views can be opened on it
+            pending = self._pending_drain
+        if pending is not None:
+            return refused('lease_drain_pending', pending.get('evidence') or 'the previous lease is not confirmed drained')
+        try:
+            if winjob.tcp_listeners().get(BREEZE_PORT):
+                return refused('breeze_listener', 'a Breeze listener exists on port %d' % BREEZE_PORT)
+        except Exception:  # noqa: BLE001 -- acquire() makes the same call and reports its own failure
+            pass
+        block = self._sem_block()
+        if block is not None:
+            return refused(*block)
+        try:
+            free = int(self.client.available_vram().free_mib)
+        except Exception as error:  # noqa: BLE001 -- unreadable free VRAM is a hold, never a guess (as in _budget_now)
+            return refused('lease_gpu_probe_failed', 'free VRAM is unreadable: %s: %s' % (type(error).__name__, error))
+        record['free_mib'] = free
+        if isinstance(self.budget_mib, int):
+            if free - self.reserve_mib < self.budget_mib:
+                return refused('lease_insufficient_vram', 'free %d MiB - reserve %d MiB < budget %d MiB'
+                               % (free, self.reserve_mib, self.budget_mib))
+        elif free - self.reserve_mib - self.admission_margin_mib <= 0:
+            return refused('lease_insufficient_vram', 'free %d MiB - reserve %d MiB - margin %d MiB leaves no movie '
+                           'budget' % (free, self.reserve_mib, self.admission_margin_mib))
         return record
 
     def release(self, lease, reason):

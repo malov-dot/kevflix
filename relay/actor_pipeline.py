@@ -36,6 +36,8 @@ from . import beta_caption_flow as _ctf, beta_first_pass_flow as _fpf   # stdlib
 from . import beta_dialogue_ownership as _own   # stdlib-only; used only with actor_beta.caption_targets
 from . import beta_line_ledger as _lines        # stdlib-only (sqlite3); used only with actor_beta.caption_targets
 from . import kept_speech as _kept              # stdlib-only; numpy only inside the stem check
+from . import film_language as _film          # stdlib-only; actor_beta.film_language_lock (default on with the beta)
+from . import film_speakers as _film_speakers   # stdlib-only; actor_beta.film_speakers (default on with the beta)
 from . import diart_stream as _diart            # stdlib-only; actor_beta.diart_stream (live sidecar, default on with the beta), then actor_beta.diart_turns (file), then pyannote per window
 from .language import iso,aligned_caption_style,word_error
 from .media import atomic_json,file_hash,resolve_channel_layout,wav_format,WAV_MASK_LAYOUTS
@@ -48,7 +50,7 @@ from .borrowed_reference import choose_reference_donors as choose_pure_reference
 from .dialogue_ledger import (DialogueLedger,ProtectionLedger,add_utterance,merge_spans,
                               persisted_protection_issues,protection_rows,protection_scope,take_span)
 from .verified_speech import critical_readback_changes
-from .asr_rescue import rescue_windows,merge_rescue
+from .asr_rescue import rescue_windows,merge_rescue,speech_gap_windows,speech_like
 from .dubbing_timing import plan_dubbing_timing
 from .original_audio_policy import plan_original_audio,protect_dialogue_mix,original_protection_masks
 from .prepared_actor import validate_original_policy,ORIGINAL_POLICY_VERSION,NATURAL_POLICY_VERSION
@@ -57,6 +59,10 @@ from .prepared_actor import validate_original_policy,ORIGINAL_POLICY_VERSION,NAT
 # whispers, steps or music around it, and a dub that is a little too long is fitted into its slot (atempo <= 1.35).
 SPEECH_ONLY_REMOVAL_VERSION='speech-only-removal-v1'
 TAKE_FIT_MAX_SPEED=1.35
+# F03 (2026-11-11): a take that fits before the next onset but runs past its own line is sped up to end on the line (measured on a
+# full film: 195 of 906 takes ended more than 0.15 s after the lips stopped, 146 of them untouched because they "fitted").
+LINE_FIT_MAX_SPEED=1.20          # tempo spent to end on the line; 1.0 switches the step off (actor_beta.line_fit_max_speed)
+LINE_FIT_TOLERANCE_SECONDS=.15   # a take may end this long after the line (actor_beta.line_fit_tolerance_seconds)
 # A line at least this long (seconds) is cloned from its own audio (its own loudness/delivery); shorter lines use the bank reference.
 PREFER_OWN_REFERENCE_SECONDS=0.0   # owner rule 2026-10-20: EVERY dubbed line is cloned from its own audio (0.0); a larger actor_beta.prefer_own_reference_seconds is the legacy bank-for-short-lines behaviour
 
@@ -92,17 +98,28 @@ def overlap_policy(config):
             'word_floor':number('unclear_word_floor',.5,.05,.9),
             'bank_min':number('bank_reference_min_seconds',BANK_REFERENCE_MIN_SECONDS,1.0,10.0),
             'fit_max_speed':number('take_fit_max_speed',TAKE_FIT_MAX_SPEED,1.0,1.6),
+            'line_fit_max_speed':number('line_fit_max_speed',LINE_FIT_MAX_SPEED,1.0,1.5),
+            'line_fit_tolerance':number('line_fit_tolerance_seconds',LINE_FIT_TOLERANCE_SECONDS,0.0,1.0),
             'solo_relax':beta.get('overlap_solo_relax') is True,
+            'keep_untimed_words':beta.get('keep_untimed_words') is not False,       # F22
             'fragment_seconds':number('merge_short_fragment_seconds',0.0,0.0,3.0),
             'low_word_share':number('unclear_low_word_share',0.0,0.0,0.6),
             'extend_merged':beta.get('reference_extend_merged_labels') is True,
             'borrow_reference':beta.get('borrow_reference') is True,
+            'donor_pitch_rule':beta.get('donor_unknown_pitch_needs_same_label') is not False,      # F14
+            'clip_speech_span':beta.get('clip_short_speech_span') is not False,                    # F14
             'concise_retranslation':beta.get('concise_retranslation') is True,
+            # F13: default on with the beta lane; only an explicit false turns the timed pass off
+            'timed_translation':bool(beta) and beta.get('timed_translation') is not False,
             'language_correction':beta.get('language_correction') is True,
             'nonverbal_audio':beta.get('nonverbal_audio') is True,
             'reject_unintelligible':beta.get('reject_unintelligible') is True,
+            # F16: three independent switches, all on unless set to false
+            'chant_evidence':beta.get('chant_needs_singing_evidence') is not False,
+            'speech_gap_rescue':beta.get('asr_speech_gap_rescue') is not False,
+            'second_reading':beta.get('asr_second_reading') is not False,
             'deess_takes':beta.get('deess_takes') is True,
-            'slot_fill':_slot.settings(beta)}
+            'slot_fill':_slot.settings(_beta.beta_settings(config))}     # None when the beta lane is off: slot fill off
 
 
 REFERENCE_DONOR_MAX_GAP_SECONDS=36.
@@ -145,12 +162,50 @@ def vox_options(config):
     return {'reference_only':True} if (_beta.beta_settings(config) or {}).get('vox_reference_only') is True else {}
 
 
+SLACK_EDGE_BLIND_SECONDS=.5     # F01: the detector's last half second at the edge of the analysed audio is provisional
+
+
+def slack_edge_blind(config):
+    """actor_beta.slack_edge_blind_seconds (0-3, default 0.5; 0 = off): when no later onset was detected, a take's tail may not
+    run into the last N seconds of the analysed audio. The next window may find a line starting there (F01)."""
+    value=(_beta.beta_settings(config) or {}).get('slack_edge_blind_seconds',SLACK_EDGE_BLIND_SECONDS)
+    if isinstance(value,bool):return SLACK_EDGE_BLIND_SECONDS
+    try:value=float(value)
+    except (TypeError,ValueError):return SLACK_EDGE_BLIND_SECONDS
+    return value if math.isfinite(value) and 0.<=value<=3. else SLACK_EDGE_BLIND_SECONDS
+
+
 def prefer_own_seconds(config):
     """Cue length from which a line is cloned from its own audio (actor_beta.prefer_own_reference_seconds, validated)."""
     value=(_beta.beta_settings(config) or {}).get('prefer_own_reference_seconds',PREFER_OWN_REFERENCE_SECONDS)
     try:value=float(value)
     except (TypeError,ValueError):return PREFER_OWN_REFERENCE_SECONDS
     return value if math.isfinite(value) and value>=0.0 else PREFER_OWN_REFERENCE_SECONDS
+
+
+def line_fit_target(seconds,span,window,*,max_speed=LINE_FIT_MAX_SPEED,tolerance=LINE_FIT_TOLERANCE_SECONDS):
+    """Seconds a take of `seconds` is fitted to (F03). `window` is the hard limit (next onset, silence slack, committed
+    window); `span` is the line's own length. A take that already ends within `tolerance` of the line, an unusable span, or
+    max_speed <= 1 gives `window` (the earlier behaviour). Otherwise the target is the line end plus `tolerance`, or as near
+    to it as a tempo of `max_speed` reaches, and never beyond `window`."""
+    seconds,span,window=float(seconds),float(span),float(window)
+    if max_speed<=1. or span<=0 or window<=0 or seconds<=0:return window
+    line=min(window,span+tolerance)
+    if seconds<=line+_fit.OVERRUN_TOLERANCE_SECONDS:return window
+    reachable=seconds/max_speed+_fit.DEFAULT_MARGIN_SECONDS      # fit_take aims this margin inside its slot
+    return min(window,max(line,reachable))
+
+
+def window_fit_factor(receipt,window):
+    """The tempo the WINDOW demanded of this take (1.0 when it fitted unfitted). choose_take calls a take 'fast' by this
+    number: tempo spent beyond it only moves the end of the take onto the line (F03) and is not a sign of a poor take."""
+    fit=receipt.get('fit') or {}
+    factor=float(fit.get('factor') or 1.)
+    try:before=float(fit.get('before_seconds') or 0)
+    except (TypeError,ValueError):before=0.
+    if not fit.get('applied') or before<=0 or window<=0:return factor
+    if before<=window+_fit.OVERRUN_TOLERANCE_SECONDS:return 1.
+    return min(factor,before/(window-min(_fit.DEFAULT_MARGIN_SECONDS,window/4)))
 
 
 def fit_rendered_take(path,receipt,window,*,ffmpeg,runner=None,max_speed=TAKE_FIT_MAX_SPEED):
@@ -283,29 +338,121 @@ def mean_word_probability(segments):
     return sum(values)/len(values) if values else 0.
 
 
+# F02 film language lock: in a film decoded in ITS language, a segment whose words came out poorly (mean word probability
+# under FILM_GUARD_MAX_CONFIDENCE) in a window whose own detected language is another one (at least FILM_GUARD_MIN_DETECTION
+# sure) is read a second time in that language; the second reading replaces the first only when it is clearly recognized
+# (LID_MIN_REPLACEMENT_CONFIDENCE). This is what keeps a short English line in a Russian film from being dubbed as gibberish.
+FILM_GUARD_MAX_CONFIDENCE=.5
+FILM_GUARD_MIN_DETECTION=.5
+
+
+def film_guard_ids(segments,ids,detected,window_language,*,max_confidence=FILM_GUARD_MAX_CONFIDENCE,
+                   min_detection=FILM_GUARD_MIN_DETECTION):
+    """ids (one per segment, see apply_language_corrections) with {'language','probability','guard':True} filled in for
+    every poorly recognized segment that the per-segment audio check does not already send to another language. `detected`
+    is the window's own language detection ({'language','probability'}) or None. Pure; returns a new list."""
+    out=list(ids)+[None]*max(0,len(segments)-len(ids))
+    found=str((detected or {}).get('language') or '');probability=float((detected or {}).get('probability') or 0.)
+    if found not in LID_ALLOWED or found==window_language or probability<min_detection:return out
+    for index,segment in enumerate(segments):
+        ident=out[index]
+        if (ident and str(ident.get('language') or '') in LID_ALLOWED and ident.get('language')!=window_language
+                and float(ident.get('probability') or 0.)>=LID_MIN_PROBABILITY):continue      # the audio check decides this one
+        if not str(segment.get('text','')).strip() or not segment.get('words'):continue
+        if mean_word_probability([segment])<max_confidence:
+            out[index]={'language':found,'probability':probability,'guard':True}
+    return out
+
+
 def apply_language_corrections(segments,ids,redecode,window_language,*,min_probability=LID_MIN_PROBABILITY):
     """segments: recognizer segments (seconds from the window origin); ids[i]: {'language','probability'} of segment i's
     audio or None; redecode(i, language) -> replacement segments or None. Returns (segments, corrections, spans) where
-    spans are (start, end, language) of every re-decoded stretch."""
+    spans are (start, end, language) of every re-decoded stretch. An id marked 'guard' (film_guard_ids) is a second reading
+    of a poorly recognized segment: it needs no audio-id probability, and it wins only when its own words are clearly
+    recognized."""
     out,corrections,spans=[],[],[]
     for index,segment in enumerate(segments):
         ident=ids[index] if index<len(ids) else None
         found=str((ident or {}).get('language') or '')
         probability=float((ident or {}).get('probability') or 0.)
-        if ident and found in LID_ALLOWED and found!=window_language and probability>=min_probability:
+        guard=bool(ident) and ident.get('guard') is True
+        if ident and found in LID_ALLOWED and found!=window_language and (probability>=min_probability or guard):
             replacement=redecode(index,found)
-            if (replacement and mean_word_probability(replacement)>=mean_word_probability([segment])-LID_MAX_CONFIDENCE_DROP
-                    and (not any(item.get('words') for item in replacement)
-                         or mean_word_probability(replacement)>=LID_MIN_REPLACEMENT_CONFIDENCE)):
+            if guard:
+                accepted=bool(replacement) and mean_word_probability(replacement)>=LID_MIN_REPLACEMENT_CONFIDENCE
+            else:
+                accepted=bool(replacement and mean_word_probability(replacement)>=mean_word_probability([segment])-LID_MAX_CONFIDENCE_DROP
+                              and (not any(item.get('words') for item in replacement)
+                                   or mean_word_probability(replacement)>=LID_MIN_REPLACEMENT_CONFIDENCE))
+            if accepted:
                 out.extend(replacement)
                 corrections.append({'start':segment['start'],'end':segment['end'],'window_language':window_language,
                                     'detected':found,'probability':round(probability,3),'before':segment.get('text'),
-                                    'after':' '.join(str(item.get('text','')) for item in replacement)})
+                                    'after':' '.join(str(item.get('text','')) for item in replacement),
+                                    **({'basis':'film-lock-guard'} if guard else {})})
                 spans.append((min(item['start'] for item in replacement),max(item['end'] for item in replacement),found))
                 continue
         out.append(segment)
     out.sort(key=lambda item:(item['start'],item['end']))
     return out,corrections,spans
+
+
+# F16: a segment the recognizer was unsure about, inside the detector's speaking windows, is read once more without VAD.
+SECOND_READING_MIN_SECONDS=.3
+SECOND_READING_MIN_COVERAGE=.5        # share of the segment the detector marks as speech
+SECOND_READING_MIN_CONFIDENCE=.5      # the new reading's mean word confidence must reach this ...
+SECOND_READING_MIN_GAIN=.15           # ... and beat the first reading by this much
+SECOND_READING_MAX_PER_WINDOW=6
+SECOND_READING_PAD=.35
+_SECOND_READING_JUNK=frozenset(('credits_hallucination','sound_tag','music_mark','foreign_script','no_text'))
+
+
+def weak_segments(segments,turns,origin,*,minimum_probability,word_floor,low_word_share,whisper_no_speech=False):
+    """Indices of recognizer segments (times relative to `origin`) that plan_dialogue would mark unclear on confidence alone
+    (mean word probability under `minimum_probability`, or more than `low_word_share` of the words under `word_floor`), that
+    last at least SECOND_READING_MIN_SECONDS and lie inside the detector's speaking windows (`turns`, absolute) for at least
+    SECOND_READING_MIN_COVERAGE of their length. The lowest-confidence SECOND_READING_MAX_PER_WINDOW, in time order."""
+    picks=[]
+    for index,segment in enumerate(segments):
+        if is_no_speech(segment,whisper_no_speech) or segment.get('recognition_pass'):continue      # never a rescued segment
+        words=segment.get('words') or []
+        if not words:continue
+        a,b=float(segment['start'])+origin,float(segment['end'])+origin
+        if b-a<SECOND_READING_MIN_SECONDS:continue
+        values=[float(word.get('probability',0.)) for word in words]
+        mean=sum(values)/len(values)
+        low=sum(1 for value in values if value<word_floor)
+        if not (mean<minimum_probability or low>low_word_share*len(values)):continue
+        spans=merge_spans([(max(a,float(t['start'])),min(b,float(t['end']))) for t in turns if min(b,float(t['end']))>max(a,float(t['start']))])
+        if sum(y-x for x,y in spans)<SECOND_READING_MIN_COVERAGE*(b-a):continue
+        picks.append((mean,index))
+    return sorted(index for _,index in sorted(picks)[:SECOND_READING_MAX_PER_WINDOW])
+
+
+def apply_second_readings(segments,picks,redecode):
+    """(segments, records). redecode(index) -> replacement segments (relative times) or None. A replacement is taken only when
+    it has words, its mean word confidence reaches SECOND_READING_MIN_CONFIDENCE and beats the first reading by
+    SECOND_READING_MIN_GAIN, and its text is not an invented credit line, tag or foreign script. Otherwise the first reading
+    stays, exactly as it was."""
+    out=list(segments);records=[]
+    for index in picks:
+        first=segments[index]
+        before=mean_word_probability([first])
+        replacement=redecode(index) or []
+        replacement=[item for item in replacement if item.get('words') and str(item.get('text','')).strip()]
+        after=mean_word_probability(replacement)
+        text=' '.join(str(item.get('text','')).strip() for item in replacement)
+        taken=bool(replacement) and after>=SECOND_READING_MIN_CONFIDENCE and after>=before+SECOND_READING_MIN_GAIN \
+            and nonverbal_reason(text) not in _SECOND_READING_JUNK
+        records.append({'start':first['start'],'end':first['end'],'before':first.get('text'),'after':text or None,
+                        'before_confidence':round(before,3),'after_confidence':round(after,3),'taken':taken})
+        if taken:
+            out[index]=[dict(item,recognition_pass='second-reading-no-vad') for item in replacement]
+    flat=[]
+    for item in out:
+        flat.extend(item if isinstance(item,list) else [item])
+    flat.sort(key=lambda item:(item['start'],item['end']))
+    return flat,records
 
 
 cue_script_language='ru'
@@ -355,6 +502,56 @@ def translation_retry_budget(seconds):
     """Word budget for translating a line again after a truncated or empty answer: its own duration at a brisk pace, with a
     little room, never fewer than 4 words."""
     return max(4,min(60,int(float(seconds)*CONCISE_WORDS_PER_SECOND)+2))
+
+
+# F13 length-aware translation, step A (before the first render). Measured on the 906 published takes of the reference
+# film: a take lasts about TAKE_SECONDS_BASE + TAKE_SECONDS_PER_WORD x English words (median error 16 %). From the text alone
+# only "far too short" can be told with useful precision (72 % at a predicted 70 % of the line); "too long" cannot
+# (10-25 %), so that side is left to the measured step after the first take. The constants below were chosen on a model of
+# those 906 takes: 141 lines asked, 119 end nearer their line, 10 further away.
+TAKE_SECONDS_BASE=.55
+TAKE_SECONDS_PER_WORD=.26
+TIMED_MIN_SPAN_SECONDS=1.5      # shorter lines have nothing to gain and are the most fragile
+TIMED_SHORT_RATIO=.70           # predicted take under this share of the line: the plain translation is too short
+TIMED_LOW_RATIO=.85             # the range asked for: a predicted take of 85 % ...
+TIMED_HIGH_RATIO=1.0            # ... to 100 % of the line (the slow-down closes the rest; never aim past the line)
+TIMED_MAX_GROWTH=1.4            # never ask for more than 1.4 x the plain words on a prediction (the measured step may go to 1.6)
+TIMED_MIN_EXTRA_WORDS=2
+TIMED_OVERSHOOT_WORDS=2         # an answer more than this many words over the range is not used
+
+
+def english_word_count(text):
+    return len(re.findall(r"[\w']+",str(text or '')))
+
+
+def predicted_take_seconds(words):
+    """Seconds the cloned voice needs for `words` English words (the measured line TAKE_SECONDS_BASE + PER_WORD x words)."""
+    return TAKE_SECONDS_BASE+TAKE_SECONDS_PER_WORD*max(0,int(words))
+
+
+def timed_word_range(english,span):
+    """(low, high): the word range to ask the translator for when the plain translation `english` is clearly too short for a
+    line of `span` seconds; None when the line is under TIMED_MIN_SPAN_SECONDS, the translation is long enough, or the range
+    would not add at least TIMED_MIN_EXTRA_WORDS words."""
+    try:span=float(span)
+    except (TypeError,ValueError):return None
+    count=english_word_count(english)
+    if not math.isfinite(span) or span<TIMED_MIN_SPAN_SECONDS or count<1:return None
+    if predicted_take_seconds(count)>=TIMED_SHORT_RATIO*span:return None
+    cap=min(60,math.ceil(count*TIMED_MAX_GROWTH))
+    high=min(cap,int((TIMED_HIGH_RATIO*span-TAKE_SECONDS_BASE)/TAKE_SECONDS_PER_WORD))
+    low=min(high,math.ceil((TIMED_LOW_RATIO*span-TAKE_SECONDS_BASE)/TAKE_SECONDS_PER_WORD))
+    return (low,high) if low>=count+TIMED_MIN_EXTRA_WORDS else None
+
+
+def timed_adoptable(plain,timed,high):
+    """None when the timed wording may replace the plain one, else the reason it may not: it must be a different, longer
+    wording and no more than TIMED_OVERSHOOT_WORDS words over the range."""
+    before,after=english_word_count(plain),english_word_count(timed)
+    if not str(timed or '').strip() or str(timed).strip()==str(plain).strip():return 'same_wording'
+    if after<=before:return 'not_longer'
+    if after>int(high)+TIMED_OVERSHOOT_WORDS:return 'too_long'
+    return None
 
 
 def concise_budget(english,window):
@@ -442,7 +639,7 @@ def choose_take(path,receipt,window,*,render,fit,check=None,seeds=TAKE_RETRY_SEE
                'critical':bool(verdict.get('critical')),'error':round(float(verdict.get('error') or 0.),3)}
         factor=float((got[1].get('fit') or {}).get('factor') or 1.)
         entry['factor']=round(factor,3)
-        entry['fast']=factor>PREFERRED_FIT_FACTOR
+        entry['fast']=window_fit_factor(got[1],window)>PREFERRED_FIT_FACTOR      # F03: the window's demand, not the line-end fit
         if text is not None:entry['text']=text
         intended=verdict.get('intended') or got[1].get('requested_text') or text
         missing=missing_tail_words(intended,verdict.get('readback')) if check is not None else None
@@ -533,8 +730,8 @@ AUDIBLE_MIN_IN_WINDOW_SECONDS=.5
 AUDIBLE_BOOST_STEP_DB=2.
 AUDIBLE_BOOST_MAX_DB=4.   # owner rule 2026-10-21: never more than 4 dB louder than the original line (a take that would need more keeps the original audio instead); was 12
 AUDIBLE_BOOST_REASONS=frozenset({'take masked by the rest of the rendered mix','take is silent inside the render range'})
-# The no-speech bed for that measurement is the SAME protect_dialogue_mix function, bound here at import, so the
-# window's own mix stays one call of the module-level name (tests wrap it to inspect exactly that call).
+# The no-speech bed for that measurement comes out of the window's own mix (protect_dialogue_mix bed_out, F08): one mix per
+# attempt. _bed_mix stays bound for tools and tests that still call it; the pipeline no longer does.
 _bed_mix=protect_dialogue_mix
 # plan_dialogue caption-edge split (caption_targets only): a real pause of at
 # least this length that contains a caption start or end starts a new cue.
@@ -938,7 +1135,28 @@ def _placed(samples,left,pan,gain,a,b):
     return out
 
 
-def rendered_audibility(mixed,bed,origin,rate,render_start,render_end,takes):
+def _audible_at(blocks,gain,floor,keep,margin,rest_gain=1.):
+    """rendered_audibility's rule for the same take mixed `gain` times louder, from its per-block measurements
+    [(expected rms, projection coefficient, expected energy, rest rms)], blocks under the floor included. With the take's
+    own component scaled by `gain` the projection coefficient c becomes (c + gain - 1) / gain and the rest is unchanged.
+    `rest_gain` < 1 (F26) is the rest of the mix lowered by a bed duck (an estimate: another take in the same block is not
+    lowered; the re-measurement after the duck decides)."""
+    rows=[]
+    for exp_rms,coefficient,_,rest_rms in blocks:
+        expected=exp_rms*gain
+        if expected<floor:continue
+        scaled=(coefficient+gain-1.)/gain
+        rows.append((expected,scaled,max(0.,scaled)*expected,rest_rms*rest_gain))
+    if not rows:return False
+    good=sum(1 for _,scaled,take,_ in rows if scaled>=keep and take>=floor)
+    if good/len(rows)<AUDIBLE_MIN_BLOCK_FRACTION:return False
+    loudest=max(row[0] for row in rows)
+    voiced=[row for row in rows if row[0]>=loudest*10**(-AUDIBLE_VOICED_RANGE_DB/20)]
+    heard=sum(1 for _,_,take,rest in voiced if take>0 and take>=margin*rest)
+    return bool(voiced) and heard/len(voiced)>=AUDIBLE_MIN_VOICED_FRACTION
+
+
+def rendered_audibility(mixed,bed,origin,rate,render_start,render_end,takes,duck_db=0.):
     """v3: measure each take in the RENDERED output. ``bed`` is the same protect_dialogue_mix call with no generated
     speech, so mixed - bed is exactly the generated speech the viewer hears (after protection masks and headroom
     limiting). ``takes``: [{'take_id','kind','start','end','samples','left','pan','gain','gating'}] with ``left`` the
@@ -969,15 +1187,17 @@ def rendered_audibility(mixed,bed,origin,rate,render_start,render_end,takes):
         expected=_placed(take['samples'],int(take['left']),take['pan'],take['gain'],a,b)
         heard=np.asarray(mixed[a:b],dtype=np.float64)-np.asarray(bed[a:b],dtype=np.float64)
         output=np.asarray(mixed[a:b],dtype=np.float64)
-        blocks=[]
+        blocks=[];quiet=[]
         for k in range(0,b-a,step):
             x,y,z=expected[k:k+step],heard[k:k+step],output[k:k+step]
             ee=float(np.sum(x*x))
+            if ee<=0.:continue
             exp_rms=math.sqrt(ee/len(x))
-            if exp_rms<floor:continue
             coefficient=float(np.sum(x*y))/ee
             rest=z-max(0.,coefficient)*x                       # everything else the viewer hears in this block
-            blocks.append((exp_rms,coefficient,ee,math.sqrt(float(np.sum(rest*rest))/len(x))))
+            measured=(exp_rms,coefficient,ee,math.sqrt(float(np.sum(rest*rest))/len(x)))
+            # F08: blocks under the audibility floor are kept apart; they start to count once the take is lifted (_audible_at)
+            (blocks if exp_rms>=floor else quiet).append(measured)
         active=len(blocks);good=0;proj_energy=exp_energy=0.
         loudest=max([e for e,_,_,_ in blocks],default=0.)
         voiced=heard_over=0;margin=10**(AUDIBLE_MIN_TAKE_TO_REST_DB/20);ratios=[]
@@ -997,11 +1217,26 @@ def rendered_audibility(mixed,bed,origin,rate,render_start,render_end,takes):
         over=voiced>0 and voiced_fraction>=AUDIBLE_MIN_VOICED_FRACTION
         audible=kept and over
         ratios.sort()
+        # F08: the first step of the lift ladder at which this take WOULD pass this same rule (0.0 = it passes now; None = not
+        # even at AUDIBLE_BOOST_MAX_DB). Lifting a take scales its own component and leaves the rest of the mix as it is.
+        lift_needed=0. if audible else None
+        if not audible:
+            for n in range(1,int(round(AUDIBLE_BOOST_MAX_DB/AUDIBLE_BOOST_STEP_DB))+1):
+                if _audible_at(blocks+quiet,10**(n*AUDIBLE_BOOST_STEP_DB/20),floor,keep,margin):
+                    lift_needed=n*AUDIBLE_BOOST_STEP_DB;break
+        # F26: when no permitted lift is enough, the smallest lift (0 .. AUDIBLE_BOOST_MAX_DB, in ladder steps) at which the
+        # take would pass with the bed lowered by duck_db; absent when not even the full lift does.
+        duck_lift={}
+        if not audible and lift_needed is None and duck_db>0:
+            for n in range(0,int(round(AUDIBLE_BOOST_MAX_DB/AUDIBLE_BOOST_STEP_DB))+1):
+                if _audible_at(blocks+quiet,10**(n*AUDIBLE_BOOST_STEP_DB/20),floor,keep,margin,rest_gain=10**(-duck_db/20)):
+                    duck_lift['%g'%duck_db]=n*AUDIBLE_BOOST_STEP_DB;break
         rows[take['take_id']]={**row,'audible':audible,'not_attenuated':kept,'heard_over_mix':over,
                                'active_blocks':active,'audible_blocks':good,
                                'audible_fraction':round(fraction,4),'voiced_blocks':voiced,'voiced_heard_over_mix':heard_over,
                                'voiced_heard_fraction':round(voiced_fraction,4),
                                'take_to_rest_db_median':round(ratios[len(ratios)//2],3) if ratios else None,
+                               'lift_needed_db':lift_needed,'duck_lift_db':duck_lift,
                                'rendered_dbfs':db(total_rendered),
                                'expected_dbfs':db(total_expected),
                                'take_component_loss_db':db(math.sqrt(proj_energy/exp_energy)) if exp_energy>0 and proj_energy>0 else None,
@@ -1009,6 +1244,45 @@ def rendered_audibility(mixed,bed,origin,rate,render_start,render_end,takes):
                                                        else 'take attenuated in the rendered mix' if not kept
                                                        else 'take masked by the rest of the rendered mix'})}
     return rows
+
+
+def bed_duck_db(config):
+    """actor_beta.bed_duck_db (0-3, default 3.0; 0 = off): how far the music/effects bed is lowered under a take that is still
+    masked after the permitted voice lift (F26, decided 2026-11-11 on the owner's behalf (he delegated design choices)). Never above cinematic.BED_DUCK_MAX_DB."""
+    from .cinematic import BED_DUCK_MAX_DB
+    value=(_beta.beta_settings(config) or {}).get('bed_duck_db',BED_DUCK_MAX_DB)
+    if isinstance(value,bool):return BED_DUCK_MAX_DB
+    try:value=float(value)
+    except (TypeError,ValueError):return BED_DUCK_MAX_DB
+    return value if math.isfinite(value) and 0.<=value<=BED_DUCK_MAX_DB else BED_DUCK_MAX_DB
+
+
+def audible_duck_step(row,current,depth_db):
+    """dB of voice lift to ADD together with a bed duck of `depth_db`, or None when even the full permitted lift plus the duck
+    would not make the take heard (it then keeps the original audio). `row` is the take's rendered_audibility row measured
+    with a lift of `current` dB and no duck; its 'duck_lift_db' holds, per duck depth, the smallest lift at which it would pass."""
+    if not isinstance(row,dict) or row.get('reason') not in AUDIBLE_BOOST_REASONS or depth_db<=0:return None
+    needed=(row.get('duck_lift_db') or {}).get('%g'%depth_db)
+    room=AUDIBLE_BOOST_MAX_DB-float(current)
+    if not isinstance(needed,(int,float)) or isinstance(needed,bool) or needed>room+1e-9:return None
+    return float(needed)
+
+
+def audible_lift_step(row,current,*,one_pass=True):
+    """dB to ADD to a take's audibility lift after a failed measurement; 0.0 = the take keeps the original audio.
+
+    `row` is the take's rendered_audibility row, `current` the lift it was mixed with. Only AUDIBLE_BOOST_REASONS are lifted and
+    the total never exceeds AUDIBLE_BOOST_MAX_DB (owner rule). F08 one pass: the row's 'lift_needed_db' is the ladder step at
+    which the take would pass (rendered_audibility works it out from the take's own blocks); that step is applied at once,
+    and a take that would not pass within the cap (None, or more than the room left) goes to original now instead of after
+    every step was tried. A row without that key (older receipts) or one_pass off climbs one step, as before."""
+    if not isinstance(row,dict) or row.get('reason') not in AUDIBLE_BOOST_REASONS:return 0.
+    room=AUDIBLE_BOOST_MAX_DB-float(current)
+    if room<AUDIBLE_BOOST_STEP_DB-1e-9:return 0.
+    if not one_pass or 'lift_needed_db' not in row:return AUDIBLE_BOOST_STEP_DB
+    needed=row['lift_needed_db']
+    if not isinstance(needed,(int,float)) or isinstance(needed,bool) or needed>room+1e-9:return 0.
+    return max(AUDIBLE_BOOST_STEP_DB,float(needed))
 
 
 class LineCommitRace(Exception):
@@ -1155,7 +1429,47 @@ def protected_spans(policy):
     return sorted((row['start'],row['end']) for row in (policy or {}).get('protected_intervals',()))
 
 
-def schedule_with_silence_slack(schedule,*,report,all_cues,analysis_origin,analysis_end,window_limit,canonical):
+# F01 (2026-11-11). A take another window already committed is immutable. Two rules follow from that.
+COMMITTED_WALL_MIN_SECONDS=.3   # a kept-original remainder shorter than this is not worth a wall
+
+
+def carried_take_fix(config):
+    """actor_beta.carried_take_fix (default on; false restores the earlier behaviour exactly)."""
+    return (_beta.beta_settings(config) or {}).get('carried_take_fix') is not False
+
+
+def carried_floor(cue,canonical,gap=PROTECTION_SCHEDULE_GAP_SECONDS):
+    """Earliest second a NEW take of `cue` can start: the cue's own start, or `gap` after the end of a committed take of
+    another line that began before the cue and is still playing at its start (the scheduler's floor for the same cue)."""
+    start=float(cue['start'])
+    busy=[float(item['end']) for item in canonical
+          if item.get('id')!=cue.get('id') and float(item['source_start'])<start<float(item['end'])]
+    return max([start]+[stop+gap for stop in busy])
+
+
+def clear_committed_takes(protected,committed,*,keep=(),transition=PROTECTION_TRANSITION_SECONDS,
+                          minimum=COMMITTED_WALL_MIN_SECONDS):
+    """(spans, cuts). `protected` kept-original spans with the stretches that `committed` takes [(start, end)] occupy
+    (plus the mix transition) cut out, then joined with `keep` (spans that are never cut: the owner-policy and persisted
+    keeps, whose conflict with a committed take is reported before any work). A remainder shorter than `minimum` seconds
+    is dropped. `cuts` lists {'wall': [a, b], 'take': [c, d]} for the receipt."""
+    out=[];cuts=[]
+    for begin,stop in protected:
+        pieces=[(float(begin),float(stop))]
+        for a,b in committed:
+            a,b=float(a),float(b)
+            kept=[]
+            for x,y in pieces:
+                if b+transition<=x or a-transition>=y:kept.append((x,y));continue
+                cuts.append({'wall':[x,y],'take':[a,b]})
+                if a-transition>x:kept.append((x,a-transition))
+                if b+transition<y:kept.append((b+transition,y))
+            pieces=kept
+        out.extend(piece for piece in pieces if piece[1]-piece[0]>=minimum)
+    return merge_spans(out,list(keep)),cuts
+
+
+def schedule_with_silence_slack(schedule,*,report,all_cues,analysis_origin,analysis_end,window_limit,canonical,edge_blind=0.):
     """Apply measured tail bounds inside the existing protection/reschedule path."""
     def bounded(cues,durations,*,origin,end,protected):
         placements,issues=schedule(cues,durations,origin=origin,end=end,protected=protected)
@@ -1166,7 +1480,7 @@ def schedule_with_silence_slack(schedule,*,report,all_cues,analysis_origin,analy
             obstacles.extend(dict(item,cue_id=item.get('cue',item.get('id'))) for item in canonical)
             metadata=_units.silence_slack(cue,raw_turns=report.get('raw_turns') or (),
                 transcript=report.get('transcript') or (),all_cues=all_cues,protected=protected,placements=obstacles,
-                origin=analysis_origin,analysis_end=analysis_end,window_limit=window_limit)
+                origin=analysis_origin,analysis_end=analysis_end,window_limit=window_limit,edge_blind=edge_blind)
             placement['timing_slack']=metadata
             if cue['id'] in canonical_ids:continue   # canonical placement remains the committed placement
             allowed=metadata['allowed_end']
@@ -1268,6 +1582,33 @@ def dominant_reference_label(cue,speech_regions):
     if not ranked or (len(ranked)>1 and math.isclose(ranked[0][1],ranked[1][1],rel_tol=0.,abs_tol=1e-9)):
         raise ValueError('reference_not_one_raw_speaker')
     return ranked[0][0]
+
+
+SPEECH_SPAN_CLIP_SECONDS=.15     # F14: how far a short line's speech span may stick out of the detector turn that holds it
+
+
+def clip_speech_span_to_turn(cue,turns,tolerance=SPEECH_SPAN_CLIP_SECONDS):
+    """F14. A short line (speech span under one second, so it needs the reference extension) whose span sticks out of the
+    detector turn holding it by at most `tolerance` seconds is clipped to that turn. 'The turn contains the line' (the test of
+    line_reference_plan's extension and of the reviewed gate) is then decided by the detector's own edges, not by a recognizer
+    word edge or the 40 ms pad of the utterance refinement. Only when exactly ONE turn of the line's dominant raw label
+    overlaps the span. Sets cue['speech_start'/'speech_end'] and cue['speech_span_clipped']; returns that record or None."""
+    try:
+        begin=max(float(cue['start']),float(cue.get('speech_start') or cue['start']))
+        stop=min(float(cue['end']),float(cue.get('speech_end') or cue['end']))
+        if not 0<stop-begin<1.0:return None
+        label=dominant_reference_label(cue,turns)
+    except (KeyError,TypeError,ValueError):return None
+    holders=[t for t in turns if t.get('speaker')==label and min(float(t['end']),stop)>max(float(t['start']),begin)]
+    if len(holders)!=1:return None
+    left,right=float(holders[0]['start']),float(holders[0]['end'])
+    new_begin,new_stop=max(begin,left),min(stop,right)
+    if (new_begin,new_stop)==(begin,stop) or new_stop<=new_begin:return None
+    if new_begin-begin>tolerance+1e-9 or stop-new_stop>tolerance+1e-9:return None
+    record={'from':[begin,stop],'to':[new_begin,new_stop],'turn':[left,right],'tolerance':tolerance}
+    cue['speech_start'],cue['speech_end']=new_begin,new_stop
+    cue['speech_span_clipped']=record
+    return record
 
 
 def line_reference_plan(cue,speech_regions,*,origin,end,rate,limit,allow_extension=True):
@@ -1518,18 +1859,81 @@ class ActorPipeline:
         segments,info=self._language_client(owner).speech(wav,language,vad=vad,beam_size=beam_size)
         return segments,info
 
+    def _window_speech(self,owner,analysis_wav,total,job_id,render_start):
+        """(segments, language) of one window. F02 film language lock: once the film's confident windows agree on its
+        language (film_language.decide), the window is decoded in that language and `language` is
+        film_language.language_record(...) ('basis': 'film-lock', the window's own detection under 'detected'). Until then,
+        and with actor_beta.film_language_lock false, this is the plain per-window detection. Either way the window casts
+        its vote into <cache>/<job>/film-language.json. `total` is the length of analysis_wav in seconds."""
+        film_path=_film.path_for(Path(self.config.cache)/str(job_id)) if _film.enabled(_beta.beta_settings(self.config)) else None
+        if film_path is None:return self._speech(owner,analysis_wav)
+        film_state=_film.load(film_path);film_lock=_film.decide(film_state)
+        if film_lock:
+            segments,_=self._speech(owner,analysis_wav,film_lock['language'])
+            detected=None
+            if segments:      # one language-id pass that starts at the first recognized word (not at the window's music)
+                detected=(self._language_client(owner).language_id(
+                    analysis_wav,[[max(0.,float(segments[0]['start'])-LID_PAD_SECONDS),float(total)]]) or [None])[0]
+            language=_film.language_record(film_lock,detected)
+        else:
+            segments,language=self._speech(owner,analysis_wav);detected=language
+        _film.save(film_path,_film.cast(film_state,_film.window_key(render_start),detected,segments))
+        return segments,language
+
+    def _timed_translations(self,owner,sources,translated_rows,spans):
+        """F13 step A. sources: {id: {'text','language'}} of the lines sent to the translator; translated_rows: the clean
+        plain translations of this window ([{'id','english','translation'}], changed IN PLACE); spans: {id: seconds of the
+        line}. Every line whose plain translation is clearly too short for it (timed_word_range) is translated once more,
+        all of them in ONE batched call, with that word range. A timed answer that is a clean, longer translation near the
+        range replaces the plain one (the row keeps it as 'english_plain' and gets 'english_basis': 'timed-translation'); a
+        fault, a non-translation, an English source or a wording that is not longer or far over the range leaves the row
+        as it is. Returns the record {id: {...}} for the window's report ({} when nothing was asked)."""
+        asked=[]
+        for row in translated_rows:
+            if row.get('translation')=='already-English':continue
+            wanted=timed_word_range(row['english'],spans.get(row['id']))
+            if wanted:asked.append((row,wanted))
+        if not asked:return {}
+        owner.check()
+        second=self._language_client(owner).english_batch(
+            [{'text':sources[row['id']]['text'],'language':sources[row['id']]['language'],'min_words':low,'max_words':high}
+             for row,(low,high) in asked])
+        if len(second)!=len(asked):
+            raise MovieConfigurationError('translation_batch_mismatch','Translator answered %d rows for %d'%(len(second),len(asked)))
+        record={}
+        for (row,(low,high)),answer in zip(asked,second):
+            source,plain=sources[row['id']]['text'],row['english']
+            entry={'span_seconds':round(float(spans[row['id']]),3),'plain':plain,'plain_words':english_word_count(plain),
+                   'predicted_seconds':round(predicted_take_seconds(english_word_count(plain)),3),'low':low,'high':high,'adopted':False}
+            if isinstance(answer,MovieContentFallback):entry['reason']=answer.fault_code
+            elif isinstance(answer,Exception):raise answer
+            else:
+                timed=str(answer[0]).strip()
+                entry.update(text=timed,words=english_word_count(timed))
+                reason=(translation_artifact_reason(timed,source) or ('already_english' if already_english(source,timed) else None)
+                        or timed_adoptable(plain,timed,high))
+                if reason:entry['reason']=reason
+                else:
+                    entry['adopted']=True
+                    row.update(english=timed,translation=answer[1],english_plain=plain,english_basis='timed-translation')
+            record[row['id']]=entry
+        return record
+
     def _correct_languages(self,owner,analysis_wav,recognition,segments,language,folder):
         """(segments, corrections, spans): segments whose AUDIO language differs from the window's (>= LID_MIN_PROBABILITY)
         are decoded again in that language. See apply_language_corrections."""
         eligible=[i for i,seg in enumerate(segments) if float(seg['end'])-float(seg['start'])>=LID_MIN_SECONDS
                   and str(seg.get('text','')).strip()]
-        if not eligible:return segments,[],[]
+        # F02: in a locked film the window's own detection is the second reading for poorly recognized segments
+        window_detection=language.get('detected') if language.get('basis')=='film-lock' else None
+        if not eligible and not window_detection:return segments,[],[]
         import soundfile as sf
         total=len(recognition)/16000.
         raw=self._language_client(owner).language_id(analysis_wav,[[max(0.,float(segments[i]['start'])-LID_PAD_SECONDS),
-                                                                  min(total,float(segments[i]['end'])+LID_PAD_SECONDS)] for i in eligible])
+                                                                  min(total,float(segments[i]['end'])+LID_PAD_SECONDS)] for i in eligible]) if eligible else []
         ids=[None]*len(segments)
         for i,ident in zip(eligible,raw):ids[i]=ident
+        if window_detection:ids=film_guard_ids(segments,ids,window_detection,language['language'])
         def redecode(i,found):
             seg=segments[i];a=max(0.,float(seg['start'])-LID_PAD_SECONDS);b=min(total,float(seg['end'])+LID_PAD_SECONDS)
             path=folder/('language-redecode-%d.wav'%i)
@@ -1537,6 +1941,36 @@ class ActorPipeline:
             recovered,_=self._speech(owner,path,found,vad=False)
             return shift_segments(recovered,a)
         return apply_language_corrections(segments,ids,redecode,language['language'])
+
+    def _speech_like(self,owner,analysis_wav,gaps,origin):
+        """F16: the untranscribed gaps the sound classifier hears as speech (asr_rescue.speech_like). Without a classifier
+        (audio_event_model unset) no gap is read."""
+        if not gaps:return []
+        try:labels=self._language_client(owner).audio_events(analysis_wav,[[a-origin,b-origin] for a,b in gaps])
+        except (MovieConfigurationError,MovieContentFallback):return []
+        return speech_like(gaps,labels)
+
+    def _second_readings(self,owner,recognition,segments,turns,origin,language,folder,whisper_rule):
+        """(segments, records): weak segments inside the detector's speaking windows decoded once more without VAD, in the
+        window's language, on the segment plus SECOND_READING_PAD each side. See weak_segments / apply_second_readings."""
+        import soundfile as sf
+        knobs=overlap_policy(self.config)
+        picks=weak_segments(segments,turns,origin,minimum_probability=knobs['min_probability'],word_floor=knobs['word_floor'],
+                            low_word_share=knobs['low_word_share'],whisper_no_speech=whisper_rule)
+        if not picks:return segments,[]
+        total=len(recognition)/16000.
+        code=language['language'] if language['probability']>=.65 else None
+        def redecode(index):
+            segment=segments[index]
+            a=max(0.,float(segment['start'])-SECOND_READING_PAD);b=min(total,float(segment['end'])+SECOND_READING_PAD)
+            owner.check()
+            path=folder/('second-reading-%d.wav'%index)
+            sf.write(path,recognition[round(a*16000):round(b*16000)],16000,subtype='PCM_16')
+            recovered,_=self._speech(owner,path,code,vad=False)
+            # keep only what lies on the first reading's own span: the pad is context, not new speech
+            return [item for item in shift_segments(recovered,a)
+                    if min(float(item['end']),float(segment['end'])+.1)>max(float(item['start']),float(segment['start'])-.1)]
+        return apply_second_readings(segments,picks,redecode)
 
     def _nonverbal_audio(self,owner,speech,rate,origin,cues,folder):
         """Marks cues whose ORIGINAL audio is not speech to dub: singing or chant, coughs, sneezes, sighs, screams without
@@ -1556,7 +1990,8 @@ class ActorPipeline:
         for cue,span,labels in zip(pending,spans,events):
             a,b=int(span[0]*16000),int(span[1]*16000)
             features=nonverbal_evidence(mono[a:b],16000,labels) if b>a else {}
-            reason=nonverbal_reason(cue.get('text'),features,labels,duration=float(cue['end'])-float(cue['start']))
+            reason=nonverbal_reason(cue.get('text'),features,labels,duration=float(cue['end'])-float(cue['start']),
+                                    chant_evidence=overlap_policy(self.config)['chant_evidence'])
             record={'features':features,'events':labels,'language':cue.get('language')}
             if features.get('f0_median_hz'):cue['f0_median_hz']=features['f0_median_hz']       # lets a borrowing line pick a similar voice
             if reason:
@@ -1589,6 +2024,45 @@ class ActorPipeline:
             engine_fingerprint=self.config.engine_fingerprint(),
             policy_version=ORIGINAL_POLICY_VERSION+'+'+NATURAL_POLICY_VERSION)
         return ProtectionLedger(store,job_id,revision,scope)
+
+    def warm_inference(self,source_wav,origin,captions,folder,owner,*,source_channel_layout=None,source_identity=None):
+        """Raw inference of one window AHEAD of its preparation (movie pipeline: the next window, while the current one
+        renders). Runs the ASR pass and the speaker analysis of folder/'dialogue-16k.wav' with exactly the calls
+        _process makes, so the later preparation finds the ASR result in the analysis worker's content-keyed cache and
+        the live Diart stream already fed (its window answer then comes from the stream's stored turns, the embeddings
+        from the cache). Reads no ledger, no speaker bank and no prepared plan and decides nothing; the only file
+        written is dialogue-16k.wav, with the bytes _process writes again. First-pass lane with an injected
+        AnalysisService only: anything else returns {'state':'skipped'}. Raises like _process (cancelled owner,
+        resource hold)."""
+        import soundfile as sf
+        started=time.perf_counter()
+        if self.analysis_service is None or not _fpf.enabled(self.config):
+            return {'state':'skipped','reason':'needs the first-pass lane and the analysis service'}
+        folder=Path(folder)
+        original,rate=sf.read(source_wav,dtype='float32',always_2d=True)
+        if rate!=48000 or original.shape[1] not in (1,2,6):
+            return {'state':'skipped','reason':'unsupported audio geometry'}
+        layout_evidence=resolve_channel_layout(original.shape[1],source=source_channel_layout,wav=wav_format(source_wav))
+        lfe=3 if original.shape[1]==6 else None
+        from . import first_pass_parent as _first_pass
+        fp_scope=_subs.plan(self.config,original,rate,origin,captions,lfe,None)
+        first_pass=_first_pass.run(self.config,owner,folder=folder,original_source_wav=source_wav,
+            source_layout_evidence=layout_evidence,origin=origin,frames=len(original),scope=fp_scope)
+        if first_pass is None:return {'state':'skipped','reason':'no first-pass bundle'}
+        speech=_fpf.arrays(first_pass,len(original),rate)['raw_vocals']
+        recognition,_=first_pass_recognition(speech,layout_evidence.get('layout'),
+            (first_pass.get('processing') or {}).get('transform'),local_gain=asr_local_gain_enabled(self.config))
+        analysis_wav=folder/'dialogue-16k.wav'
+        sf.write(analysis_wav,recognition,16000,subtype='PCM_16')
+        owner.check()
+        film_lock=_film.decide(_film.load(_film.path_for(folder.parent))) if _film.enabled(_beta.beta_settings(self.config)) else None
+        stamp=time.perf_counter()
+        if film_lock:self._speech(owner,analysis_wav,film_lock['language'])
+        else:self._speech(owner,analysis_wav)
+        asr=time.perf_counter()-stamp
+        owner.check()
+        stamp=time.perf_counter();self._speaker_client(owner).analyze(analysis_wav,origin,**_diart.analyze_options(self.config,source_identity))
+        return {'state':'warmed','asr':asr,'speakers':time.perf_counter()-stamp,'elapsed_seconds':time.perf_counter()-started}
 
     def process(self,source_wav,origin,captions,folder,store,job_id,owner,*,render_start=None,render_end=None,revision=1,
                 **options):
@@ -1802,7 +2276,7 @@ class ActorPipeline:
         # Raw inference below goes directly through the current owner's AnalysisService clients. The one
         # authoritative raw cache (ASR/MT, diarization, embeddings incl. those inside refine_utterances) is in the
         # GPU child; a rebinding therefore re-runs only the cheap decisions here.
-        stamp=time.perf_counter();segments,language=self._speech(owner,analysis_wav)
+        stamp=time.perf_counter();segments,language=self._window_speech(owner,analysis_wav,len(recognition)/16000.,job_id,render_start)
         language_spans,language_corrections=[],[]
         if overlap_policy(self.config)['language_correction']:
             segments,language_corrections,language_spans=self._correct_languages(owner,analysis_wav,recognition,segments,language,folder)
@@ -1813,16 +2287,26 @@ class ActorPipeline:
         bank=SpeakerBank(store,job_id,self.config)
         known_speakers=bank.reference_vectors(lambda samples:self._speaker_client(owner).embed(samples))
         stamp=time.perf_counter();turns,aligned,vectors=self._speaker_client(owner).analyze(analysis_wav,origin,**_diart.analyze_options(self.config,source_identity))
-        rescue_records=[]
+        rescue_records=[];rescue_plan=[]
         if self.config['asr_caption_gap_rescue']:
-            for index,(begin,stop) in enumerate(rescue_windows(segments,turns,captions,origin,end,whisper_no_speech=whisper_rule)):
-                owner.check();rescue_started=time.perf_counter()
-                path=folder/f'asr-rescue-{index}.wav'
-                sf.write(path,recognition[round((begin-origin)*16000):round((stop-origin)*16000)],16000,subtype='PCM_16')
-                recovered,_=self._speech(owner,path,language['language'] if language['probability']>=.65 else None,vad=False)
-                segments,added=merge_rescue(segments,recovered,begin-origin,whisper_no_speech=whisper_rule)
-                rescue_records.append({'start':begin,'end':stop,'added_segments':added,'seconds':time.perf_counter()-rescue_started,
-                                       'transcript':recovered,'vad_filter':False})
+            rescue_plan=[(a,b,'caption-gap') for a,b in rescue_windows(segments,turns,captions,origin,end,whisper_no_speech=whisper_rule)]
+        if not rescue_plan and overlap_policy(self.config)['speech_gap_rescue']:
+            # F16: no caption points at missed speech (no subtitles, or they are covered): look where the detector heard
+            # someone speak and the recognizer wrote nothing, and read only what the sound classifier also calls speech.
+            gaps=speech_gap_windows(segments,turns,origin,end,render_start=render_start,render_end=render_end,
+                                    whisper_no_speech=whisper_rule)
+            rescue_plan=[(a,b,'speech-gap') for a,b in self._speech_like(owner,analysis_wav,gaps,origin)]
+        for index,(begin,stop,basis) in enumerate(rescue_plan):
+            owner.check();rescue_started=time.perf_counter()
+            path=folder/f'asr-rescue-{index}.wav'
+            sf.write(path,recognition[round((begin-origin)*16000):round((stop-origin)*16000)],16000,subtype='PCM_16')
+            recovered,_=self._speech(owner,path,language['language'] if language['probability']>=.65 else None,vad=False)
+            segments,added=merge_rescue(segments,recovered,begin-origin,whisper_no_speech=whisper_rule,label=basis+'-no-vad')
+            rescue_records.append({'start':begin,'end':stop,'added_segments':added,'seconds':time.perf_counter()-rescue_started,
+                                   'transcript':recovered,'vad_filter':False,'basis':basis})
+        second_readings=[]
+        if overlap_policy(self.config)['second_reading']:
+            segments,second_readings=self._second_readings(owner,recognition,segments,turns,origin,language,folder,whisper_rule)
         identity_units=speaker_units(segments,aligned,captions,origin,whisper_no_speech=whisper_rule)
         owner.check()
         refined,refined_vectors,speaker_evidence=self._speaker_client(owner).refine_utterances(recognition,16000,identity_units,vectors,origin,speech_regions=turns,known_speakers=known_speakers,
@@ -1834,7 +2318,7 @@ class ActorPipeline:
         cues,issues,discarded=plan_dialogue(segments,refined,selected,origin=origin,speech_regions=turns,
             whisper_no_speech=whisper_rule,caption_edge_pause=edge_pause,minimum_probability=policy_knobs['min_probability'],
             overlap_fraction=policy_knobs['word_fraction'],word_floor=policy_knobs['word_floor'],
-            low_word_share=policy_knobs['low_word_share'])
+            low_word_share=policy_knobs['low_word_share'],keep_untimed_text=policy_knobs['keep_untimed_words'])
         for cue in cues:
             # Owner rule (2026-10-19): laughter, sound tags, music marks and Whisper's invented credit lines are not speech.
             # They stay original audio: no translation, no voice, nothing removed (handled as an unclear line below).
@@ -1957,6 +2441,7 @@ class ActorPipeline:
                           source_channel_layout_evidence=source_layout_evidence,first_pass=_fpf.record(first_pass))
         if fix_record is not None:report['beta5_asr_fix']={**fix_record,'asr_input':asr_input}
         if language_corrections:report['language_corrections']=language_corrections
+        if second_readings:report['asr_second_readings']=second_readings
         if nonverbal_record:report['nonverbal_evidence']=nonverbal_record
         if unit_policy is not None:
             report['dialogue_unit_policy']=dict(unit_policy)
@@ -2022,7 +2507,11 @@ class ActorPipeline:
             issues[:]=remaining
             report['line_identity_diagnostics']=identity
             merged_cue_ids={cid for cid,label in cue_local_speakers.items() if label in merged_labels}
-            report['line_reference_extension_blocked']={cid:'possible_merged_speakers' for cid in sorted(merged_cue_ids)}
+            # F22: 'blocked' lists a line only when its extension really is refused (reference_extend_merged_labels off); the
+            # lines on a possibly merged label are always listed under their own name.
+            report['line_reference_merged_label_cues']=sorted(merged_cue_ids)
+            report['line_reference_extension_blocked']={cid:'possible_merged_speakers' for cid in sorted(merged_cue_ids)
+                                                        if not overlap_policy(self.config)['extend_merged']}
             for cue in all_cues:
                 cue['local_speaker']=cue.get('speaker')
             for cue in cues:
@@ -2139,6 +2628,7 @@ class ActorPipeline:
                 ident=cue['speaker']
                 if not ident.startswith('line-'):continue
                 reference=folder/(ident+'-reference.wav')
+                if overlap_policy(self.config)['clip_speech_span']:clip_speech_span_to_turn(cue,turns)      # F14
                 try:
                     choice=make_line_reference(speech,cue,turns,origin,rate,reference,
                         limit=self.config['actor_reference_seconds'],
@@ -2155,13 +2645,22 @@ class ActorPipeline:
                     issues.append({'kind':'actor_reference_unavailable','speaker':ident,'cue':cue['id'],
                                    'reason':str(error),'provenance':LINE_REFERENCE_VERSION})
                     report.setdefault('line_reference_refusals',{})[cue['id']]=str(error)
+            # F15: the film speaker of every line, when the scout has already analysed this stretch of the film. The id is a
+            # record, and it may only refuse a borrowed reference (same_speaker); it never permits one.
+            if _film_speakers.enabled(_beta.beta_settings(self.config)):
+                film_artifact=_film_speakers.load(_film_speakers.path_for(Path(self.config.cache)/str(job_id)))
+                film_state=_film_speakers.state(film_artifact,end)
+                film_map=_film_speakers.map_window(turns,film_artifact,origin,end) if film_state=='ready' else {}
+                report['film_speakers']={'state':film_state,'map':film_map,'lines':_film_speakers.annotate(cues,film_map),
+                                         'covered_until':(film_artifact or {}).get('covered_until')}
             refused=report.get('line_reference_refusals') or {}
             if refused and overlap_policy(self.config)['borrow_reference']:
                 def has_voice(other):
                     ident=other.get('speaker')
                     return isinstance(ident,str) and (ident in line_voices or
                         (not ident.startswith('line-') and bool(bank.voice(ident).get('reference'))))
-                picks=choose_pure_reference_donors(active,set(refused),has_voice,turns,strict=True)   # last resort: a PURE donor (same raw label, no contradicting refined label, no far pitch) or the line keeps its original audio
+                picks=choose_pure_reference_donors(active,set(refused),has_voice,turns,strict=True,
+                    unknown_pitch_needs_same_label=overlap_policy(self.config)['donor_pitch_rule'])   # last resort: a PURE donor (same raw label, no contradicting refined label, no far pitch) or the line keeps its original audio
                 borrowed={}
                 for cue in active:
                     pick=picks.get(cue['id'])
@@ -2232,6 +2731,11 @@ class ActorPipeline:
                     issues.append({'kind':'uncertain_transcript','cue':row['id'],'reason':'already_english'})
                     continue
                 translated_rows.append({'id':row['id'],'english':english,'translation':basis})
+            if policy_knobs['timed_translation']:
+                # F13 step A: a plain translation that is clearly too short for its line is asked for once more, with a word range
+                timed=self._timed_translations(owner,{row['id']:row for row in translation_rows},translated_rows,
+                                               {c['id']:float(c['end'])-float(c['start']) for c in active})
+                if timed:report['timed_translation']=timed
             atomic_json(response,translated_rows)
             translated={r['id']:r for r in json.loads(response.read_text(encoding='utf-8'))}
             for cue in active:
@@ -2301,32 +2805,45 @@ class ActorPipeline:
         # window re-renders without it. Every unpublished claim is released on any exit.
         import copy
         import sqlite3
-        pristine=copy.deepcopy((cues,all_cues,report));lost=[];inaudible=[];forced={};boosts={}
+        pristine=copy.deepcopy((cues,all_cues,report));lost=[];inaudible=[];forced={};boosts={};ducks={}
         if claimant is None:claimant=_lines.new_claimant(_lines.window_key(report['render_start'],report['render_end']))
         attempt=0;outcome=None
+        earlier=[]        # F22: wall seconds of every attempt that had to be repeated (report['timing'] only shows the last one)
         try:
             while True:
-                attempt+=1
+                attempt+=1;attempt_started=time.perf_counter()
                 if attempt>1:cues,all_cues,report=copy.deepcopy(pristine)
                 report['beta_line_ledger']={'attempt':attempt,'lost_races':copy.deepcopy(lost),'run_id':claimant['run_id'],
-                                            'chunk_fence':fence,'not_audible_retries':copy.deepcopy(inaudible)}
+                                            'chunk_fence':fence,'not_audible_retries':copy.deepcopy(inaudible),
+                                            'earlier_attempt_seconds':list(earlier)}
                 try:
                     return self._render_attempt(original,speech,rate,origin,end,cues,all_cues,voices,
                                                 folder,store,job_id,owner,revision,report,started,protection=protection,
                                                 removal=removal,claimant=claimant,fence=fence,forced=dict(forced),boosts=dict(boosts),
-                                                surround_source=surround_source)
+                                                ducks=dict(ducks),surround_source=surround_source)
                 except LineCommitRace as race:
+                    earlier.append(round(time.perf_counter()-attempt_started,3))
                     lost.append({'attempt':attempt,'races':race.races})
                     if len(lost)>=LINE_COMMIT_ATTEMPTS:
                         outcome={'kind':'line_ledger_commit_race','attempts':len(lost)};break
                 except InaudibleTakes as error:
+                    earlier.append(round(time.perf_counter()-attempt_started,3))
                     inaudible.append({'attempt':attempt,'cues':error.cue_ids,'rows':error.rows})
                     rows={row.get('take_id'):row for row in error.rows if isinstance(row,dict)}
                     fresh={};lifted=False
                     for ident in error.cue_ids:
                         if ident in forced:continue
-                        if (rows.get(ident) or {}).get('reason') in AUDIBLE_BOOST_REASONS and boosts.get(ident,0.)+AUDIBLE_BOOST_STEP_DB<=AUDIBLE_BOOST_MAX_DB:
-                            boosts[ident]=boosts.get(ident,0.)+AUDIBLE_BOOST_STEP_DB;lifted=True
+                        step=audible_lift_step(rows.get(ident),boosts.get(ident,0.),
+                                               one_pass=(_beta.beta_settings(self.config) or {}).get('audible_one_pass') is not False)
+                        if step:
+                            boosts[ident]=boosts.get(ident,0.)+step;lifted=True
+                            continue
+                        # F26: the permitted lift is not enough. Once per take, lower the bed under it (never the voice above
+                        # the cap); the re-measurement decides, and a take that is still masked keeps the original.
+                        depth=bed_duck_db(self.config)
+                        extra=None if ident in ducks else audible_duck_step(rows.get(ident),boosts.get(ident,0.),depth)
+                        if extra is not None:
+                            ducks[ident]=depth;boosts[ident]=boosts.get(ident,0.)+extra;lifted=True
                         else:fresh[ident]='take_not_audible_in_render'
                     if not fresh and not lifted:
                         outcome={'kind':'take_not_audible_in_render','cues':error.cue_ids};break
@@ -2337,7 +2854,7 @@ class ActorPipeline:
             except sqlite3.Error:pass        # unreleased claims expire with their fence, lease or dead holder
         cues,all_cues,report=copy.deepcopy(pristine)
         report['beta_line_ledger']={'attempt':attempt,'lost_races':lost,'not_audible_retries':inaudible,
-                                    'run_id':claimant['run_id'],'status':'retries_exhausted'}
+                                    'run_id':claimant['run_id'],'status':'retries_exhausted','earlier_attempt_seconds':earlier}
         report['issues'].append(outcome)
         report.update(state='needs_review',elapsed_seconds=time.perf_counter()-started)
         fenced_json(store,fence,folder/'actor-receipt.json',report)
@@ -2345,7 +2862,7 @@ class ActorPipeline:
 
     def _render_attempt(self,original,speech,rate,origin,end,cues,all_cues,voices,
                         folder,store,job_id,owner,revision,report,started,protection=None,removal=None,
-                        claimant=None,fence=None,forced=None,boosts=None,surround_source=None):
+                        claimant=None,fence=None,forced=None,boosts=None,ducks=None,surround_source=None):
         import numpy as np
         import soundfile as sf
         issues=report['issues']
@@ -2392,6 +2909,7 @@ class ActorPipeline:
                     issues.append({'kind':'kept_original_conflicts_with_canonical_take','canonical_id':item['id'],
                                    'start':begin,'end':stop})
         if issues:return save('needs_review')
+        policy_protected=list(protected)      # F01: owner-policy and persisted keeps; never cut by clear_committed_takes
         source_cues,source_all_cues=cues,all_cues
         cues,all_cues=_ctf.render_view(report.get('caption_target_plan'),cues,all_cues)   # target units; raw lists untouched
         cues,beta_spans=_beta.window_fallback(self.config,report,cues,all_cues)
@@ -2504,11 +3022,11 @@ class ActorPipeline:
             return {'readback':text,'readback_word_error':word_error(english,text),
                     'readback_fast_error':fast_error,'readback_beam_size':beam,
                     'critical_readback_issues':critical_readback_changes(english,text)}
-        def concise_english(cue,window):
-            """The same line, translated again within a word budget that fits `window` (None: no budget applies, or the
-            translator could not)."""
-            budget=concise_budget(cue['english'],window)
-            code=(report.get('language') or {}).get('language')
+        def concise_english(cue,window,budget=None):
+            """The same line, translated again within a word budget that fits `window`, or within the given `budget` (F13: the
+            shorter wording for a take that ends late). None: no budget applies, or the translator could not."""
+            if budget is None:budget=concise_budget(cue['english'],window)
+            code=cue.get('language') or (report.get('language') or {}).get('language')      # the line's own language first
             if budget is None or not code or not cue.get('text'):return None
             letters=sum(1 for ch in str(cue['text']) if ch.isalpha())
             if letters<=3 or (len(str(cue['text']).split())<=1 and float(cue.get('probability') or 0.)<.9):
@@ -2522,7 +3040,7 @@ class ActorPipeline:
         def fuller_english(cue,minimum):
             """The same line, translated again with a MINIMUM word budget (fuller natural phrasing, same meaning, no new
             information); actor_beta.fuller_retranslation only. None: nothing to ask, or the translator could not."""
-            code=(report.get('language') or {}).get('language')
+            code=cue.get('language') or (report.get('language') or {}).get('language')      # the line's own language first
             if not code or not cue.get('text'):return None
             letters=sum(1 for ch in str(cue['text']) if ch.isalpha())
             if letters<=3 or (len(str(cue['text']).split())<=1 and float(cue.get('probability') or 0.)<.9):return None
@@ -2545,22 +3063,48 @@ class ActorPipeline:
             the same words on another seed, search the retry seeds (choose_take). The result is published under the cue's
             seed-42 claim key."""
             policy=overlap_policy(self.config)
+            line_span=float(cue['end'])-float(cue['start'])
             def fit(p,r):
-                fitted=fit_rendered_take(p,r,window,ffmpeg=self.config['ffmpeg'],runner=owner.run,max_speed=policy['fit_max_speed'])
+                # F03: end on the line when a tempo of line_fit_max_speed (or less) gets there; the window stays the hard limit.
+                target=line_fit_target(float(r.get('seconds') or 0),line_span,window,max_speed=policy['line_fit_max_speed'],
+                                       tolerance=policy['line_fit_tolerance'])
+                fitted=fit_rendered_take(p,r,target,ffmpeg=self.config['ffmpeg'],runner=owner.run,max_speed=policy['fit_max_speed'])
+                if target<window:
+                    # the receipt's window is the real one: a take fitted to the line never counts as overrunning it
+                    fitted=(fitted[0],dict(fitted[1],timing_overrun=float(fitted[1].get('seconds') or 0)>window,
+                                           line_fit={'target_seconds':round(target,4),'window_seconds':round(window,4),
+                                                     'line_seconds':round(line_span,4)}))
                 return deess_rendered_take(*fitted) if policy['deess_takes'] else fitted
             first=fit(path,receipt)
             chosen=first if again is None else choose_take(*first,window,render=again,fit=fit,check=lambda p,r:take_check(cue,p,r),
                                recoverable=lambda error:_beta.is_cue_unavailable(self.config,error),
                                concise=lambda:concise_english(cue,window) if overlap_policy(self.config)['concise_retranslation'] else None)
             # Owner decision 2026-10-20 (relay/slot_fill.py): a take that ends well before the original speaker stopped is slowed
-            # to fill the slot (one atempo < 1, same readback gate); optionally (fuller_retranslation, default off) a far
-            # shorter line is first translated again with a minimum word budget. Either way the published take is this result.
+            # to fill the slot (one atempo < 1, same readback gate). F13: before that, a take that the tempo steps cannot bring
+            # onto the line is translated again from its MEASURED length: fuller when it ends early (take under 85 % of the
+            # line), shorter when it ends more than 0.5 s late. One of the two at most, each line once, and all of a window's
+            # measured re-translations together within retranslation_budget_seconds. Either way the published take is this result.
             span,cfg=float(cue['end'])-float(cue['start']),policy['slot_fill']
-            if again is not None and cfg['fuller']:
-                chosen=_slot.fuller_retry(chosen,english=cue['english'],span_seconds=span,window=window,cfg=cfg,
-                    ask=lambda minimum:fuller_english(cue,minimum),render=again,fit=fit,preferred_factor=PREFERRED_FIT_FACTOR,
-                    accept=lambda p,r:_slot.readback_accepted(_slot.summarize(take_check(cue,p,r),r,missing_tail_words),READBACK_ORDINARY_ERROR),
-                    recoverable=lambda error:_beta.is_cue_unavailable(self.config,error))
+            if again is not None and (cfg['fuller'] or cfg['shorter']):
+                used=report.setdefault('measured_retranslation',{'budget_seconds':cfg['retranslation_budget'],'seconds':0.,'lines':0,'skipped':0})
+                seconds=float(chosen[1].get('seconds') or 0)
+                target=('fuller' if _slot.fuller_min_words(cue['english'],seconds,span,window,cfg) is not None else
+                        'shorter' if _slot.shorter_max_words(cue['english'],_slot.unfitted_seconds(chosen[1]),seconds,span,window,cfg,
+                                                             PREFERRED_FIT_FACTOR) is not None else None)
+                if target and cue.get('english_basis')=='timed-translation' and target=='fuller':target=None   # lengthened once already
+                if target and used['seconds']>=cfg['retranslation_budget']:
+                    used['skipped']+=1;target=None
+                if target:
+                    started=time.perf_counter()
+                    retry=_slot.fuller_retry if target=='fuller' else _slot.shorter_retry
+                    try:
+                        chosen=retry(chosen,english=cue['english'],span_seconds=span,window=window,cfg=cfg,
+                            ask=(lambda minimum:fuller_english(cue,minimum)) if target=='fuller' else (lambda maximum:concise_english(cue,window,maximum)),
+                            render=again,fit=fit,preferred_factor=PREFERRED_FIT_FACTOR,factor_of=lambda r:window_fit_factor(r,window),
+                            accept=lambda p,r:_slot.readback_accepted(_slot.summarize(take_check(cue,p,r),r,missing_tail_words),READBACK_ORDINARY_ERROR),
+                            recoverable=lambda error:_beta.is_cue_unavailable(self.config,error))
+                    finally:
+                        used['seconds']=round(used['seconds']+time.perf_counter()-started,3);used['lines']+=1
             return _slot.slot_fill_rendered_take(*chosen,span_seconds=span,window=window,cfg=cfg,ffmpeg=self.config['ffmpeg'],
                 runner=owner.run,words=_slot.count_words(chosen[1].get('requested_text') or cue['english']),
                 check=lambda p,r:take_check(cue,p,r),ordinary_error=READBACK_ORDINARY_ERROR,tail_missing=missing_tail_words)
@@ -2579,14 +3123,17 @@ class ActorPipeline:
         def render_window_seconds(cue):
             next_start=min([c['start'] for c in all_cues if c['start']>cue['start']]+
                 [a-PROTECTION_TRANSITION_SECONDS for a,_ in protected if a>cue['start']],default=end)
-            budget=max(0.,next_start-cue['start']-.04)
+            # F01: the slot starts where the scheduler will really place the take (after a committed take still playing).
+            start=carried_floor(cue,canonical) if carried_take_fix(self.config) else cue['start']
+            budget=max(0.,next_start-start-.04)
             if _beta.beta_settings(self.config):
                 meta=_units.silence_slack(cue,raw_turns=report.get('raw_turns') or (),
                     transcript=report.get('transcript') or (),all_cues=all_cues,protected=protected,
                     placements=[dict(item,cue_id=item.get('cue',item.get('id'))) for item in canonical],
-                    origin=origin,analysis_end=end,window_limit=line_state['new_take_end_limit'] if line_state else end)
+                    origin=origin,analysis_end=end,window_limit=line_state['new_take_end_limit'] if line_state else end,
+                    edge_blind=slack_edge_blind(self.config))
                 report.setdefault('render_silence_slack',{})[cue['id']]=meta
-                budget=min(budget,max(0.,meta['allowed_end']-cue['start']))
+                budget=min(budget,max(0.,meta['allowed_end']-start))
             return budget
 
         def render_concurrently():
@@ -2780,7 +3327,8 @@ class ActorPipeline:
         if _beta.beta_settings(self.config):
             from . import actor_beta_timing as _beta_timing
             schedule=schedule_with_silence_slack(schedule,report=report,all_cues=all_cues,analysis_origin=origin,
-                analysis_end=end,window_limit=line_state['new_take_end_limit'] if line_state else end,canonical=canonical)
+                analysis_end=end,window_limit=line_state['new_take_end_limit'] if line_state else end,canonical=canonical,
+                edge_blind=slack_edge_blind(self.config))
             cues,lines,placements,timing_issues,protected=_beta_timing.schedule_with_reschedule(
                 issues,report,cues,lines,protected,end=end,schedule=schedule,merge=merge_spans,
                 floor_for=lambda cs:max([low]+[item['end']+.04 for item in carry if cs and item['source_start']<cs[0]['start']]))
@@ -2820,6 +3368,7 @@ class ActorPipeline:
                     issues.append({'kind':'actor_gain_unresolved','cue':cue['id'],'reason':str(error)});continue
                 lift=float((boosts or {}).get(cue['id'],0.))
                 if lift:gain=gain*10**(lift/20);levels=dict(levels,audibility_boost_db=lift)
+                if (ducks or {}).get(cue['id']):levels=dict(levels,bed_duck_db=float(ducks[cue['id']]))      # F26: the bed, not the voice
                 if 'source_db' in levels:
                     # Owner rule 2026-10-20: the dub is as loud as the original line. 0.0 unless the gain cap or an audibility lift moved it.
                     levels=dict(levels,level_deviation_db=round(20*math.log10(gain)+levels['generated_db']-levels['source_db'],3))
@@ -2850,9 +3399,27 @@ class ActorPipeline:
             report.get('raw_turns'),stem=speech if removal is None else removal,rate=rate,origin=origin,lfe_index=lfe)
         report['kept_speech']={'version':_kept.VERSION,'zones':[list(zone) for zone in kept_zones],'removal_returned_seconds':kept_seconds}
         envelope=replacement_envelope(len(original),rate,origin,merge_intervals(intervals),fade_seconds=.01)
+        if carried_take_fix(self.config):
+            # F01: a wall this render raised (a cue kept original) never covers a take that is already committed: the take
+            # of another window carried into this one, or this window's own reused take.
+            committed=[(item['start'],item['end']) for item in carry]
+            committed+=[(line['start'],line['end']) for line in lines if line.get('canonical_id')]
+            protected,cuts=clear_committed_takes(protected,committed,keep=policy_protected)
+            if cuts:report['committed_take_over_kept_original']=cuts
         # With no protected span this equals replace_dialogue byte for byte.
+        beds=[]       # F08: the bed of this very mix, for the audibility check (no second mix)
+        # F26: under the takes the retry loop marked (still masked after the permitted lift) the bed is lowered, with fades.
+        ducked=[(cue['id'],placement['start'],placement['end'],float(ducks[cue['id']]))
+                for cue,line,placement,pan,gain in pending if (ducks or {}).get(cue['id'])]
+        bed_gain=None
+        if ducked:
+            from .cinematic import duck_envelope,BED_DUCK_VERSION,BED_DUCK_FADE_SECONDS
+            bed_gain=duck_envelope(len(original),rate,origin,[(a,b) for _,a,b,_ in ducked],max(d for *_,d in ducked))
+            report['bed_duck']={'version':BED_DUCK_VERSION,'fade_seconds':BED_DUCK_FADE_SECONDS,
+                                'takes':[{'cue':ident,'start':a,'end':b,'depth_db':d} for ident,a,b,d in ducked]}
         mixed,mix=protect_dialogue_mix(original,speech if removal is None else removal,generated,envelope,origin=origin,rate=rate,
-            channel_layout=layout,protected_intervals=protected,transition_seconds=PROTECTION_TRANSITION_SECONDS)
+            channel_layout=layout,protected_intervals=protected,transition_seconds=PROTECTION_TRANSITION_SECONDS,bed_out=beds,
+            bed_gain=bed_gain)
         report['mix']=mix
         report['removal_policy']=SPEECH_ONLY_REMOVAL_VERSION
         if mix['requires_rescheduling']:
@@ -2867,9 +3434,7 @@ class ActorPipeline:
         if line_state is not None:
             # v3 published == heard: measure every new, reused and carried take in the rendered mix (mixed minus the
             # same mix without generated speech). A new or reused take that is not audible is never committed.
-            bed,_=_bed_mix(original,speech if removal is None else removal,np.zeros_like(original),envelope,
-                origin=origin,rate=rate,channel_layout=layout,protected_intervals=protected,
-                transition_seconds=PROTECTION_TRANSITION_SECONDS)
+            bed=beds[0]
             takes=[]
             for cue,line,placement,pan,gain in pending:
                 voice,_=sf.read(line['audio'],dtype='float32')
@@ -2883,8 +3448,9 @@ class ActorPipeline:
             for cue,line in zip(cues,lines):
                 if line.get('canonical_id'):takes.append(canonical_take(line,'canonical_reused',cue['id'],True))
             for item in carry:takes.append(canonical_take(item,'carried',item['id'],False))
-            line_state['rendered']=rendered_audibility(mixed,bed,origin,rate,render_start,render_end,takes)
-            del bed
+            line_state['rendered']=rendered_audibility(mixed,bed,origin,rate,render_start,render_end,takes,
+                                                       duck_db=bed_duck_db(self.config))
+            del bed,beds
             silent=[t['take_id'] for t in takes if t['gating'] and not line_state['rendered'][t['take_id']]['audible']]
             if silent:raise InaudibleTakes(silent,[line_state['rendered'][i] for i in silent])
         owner.check()
@@ -2928,7 +3494,7 @@ class ActorPipeline:
             try:
                 source51,source_layout=surround_source
                 surround,surround_receipt=_surround.compose_surround(source51,removal,generated,envelope,origin=origin,rate=rate,
-                    protected_intervals=protected,layout=source_layout)
+                    protected_intervals=protected,layout=source_layout,bed_gain=bed_gain)
                 _surround.write_sidecar(surround_path,surround,rate)
                 report['surround_mix']={**surround_receipt,'file':_surround.SIDECAR,'sha256':file_hash(surround_path)}
             except Exception as error:                 # an optional artifact (even a MemoryError) never fails a finished stereo chunk

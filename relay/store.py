@@ -27,6 +27,7 @@ class Store:
                 job_id TEXT NOT NULL, idx INTEGER NOT NULL, state TEXT NOT NULL,
                 priority INTEGER NOT NULL DEFAULT 100, payload TEXT NOT NULL,
                 updated REAL NOT NULL, PRIMARY KEY(job_id,idx));
+            CREATE INDEX IF NOT EXISTS chunk_light ON chunks(job_id,idx,state,priority,updated);
             CREATE TABLE IF NOT EXISTS events(
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT,
                 at REAL NOT NULL, kind TEXT NOT NULL, payload TEXT NOT NULL);
@@ -366,6 +367,31 @@ class Store:
                        "ON CONFLICT(job_id,idx) DO UPDATE SET priority=min(priority,excluded.priority)",
                        (job_id, index, "pending", priority, json.dumps(payload), time.time()))
 
+    def demote_pending(self, job_id, keep_index, parked_priority=-1000000):
+        """After a seek: park every requested-but-unfinished chunk of this job except the new target.
+
+        Rows in state pending / working / waiting_resources, other than ``keep_index``, whose priority is better
+        (smaller) than the parked band get ``parked_priority + idx``. Playback priorities are about minus the Unix
+        time (-1.8e9), so they are all parked; a prepared job's 100+idx requests and rows parked earlier are left
+        alone. State, payload, claim token and ``updated`` do not change: a window that is being worked on keeps
+        running, it only stops outranking the windows of the new position (MoviePipeline orders analysis and
+        rendering by the CURRENT store priority). A later request_chunk for a parked row restores a real priority
+        (it keeps the minimum). Returns the number of rows parked.
+        """
+        with self.connect() as db:
+            cursor = db.execute(
+                "UPDATE chunks SET priority=?+idx WHERE job_id=? AND idx<>? "
+                "AND state IN ('pending','working','waiting_resources') AND priority<?",
+                (int(parked_priority), job_id, int(keep_index), int(parked_priority)))
+            return cursor.rowcount
+
+    def set_unfinished_priority(self, job_id, base):
+        """Background hand-over: every chunk of the job that is not ready takes priority base + idx, replacing whatever
+        playback priority it had (request_chunk can only lower a priority; this is the one place that raises it)."""
+        with self.connect() as db:
+            db.execute("UPDATE chunks SET priority=?+idx WHERE job_id=? AND state NOT IN ('ready','approved')",
+                       (int(base), job_id))
+
     def chunk(self, job_id, index):
         with self.connect() as db:
             return self.decode(db.execute("SELECT * FROM chunks WHERE job_id=? AND idx=?",
@@ -375,6 +401,17 @@ class Store:
         with self.connect() as db:
             return [self.decode(r) for r in db.execute(
                 "SELECT * FROM chunks WHERE job_id=? ORDER BY idx", (job_id,))]
+
+    def chunk_rows(self, job_id):
+        """Every chunk of a job WITHOUT its receipt: [{job_id, idx, state, priority, updated}], ordered by idx.
+
+        For callers that only need states, priorities and completion stamps (the TV status, the mux scheduler, the
+        producer, summarize). Answered from the covering index chunk_light, so no receipt is read or decoded; chunks()
+        decodes every receipt of the job (about 125 KB each).
+        """
+        with self.connect() as db:
+            return [dict(r) for r in db.execute(
+                "SELECT job_id,idx,state,priority,updated FROM chunks WHERE job_id=? ORDER BY idx", (job_id,))]
 
     def update_chunk(self, job_id, index, state, **updates):
         with self.connect() as db:
@@ -390,15 +427,20 @@ class Store:
             db.execute("UPDATE chunks SET state=?,payload=?,updated=? WHERE job_id=? AND idx=?",
                        (state, json.dumps(row["payload"]), time.time(), job_id, index))
 
-    def claim(self, *, ordered=False, engine=None):
+    def claim(self, *, ordered=False, engine=None, background=False):
+        """background False (default): chunks of a background job (payload.background true) are never handed out.
+        background True: they are, but only while no other job is unfinished (a film being watched always goes first)."""
         with self.connect() as db:
             db.execute("BEGIN IMMEDIATE")
             row = db.execute("""SELECT c.* FROM chunks c JOIN jobs j ON j.id=c.job_id
                 WHERE c.state='pending' AND j.state NOT IN ('cancelled','error','needs_review','waiting_resources')
+                AND (coalesce(json_extract(j.payload,'$.background'),0)=0 OR (?=1 AND NOT EXISTS (
+                    SELECT 1 FROM jobs f WHERE f.state NOT IN ('complete','cancelled','error','needs_review')
+                    AND coalesce(json_extract(f.payload,'$.background'),0)=0)))
                 AND (? IS NULL OR json_extract(j.payload,'$.speech_engine')=?)
                 AND (?=0 OR c.idx>=coalesce(json_extract(j.payload,'$.generic_active_index'),
                                             json_extract(j.payload,'$.generic_start_index'),0))
-                ORDER BY c.priority,c.updated LIMIT 1""", (engine, engine, int(ordered))).fetchone()
+                ORDER BY c.priority,c.updated LIMIT 1""", (int(bool(background)), engine, engine, int(ordered))).fetchone()
             if not row:
                 return None
             if ordered:
@@ -417,7 +459,7 @@ class Store:
             return claimed
 
     def retry_resources(self,delay=60):
-        """Resume deferred owned jobs without treating a resource hold as failure."""
+        """Resume deferred owned jobs without treating a resource hold as failure. Returns how many chunks were requeued."""
         with self.connect() as db:
             db.execute('BEGIN IMMEDIATE')
             rows=db.execute("SELECT c.job_id,c.idx FROM chunks c JOIN jobs j ON j.id=c.job_id WHERE c.state='waiting_resources' AND j.state='waiting_resources' AND c.updated<=?",
@@ -427,6 +469,13 @@ class Store:
                            (time.time(),row['job_id'],row['idx']))
                 db.execute("UPDATE jobs SET state='queued',updated=? WHERE id=? AND state='waiting_resources'",
                            (time.time(),row['job_id']))
+            return len(rows)
+
+    def waiting_resources(self):
+        """How many chunks are held in waiting_resources (of jobs in that state). No receipt is read."""
+        with self.connect() as db:
+            return int(db.execute("SELECT COUNT(*) FROM chunks c JOIN jobs j ON j.id=c.job_id "
+                                  "WHERE c.state='waiting_resources' AND j.state='waiting_resources'").fetchone()[0])
 
     def recover(self):
         with self.connect() as db:

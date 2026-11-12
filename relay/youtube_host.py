@@ -46,6 +46,10 @@ DEFAULT_SETTINGS = {
     # Hand-off of a picked video to KevFLIX's own player (relay/youtube_source.py): yt-dlp downloads it into media_dir.
     "handoff": True, "media_dir": "C:/KevFLIX-Runtime/youtube-media", "max_minutes": 240, "max_cache_gb": 30,
     "max_height": 1080, "node_path": "",
+    # F20: the menu picture as low-latency video over a WebSocket (relay/youtube_video.py). screen_transport: "auto" (video
+    # when the TV can show it, else the JPEG pictures) | "video" (try video again even where it failed before) | "jpeg".
+    "screen_transport": "auto", "video_encoder": "cpu", "video_height": 1080, "video_fps": 30, "video_crf": 23,
+    "video_maxrate_kbps": 12000, "video_threads": 4, "video_capture_quality": 85,
 }
 MAX_USERSCRIPT_BYTES = 4 * 1024 * 1024
 HANDOFF_MAX_SECONDS = 12 * 3600          # a hand-off the TV never ended (crash) stops protecting Chrome from the idle watchdog after this
@@ -119,6 +123,13 @@ def key_events(name, action="press", repeat=False):
     if action == "press":
         return [down, up]
     raise ValueError("Key action must be down, up or press")
+
+
+def video_size(settings):
+    """F20: (width, height) of the video sent to the TV: the page's shape at youtube.video_height lines, both even."""
+    page_width, page_height = int(settings.get("width", 1920)), int(settings.get("height", 1080))
+    height = max(2, min(int(settings.get("video_height", 1080)), page_height) // 2 * 2)
+    return max(2, round(page_width * height / page_height / 2) * 2), height
 
 
 def mjpeg_part(jpeg):
@@ -384,6 +395,8 @@ class YouTubeHost:
         self._play_seq, self._handoff, self._handoff_since = 0, False, 0.0
         self._governor = PictureGovernor()
         self._pull = {"since": None, "n": 0, "bytes": 0, "ms": 0.0, "ms_n": 0}
+        # F20: viewers on the video transport; the capture settings the running screencast was started with; a restart in progress
+        self._video_clients, self._cast, self._recasting = 0, None, False
 
     # ---- thread-safe API ---------------------------------------------------------------------------------------
     def status(self):
@@ -391,7 +404,7 @@ class YouTubeHost:
             return {"enabled": True, "state": self.state, "width": self._size[0], "height": self._size[1],
                     "frame": self._counter, "clients": self._clients, "screencast": self._casting,
                     "error": self.error, "pid": self._proc.pid if self._proc else None,
-                    "play": self._play_view(), "handoff": self._handoff}
+                    "play": self._play_view(), "handoff": self._handoff, "video_clients": self._video_clients}
 
     def open(self):
         with self._lifecycle:
@@ -477,6 +490,32 @@ class YouTubeHost:
             self._clients = max(0, self._clients - 1)
         self.touch()
 
+    def video_enter(self):
+        """F20: a TV starts watching through the video transport (relay/youtube_video.py). It counts as a viewer, and the
+        screencast is restarted with the capture settings of the encoder (see capture)."""
+        with self._cond:
+            self._clients += 1
+            self._video_clients += 1
+        self.touch()
+        if self.state == "running" and self._loop:
+            asyncio.run_coroutine_threadsafe(self._ensure_cast(), self._loop)
+
+    def video_leave(self):
+        with self._cond:
+            self._clients = max(0, self._clients - 1)
+            self._video_clients = max(0, self._video_clients - 1)
+        self.touch()
+
+    def capture(self):
+        """(width, height, JPEG quality, every nth compositor frame) the screencast should run with now. While a TV watches
+        through the video transport the pictures only feed the encoder on this PC: the video's size, light compression, and
+        video_fps of Chrome's 60 frames per second. Otherwise the pull transport's governed picture."""
+        s = self.settings
+        if self._video_clients:
+            return (*video_size(s), min(100, max(40, int(s.get("video_capture_quality", 85)))),
+                    max(1, round(60 / max(1, int(s.get("video_fps", 30))))))
+        return (*self.picture(), max(1, int(s["every_nth_frame"])))
+
     def latest(self):
         with self._cond:
             return self._counter, self._frame
@@ -511,8 +550,8 @@ class YouTubeHost:
             if level is not None and self._loop:
                 logging.info("YouTube host: picture level %d (TV needed %.0f ms per picture)", level, float(tv_ms))
                 asyncio.run_coroutine_threadsafe(self._restart_screencast(), self._loop)
-        if not self._casting and self._loop:
-            asyncio.run_coroutine_threadsafe(self._screencast(True), self._loop)
+        if (not self._casting or self._cast != self.capture()) and self._loop:      # stopped, or still set up for a video viewer
+            asyncio.run_coroutine_threadsafe(self._ensure_cast(), self._loop)
         with self._cond:
             if after > self._counter:
                 after = 0                                         # the host restarted since the TV last saw a picture
@@ -552,7 +591,10 @@ class YouTubeHost:
     def _opened(self):
         status = self.status()
         return {"state": status["state"], "width": status["width"], "height": status["height"],
-                "screen_ticket": self.ticket, "play_seq": self._play_seq, "frame_pull": True}
+                "screen_ticket": self.ticket, "play_seq": self._play_seq, "frame_pull": True,
+                # F20: the TV may open /tv-api/youtube/ws for the picture as video; video_forced = ignore what it remembers
+                "video": str(self.settings.get("screen_transport", "auto")) != "jpeg",
+                "video_forced": str(self.settings.get("screen_transport", "auto")) == "video"}
 
     def _play_view(self):
         play = self._play
@@ -764,17 +806,18 @@ class YouTubeHost:
         for attempt in range(8 if on else 1):
             try:
                 if on:
-                    s = self.settings
-                    width, height, quality = self.picture()
+                    width, height, quality, nth = wanted = self.capture()
                     await self._cdp.send("Page.startScreencast", {
                         "format": "jpeg", "quality": quality,
                         # the page is laid out at width x height; the PICTURE sent to the TV is scaled down to stream_width x stream_height
                         # (a TV decodes a smaller JPEG much faster than 1080p; the TV scales it up). The picture governor lowers it when the
                         # TV's link is slow (PICTURE_LEVELS).
-                        "maxWidth": width, "maxHeight": height, "everyNthFrame": max(1, int(s["every_nth_frame"]))})
+                        "maxWidth": width, "maxHeight": height, "everyNthFrame": nth})
                 else:
                     await self._cdp.send("Page.stopScreencast")
                 self._casting = on
+                if on:
+                    self._cast = wanted
                 return
             except Exception as error:     # right after a navigation Chrome answers "Not attached to an active page": retry
                 logging.info("YouTube host: screencast %s failed (%s)", "start" if on else "stop", error)
@@ -783,8 +826,20 @@ class YouTubeHost:
     async def _restart_screencast(self):
         """Apply a new picture level: stop and start the screencast (the next picture arrives at the new size)."""
         if self.state == "running" and self._casting:
-            await self._screencast(False)
+            await self._ensure_cast()
+
+    async def _ensure_cast(self):
+        """Start the screencast, or restart it when it runs with other capture settings than wanted now (a new picture
+        level, or a video viewer came or left). One restart at a time."""
+        if self._recasting:
+            return
+        self._recasting = True
+        try:
+            if self._casting and self._cast != self.capture():
+                await self._screencast(False)
             await self._screencast(True)
+        finally:
+            self._recasting = False
 
     async def _send_keys(self, name, events, action):
         for event in events:

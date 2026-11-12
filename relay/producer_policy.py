@@ -10,7 +10,9 @@ Run-ahead without limit (owner, 2026-10-19: "I don't want any buffering to happe
   * start gate : gate_decision() / rho_estimate() / computed_need(): the movie does not start until it is safe not to
                  stall (a slow machine waits longer instead of stalling mid-film).
 Everything below the "run-ahead" banner is pure stdlib so tests/playback can drive it with fake stores and clocks."""
+import logging
 import math
+import re
 import statistics
 
 DEFAULTS = {"producer_queue": 4, "seek_lead_seconds": 60.0, "startup_seconds": 30.0}
@@ -100,6 +102,11 @@ def tracking(session, chunk_states, completions, position):
 # above them; far-ahead production goes below them.
 SEEK_BOOST = 1000
 FAR_OFFSET = 1000
+# A seek parks every chunk that was requested for the OLD position (Store.demote_pending): PARKED_PRIORITY + idx is worse than
+# every playback priority (they are about minus the Unix time) and better than a prepared job's 100 + idx. A parked chunk is
+# not counted as in flight by produce() and gets a real priority again as soon as the new position needs it.
+PARKED_PRIORITY = -1000000
+PARKED_SPAN = 100000
 
 
 def priority_anchor(session, now):
@@ -122,9 +129,43 @@ def _tv(cfg, key, default):
         return default
 
 
+LIGHT_ROWS = True                 # tv.light_chunk_states (F09); TVService sets it from the settings when it is built
+_light_failed = False
+
+
 def chunk_states(store, job_id):
-    rows = store.chunks(job_id) if job_id else []
+    """({idx: state}, rows). The rows carry no receipt ("payload") when the store offers chunk_rows() and
+    tv.light_chunk_states is on; a caller that needs one receipt loads it with store.chunk() (see _gate.kind_of).
+    A store without chunk_rows, the switch off, or a failing light read: the full rows, exactly as before F09."""
+    global _light_failed
+    if not job_id:
+        return {}, []
+    light = getattr(store, "chunk_rows", None) if LIGHT_ROWS else None
+    rows = None
+    if callable(light):
+        try:
+            rows = light(job_id)
+        except Exception as error:      # never let the light path stop playback: the full read still works
+            if not _light_failed:
+                _light_failed = True
+                logging.warning("tv chunk_rows failed (%s); using the full chunk rows", type(error).__name__)
+    if rows is None:
+        rows = store.chunks(job_id)
     return {int(r["idx"]): r["state"] for r in rows}, rows
+
+
+def parked_indexes(rows):
+    """Indexes of the chunks a seek parked (requested for an earlier position, not finished, not asked for again since)."""
+    out = set()
+    for row in rows:
+        if row["state"] in INFLIGHT:
+            try:
+                priority = int(row.get("priority", 0))
+            except (TypeError, ValueError):
+                continue
+            if PARKED_PRIORITY <= priority < PARKED_PRIORITY + PARKED_SPAN:
+                out.add(int(row["idx"]))
+    return out
 
 
 def _direct(session):
@@ -158,6 +199,15 @@ def on_seek(session, store, jobs, cfg, now):
         session["seek_latch"] = {"index": index, "position": session["position"], "epoch": session.get("epoch", 0),
                                  "target_ready_at_seek": states.get(index) in READY, "at": now}
     if session.get("job_id"):
+        # tv.seek_demote_stale (default ON; only a real boolean switches it): the windows that were requested for the position
+        # the viewer just left stop outranking the windows of the new position. The actor engine only (the generic engines
+        # claim in index order from generic_active_index).
+        session["seek_demoted"] = 0
+        demote = getattr(store, "demote_pending", None)
+        if (callable(demote) and _flag(cfg, "seek_demote_stale", True)
+                and session.get("speech_engine") not in ("generic", "xtranslator")):
+            session["seek_demoted"] = int(demote(session["job_id"], index, PARKED_PRIORITY) or 0)
+            session["producer_at"] = 0          # the next scheduler tick requests the windows after the target at once
         try:
             jobs.request(session["job_id"], index, -int(now) - SEEK_BOOST)
         except ValueError:
@@ -184,8 +234,10 @@ LOW_WATER_SECONDS = 10.0
 RHO_WINDOW = 6
 RHO_MIN_SAMPLES = 2
 RHO_RATE_CAP = 50.0               # per-chunk rate cap for the median only (a burst of two finishes is not 600x)
+KIND_BULK_LOAD = 8                # more unseen ready chunks than this: classify them from one full read (F09)
 STARTUP_SECONDS = 60.0
 LEGACY_STARTUP_SECONDS = 8.0
+MAX_GATE_LEAD_SECONDS = 120.0     # tv.max_gate_lead_seconds: the most lead the throughput rule may ask for (30..3600)
 
 
 def _number(value, default, low=None, high=None):
@@ -221,9 +273,15 @@ def ahead_enabled(session, cfg):
     return bool(session.get("dub") and session.get("job_id") and _flag(cfg, "mux_ahead_unlimited", True))
 
 
-def mux_workers(cfg):
+def mux_workers(cfg, dubbing=False):
+    """Concurrent far-ahead encodes (tv.mux_ahead_workers, 1..4). dubbing=True (the job still has windows to dub from the
+    playhead on): the smaller of that and tv.mux_ahead_workers_while_dubbing (default 1), so encodes that nobody waits for
+    do not take CPU, disk and NAS reads from the dub. The playback segment keeps its own extra slot (plan_mux)."""
     low, high = MUX_WORKERS_BOUNDS
-    return int(_number(_tv(cfg, "mux_ahead_workers", 2), 2, low, high))
+    workers = int(_number(_tv(cfg, "mux_ahead_workers", 2), 2, low, high))
+    if dubbing:
+        workers = min(workers, int(_number(_tv(cfg, "mux_ahead_workers_while_dubbing", 1), 1, low, high)))
+    return workers
 
 
 def producer_queue(session, cfg):
@@ -238,6 +296,21 @@ def start_seconds(cfg, session=None):
     return _number(_tv(cfg, "actor_beta_start_seconds", default), default)
 
 
+def _window_lead(session, cfg, seconds):
+    """buffer_policy.window_lead for this session: `seconds` in whole segments from the playhead's segment
+    (tv.lead_whole_windows, default on; tv.low_water_seconds is the floor above one segment). Only while the
+    throughput gate governs the session: with tv.adaptive_start_gate off (or no dub job) the legacy numbers stand."""
+    if not gate_active(session, cfg):
+        return float(seconds)
+    try:
+        from .buffer_policy import window_lead
+    except ImportError:  # standalone import
+        from buffer_policy import window_lead
+    return window_lead(seconds, session["position"], session["segment_seconds"],
+                       _number(_tv(cfg, "low_water_seconds", LOW_WATER_SECONDS), LOW_WATER_SECONDS, 0.0, 600.0),
+                       _flag(cfg, "lead_whole_windows", True))
+
+
 def required_seconds(session, cfg):
     remaining = max(0.0, session["duration"] - session["position"])
     if session.get("speech_engine") in ("generic", "xtranslator") and session.get("dub"):
@@ -250,13 +323,13 @@ def required_seconds(session, cfg):
         if latch["target_ready_at_seek"]:  # immediate once the target segment itself is muxed
             return min(1.0, remaining), "seek_ready_target"
         lead = float(_tv(cfg, "actor_beta_seek_lead_seconds", DEFAULTS["seek_lead_seconds"]))
-        return min(lead, remaining), "seek_unready_target"
+        return min(_window_lead(session, cfg, lead), remaining), "seek_unready_target"
     start = start_seconds(cfg, session)
     explicit = _tv(cfg, "actor_beta_max_prefill_segments", None)
     if gate_active(session, cfg):
         # The startup lead is the owner's ~60 s; the old prefill cap applies only when it is configured explicitly.
         cap = start if explicit is None else min(start, int(explicit) * session["segment_seconds"])
-        return min(max(1.0, cap), remaining), "startup"
+        return min(max(1.0, _window_lead(session, cfg, cap)), remaining), "startup"
     prefill = int(_tv(cfg, "actor_beta_max_prefill_segments", 3))
     return min(max(1.0, min(start, prefill * session["segment_seconds"])), remaining), "startup"
 
@@ -286,12 +359,13 @@ def produce(session, store, jobs, cfg, now, lookahead=0):
     total = int(math.ceil(session["duration"] / seg))
     start = int(session["position"] // seg)
     requested = []
-    states, _ = chunk_states(store, session["job_id"])
+    states, rows = chunk_states(store, session["job_id"])
+    parked = parked_indexes(rows)                            # requested for a position the viewer left (on_seek): not in flight for this one
     for index in range(start, total):
-        if states.get(index) in READY | INFLIGHT:
+        if states.get(index) in READY or (states.get(index) in INFLIGHT and index not in parked):
             continue
-        inflight = sum(1 for v in states.values() if v in INFLIGHT)
-        added = sum(1 for i in range(index, min(total, index + 1 + int(lookahead))) if i not in states)
+        inflight = sum(1 for i, v in states.items() if v in INFLIGHT and i not in parked)
+        added = sum(1 for i in range(index, min(total, index + 1 + int(lookahead))) if i not in states or i in parked)
         if inflight + added > queue and inflight > 0:   # an idle worker is always fed: a queue below lookahead+1 cannot deadlock
             break
         try:
@@ -299,7 +373,8 @@ def produce(session, store, jobs, cfg, now, lookahead=0):
         except ValueError:
             break
         requested.append(index)
-        states, _ = chunk_states(store, session["job_id"])   # the request (and its lookahead) changed the store
+        states, rows = chunk_states(store, session["job_id"])   # the request (and its lookahead) changed the store
+        parked = parked_indexes(rows)
     session["producer_requested"] = requested
     return requested
 
@@ -425,19 +500,22 @@ def computed_need(remaining, rho, fast_rho=FAST_RHO):
 
 
 def gate_decision(*, remaining, lead, base_required, base_rule, rho, started=False, rebuffering=False,
-                  fast_rho=FAST_RHO, low_water=LOW_WATER_SECONDS, lead_ceiling=None):
+                  fast_rho=FAST_RHO, low_water=LOW_WATER_SECONDS, lead_ceiling=None, max_need=None):
     """Start/rebuffer decision for the status contract (startable + the lead the player compares against).
     Before start:   required = max(base_required, computed_need), startable = lead >= required (or EOF).
     After start:    startable stays True with required = low_water, unless lead < low_water AND rho < 1 (an honest
                     rebuffer): then startable False and required = the full requirement until it is met again.
     rho None (unmeasured): the base (startup / seek) lead only, plus the same low-water rule (which needs a rho).
     lead_ceiling: the most lead that can ever exist (a segment that failed for good is at that distance): the
-    requirement never exceeds it, so a viewer is not held forever for a lead that cannot be built."""
+    requirement never exceeds it, so a viewer is not held forever for a lead that cannot be built.
+    max_need: cap (s) on what the throughput rule may ask for (tv.max_gate_lead_seconds); None = no cap. The base
+    (startup / seek) lead is never reduced by it. 'computed_need' in the result stays the uncapped number."""
     need = computed_need(remaining, rho, fast_rho)
-    full = min(float(remaining), max(float(base_required), need))
+    capped = need if max_need is None else min(need, max(0.0, float(max_need)))
+    full = min(float(remaining), max(float(base_required), capped))
     if lead_ceiling is not None and lead_ceiling > 0:
         full = min(full, float(lead_ceiling))
-    rule = base_rule + ("+throughput" if need > base_required + 1e-9 else "")
+    rule = base_rule + ("+throughput" if capped > base_required + 1e-9 else "")
     eof = remaining <= 1e-9 or lead >= remaining - 1e-9
     if not started:
         startable = remaining <= 1e-9 or (lead > 0 and lead >= full - 1e-9)
@@ -532,6 +610,49 @@ def choose_encoder(requested, *, nvenc_listed, free_vram_mib, min_free_mib, hdr_
     return "nvenc", "h264_nvenc listed and %d MiB VRAM free (needs %d)" % (free_vram_mib, min_free_mib)
 
 
+# ============================== picture path: codec choice (pure) ============================================
+HEVC_FAILURES = 2                 # player failure reports in one HEVC generation (both decoders tried) before H.264 returns
+PROBE_HEVC_CLIP = "hevc10_2160p24"   # relay/tv_probe.py CLIPS: HEVC Main10 4K 24 fps, played through MediaSource by the TV's decode test
+_PROBE_OK = re.compile(r"ok (\d+)x(\d+) adv ([0-9.]+)s dec (\d+|\?) drop (\d+|\?)")
+
+
+def probe_passes_hevc(probe):
+    """True when the TV's stored decode-test report shows that the HEVC Main10 clip really played: the text made by
+    SemTvProbe.describe() starts with 'ok', the picture was at least 1920 wide, playback advanced 1.5 s or more and,
+    when the TV reports frame counts, no more than a quarter of the frames were dropped."""
+    match = _PROBE_OK.match(str((probe or {}).get(PROBE_HEVC_CLIP) or ""))
+    if not match:
+        return False
+    width, advanced, decoded, dropped = int(match.group(1)), float(match.group(3)), match.group(4), match.group(5)
+    if width < 1920 or advanced < 1.5:
+        return False
+    if decoded != "?" and dropped != "?" and int(decoded) > 0 and int(dropped) * 4 > int(decoded):
+        return False
+    return True
+
+
+def choose_codec(setting, *, encoder, hevc_nvenc_listed, device_ok, device_failed=False, pinned=None, short_segments=False):
+    """('hevc'|'h264', reason). 'h264' keeps the MPEG-TS stream. 'auto' gives HEVC Main10 in fMP4 only when this TV
+    passed the HEVC Main10 test, NVENC encodes this playback and ffmpeg lists hevc_nvenc. 'hevc' forces it (a test
+    switch: no TV test needed, libx265 when NVENC is not usable). A playback that already fell back, a TV whose last
+    HEVC playback failed, and the YouTube fast-start / live profiles stay H.264."""
+    if pinned:
+        return "h264", "this playback fell back to H.264 (%s)" % (pinned,)
+    if setting not in ("auto", "hevc"):
+        return "h264", "tv.video_codec is h264"
+    if short_segments:
+        return "h264", "YouTube fast-start and live sessions stay H.264 MPEG-TS"
+    if setting == "hevc":
+        return "hevc", "tv.video_codec forces HEVC"
+    if device_failed:
+        return "h264", "an HEVC playback failed on this TV; H.264 until the stream format changes or the TV is tested again"
+    if not device_ok:
+        return "h264", "this TV has not passed its HEVC Main10 decode test"
+    if encoder != "nvenc" or not hevc_nvenc_listed:
+        return "h264", "HEVC needs hevc_nvenc; software HEVC is too slow for 4K"
+    return "hevc", "this TV passed the HEVC Main10 test and hevc_nvenc is usable"
+
+
 def status_fields(session, store, cfg, now):
     """Exact BACKEND-CONTRACT.json keys (unchanged) plus the run-ahead keys (additive). Playable lead = muxed
     segments of this generation, not store audio."""
@@ -549,7 +670,7 @@ def status_fields(session, store, cfg, now):
     latch = session.get("seek_latch")
     if gate_active(session, cfg):
         gate = _gate(session, rows, cfg, now, lead=lead, remaining=remaining, base_required=base_required,
-                     base_rule=base_rule, audio_through=audio_through, paused=paused)
+                     base_rule=base_rule, audio_through=audio_through, paused=paused, store=store)
         startable = direct or gate["decision"]["startable"]
         required, rule = gate["decision"]["required"], gate["decision"]["rule"]
         if gate["started"] and latch and base_rule.startswith("seek"):
@@ -581,12 +702,13 @@ def status_fields(session, store, cfg, now):
     return fields
 
 
-def _gate(session, rows, cfg, now, *, lead, remaining, base_required, base_rule, audio_through, paused):
+def _gate(session, rows, cfg, now, *, lead, remaining, base_required, base_rule, audio_through, paused, store=None):
     """Throughput-aware gate: rho from speech-bearing production samples and from non-cached mux timings."""
     seg, duration, position = session["segment_seconds"], session["duration"], session["position"]
     fast = _number(_tv(cfg, "start_gate_fast_rho", FAST_RHO), FAST_RHO, 1.0, 10.0)
     low_water = _number(_tv(cfg, "low_water_seconds", LOW_WATER_SECONDS), LOW_WATER_SECONDS, 0.0, 600.0)
     window = int(_number(_tv(cfg, "rho_window_chunks", RHO_WINDOW), RHO_WINDOW, 2, 64))
+    max_need = _number(_tv(cfg, "max_gate_lead_seconds", MAX_GATE_LEAD_SECONDS), MAX_GATE_LEAD_SECONDS, 30.0, 3600.0)
     cache = session.setdefault("_kind_cache", {})
 
     def kind_of(row):
@@ -594,8 +716,22 @@ def _gate(session, rows, cfg, now, *, lead, remaining, base_required, base_rule,
         if key not in cache:
             if len(cache) > 4096:
                 cache.clear()
-            cache[key] = chunk_kind(row)
+            full = row
+            if "payload" not in row and store is not None and row["state"] in READY:
+                # A row from Store.chunk_rows() has no receipt: load this ONE receipt, once per (idx, updated).
+                full = store.chunk(session["job_id"], int(row["idx"])) or row
+            cache[key] = chunk_kind(full)
         return cache[key]
+
+    if store is not None:
+        missing = sum(1 for r in rows if "payload" not in r and r["state"] in READY
+                      and (int(r["idx"]), r.get("updated")) not in cache)
+        if missing > KIND_BULK_LOAD:
+            # First status of a session on a film that is already largely dubbed: ONE full read fills the cache
+            # (the cost of a single old status call) instead of one query per receipt.
+            for full in store.chunks(session["job_id"]):
+                if full["state"] in READY:
+                    cache.setdefault((int(full["idx"]), full.get("updated")), chunk_kind(full))
 
     production = rho_estimate(production_samples(rows, seg, duration, kind_of,
                                                  float(session.get("job_attached_at") or 0.0)), window)
@@ -614,7 +750,7 @@ def _gate(session, rows, cfg, now, *, lead, remaining, base_required, base_rule,
     ceiling = None if isinstance(parked_at, bool) or not isinstance(parked_at, (int, float)) else parked_at - position
     decision = gate_decision(remaining=remaining, lead=lead, base_required=base_required, base_rule=base_rule, rho=rho,
                              started=started, rebuffering=rebuffering, fast_rho=fast, low_water=low_water,
-                             lead_ceiling=ceiling)
+                             lead_ceiling=ceiling, max_need=max_need)
     session["_gate"] = {"epoch": epoch, "rebuffering": decision["rebuffering"]}
     session["_gate_required_lead"] = float(decision["full_required"])    # tv._lead_limit: the legacy window must reach it
     stall_free = expected_stall_free(remaining=remaining, lead=lead, rho=rho, fast_rho=fast, low_water=low_water)
@@ -635,7 +771,8 @@ def _gate(session, rows, cfg, now, *, lead, remaining, base_required, base_rule,
             "version": "throughput-gate-v1", "rule": decision["rule"], "started": started,
             "rebuffering": decision["rebuffering"], "computed_need_seconds": decision["computed_need"],
             "base_required_seconds": float(base_required), "startup_seconds": start_seconds(cfg, session),
-            "low_water_seconds": low_water, "fast_rho": fast, "rho_limiting_stage": combined["limiting"],
+            "low_water_seconds": low_water, "fast_rho": fast, "max_gate_lead_seconds": max_need,
+            "rho_limiting_stage": combined["limiting"],
             "rho_missing_stages": combined["missing"], "audio_complete": audio_complete,
             "remaining_basis": "dialogue_hint" if dialogue is not None else "remaining_duration (conservative)",
             "start_eta_seconds": _eta(decision, lead, rho),

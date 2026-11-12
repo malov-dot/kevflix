@@ -87,11 +87,24 @@ weights, LFE excluded). Choose `stereo` if a TV or sound system cannot play six-
 
 Nothing is loaded when the app starts or when a film plays without English dubbing. The speech/translation worker, the resident Demucs
 and the Vox engines are started when a dub job has work, and they exit, freeing RAM and VRAM, `RELEASE_GRACE_S` (4 s,
-`relay/movie_pipeline/pipeline.py`) after the last job ended: playback was stopped (the TV session ends and its on-demand job is
-cancelled), or the whole film is dubbed. A job that is waiting for its next window keeps them, so playback never reloads models
+`relay/movie_pipeline/pipeline.py`) after the last job ended: playback was stopped, or the whole film is dubbed. When playback
+stops (Back, a switch to another video, the TV missing heartbeats for `tv.idle_seconds`, a revoked TV, dubbing switched off)
+the on-demand job is not cancelled at once: it lingers for `tv.dub_linger_seconds` (default 180, 0 to 1800; 0 cancels at
+once). During the linger the windows already in production are finished and kept, the models stay loaded, and opening the
+same film again continues the live job. Starting the dub of another video cancels a lingering job immediately. The server
+log shows `tv dub_linger` and `tv dub_linger_ended`. A job that is waiting for its next window keeps them, so playback never reloads models
 between windows. A seek or a new playback loads them again. The 150 s idle limits of each process (`IDLE_UNLOAD_S`,
 `actor_beta.vox.job_lease_idle_seconds`) remain as a second safety net. The server log shows `models_released` (what was stopped),
 `vox_released` and `analysis_worker_stopped` / `resident_demucs_stopped` with reason `playback_stopped`.
+
+## Graphics card heat (`gpu_lease`)
+
+`gpu_lease.max_gpu_celsius` (85, 0 = off, 0 to 95) and `gpu_lease.resume_gpu_celsius` (78, 40 to 93, at least 2 below the limit):
+while the graphics card is at or above the limit, no new dub window starts and held windows are not sent back; windows already
+being rendered finish, the models stay loaded, and dubbing continues once the card is back at the resume temperature. The
+temperature is read with `nvidia-smi` (a read-only query, at most every 10 s); an unreadable temperature never stops a film.
+A window that is not dubbed in time plays with the original audio. The server log shows `movie gpu_wait` with code `gpu_hot`
+and `movie gpu_wait_ended` (`relay/gpu_heat.py`).
 
 ## Test this TV
 
@@ -100,7 +113,7 @@ everything and Samsung documents MSE (the engine hls.js uses) as FHD-only on sev
 refused while a movie is open. The PC makes eight silent test clips on the CPU (`relay/tv_probe.py`, about 11 s in total, 87 MB, kept in
 `<state>/tv-probe`; no GPU is used, so neither Sem nor the dubbing is affected): H.264 1080p60 (control), H.264 4K30, HEVC 1080p60, HEVC 4K 24,
 60 and 120 fps, HEVC Main10 4K24 and AV1 4K60. The TV plays each one muted through MediaSource for about 3 s (Back stops it) and sends one
-`tv_diagnostic` line (`stage: "probe"`) to the PC's `server.stderr.log`: per clip `ok` or `no-play` or `unsupported` or `error`, the size reached,
+`tv_diagnostic` line (`stage: "probe"`) to the PC's server log (`logs\server.log`; `server.stderr.log` when `housekeeping.log_to_file` is false): per clip `ok` or `no-play` or `unsupported` or `error`, the size reached,
 seconds advanced, decoded and dropped frames and the MediaCapabilities flags (supported / smooth / power efficient), plus the TV's model and
 firmware when the page can read them, the screen size and the page's animation rate. Routes (device token required): `POST /tv-api/probe/prepare`,
 `GET /tv-api/probe/status`, `GET /tv-api/probe/clip/<name>.mp4` (only the eight known names). The result decides whether HEVC or 4K output is worth building.

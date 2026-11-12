@@ -39,11 +39,19 @@ LOG = logging.getLogger(__name__)
 VERSION = 1
 RATE = diart_turns.SAMPLE_RATE
 LABEL_PREFIX = diart_turns.LABEL_PREFIX
-# Diart parameters. These are the pre-pass defaults; delta_new 0.7 kept one real speaker whole where 0.6 split it in two.
-PARAMS = {'duration': 5.0, 'step': 0.5, 'latency': 5.0, 'tau_active': 0.5, 'rho_update': 0.3, 'delta_new': 0.7,
+# Diart parameters. F14 (2026-11-11): delta_new 0.7 -> 0.9 and tau_active 0.5 -> 0.6. On a full film 0.7 created all 40
+# allowed speakers in the first 40 % of the film (17 in the first tenth), after which every new voice was forced into an
+# existing label: 13 % of the lines carried two labels and 8 of the 25 large labels mixed low and high voices. 0.6 had split
+# one real speaker in two, 0.7 kept that one whole; Diart's own defaults are 1.0 and 0.6. Every value can be overridden by
+# actor_beta.diart_params (effective_params) without a code change.
+PARAMS = {'duration': 5.0, 'step': 0.5, 'latency': 5.0, 'tau_active': 0.6, 'rho_update': 0.3, 'delta_new': 0.9,
           'gamma': 3.0, 'beta': 10.0, 'max_speakers': 40, 'metric': 'cosine', 'aggregation': 'hamming/loose',
           'batch_size': 32}
+# What actor_beta.diart_params may change, with its accepted range; anything else, or a value outside it, is ignored.
+PARAM_RANGES = {'tau_active': (0.3, 0.9), 'rho_update': (0.0, 1.0), 'delta_new': (0.4, 1.6), 'max_speakers': (4, 200),
+                'latency': (0.5, 5.0), 'step': (0.25, 1.0)}
 SEEK_GAP = 35.0              # a window starting this far past the fed audio is a seek: the stream restarts cleanly
+SCOUT_SUFFIX = ':scout'      # F15: the stream that is fed the film's dialogue channel ahead of playback (relay/film_scout.py)
 MERGE_GAP = .05              # same-speaker turns closer than this are one turn
 HISTORY_SECONDS = 7200.      # turns older than this (behind the newest fed audio) are forgotten
 EPS = .02
@@ -137,6 +145,27 @@ def enabled(config):
     return value is not False and value != 0
 
 
+def effective_params(config):
+    """PARAMS with the valid entries of actor_beta.diart_params laid over them (see PARAM_RANGES). max_speakers is an int."""
+    params = dict(PARAMS)
+    override = (_beta(config) or {}).get('diart_params')
+    if isinstance(override, dict):
+        for key, (low, high) in PARAM_RANGES.items():
+            value = override.get(key)
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not low <= value <= high:
+                continue
+            params[key] = int(value) if key == 'max_speakers' else float(value)
+    if params['latency'] < params['step']:
+        params['latency'] = params['step']
+    return params
+
+
+def cleanup_enabled(config):
+    """actor_beta.diart_turn_cleanup (default on with the beta lane; false = the detector's turns as reported)."""
+    beta = _beta(config)
+    return bool(beta) and beta.get('enabled') is True and beta.get('diart_turn_cleanup') is not False
+
+
 def server_sha256():
     try:
         return hashlib.sha256(SERVER.read_bytes()).hexdigest()
@@ -148,7 +177,8 @@ def fingerprint(config):
     """Value bound into config.engine_fingerprint(): None when off, else the settings and code that decide the speakers."""
     if not enabled(config):
         return None
-    return {'version': VERSION, 'params': dict(PARAMS), 'rules': dict(RULES), 'server_sha256': server_sha256()}
+    return {'version': VERSION, 'params': effective_params(config), 'rules': dict(RULES), 'server_sha256': server_sha256(),
+            'turn_cleanup': dict(diart_turns.TURN_CLEANUP) if cleanup_enabled(config) else None}
 
 
 def analyze_options(config, source_identity):
@@ -187,7 +217,7 @@ def build_command(config):
     return ['wsl.exe', '-d', str(wsl['distro']), '--exec', '/usr/bin/env', 'PYTHONPATH=' + str(wsl['site_packages']),
             'PYTHONUNBUFFERED=1', 'PYTHONDONTWRITEBYTECODE=1', 'HF_HUB_OFFLINE=1', 'TRANSFORMERS_OFFLINE=1',
             str(wsl['python']), '-u', wsl_path(script), '--models', wsl_path(models),
-            '--params', json.dumps(PARAMS, separators=(',', ':'))]
+            '--params', json.dumps(effective_params(config), separators=(',', ':'))]
 
 
 # --------------------------------------------------------------------------------------------------------- turn math
@@ -213,13 +243,16 @@ def splice(history, rows, cut):
     return sorted(head + _merge_rows(tail + [dict(row) for row in rows]), key=lambda r: (r['start'], r['end'], r['speaker']))
 
 
-def window_turns(history, start, end):
-    """The window view (turns, aligned, overlaps) with DIART_Dnnn labels, same clipping as DiartTurns.window."""
+def window_turns(history, start, end, cleanup=False):
+    """The window view (turns, aligned, overlaps) with DIART_Dnnn labels, same clipping as DiartTurns.window.
+    ``cleanup`` (F14) passes the turns through diart_turns.clean_turns first."""
     turns = []
     for row in history:
         a, b = max(row['start'], start), min(row['end'], end)
         if b - a >= diart_turns.MIN_PIECE:
             turns.append({'start': round(a, 3), 'end': round(b, 3), 'speaker': LABEL_PREFIX + row['speaker']})
+    if cleanup:
+        turns = [dict(row, start=round(row['start'], 3), end=round(row['end'], 3)) for row in diart_turns.clean_turns(turns)]
     turns.sort(key=lambda row: (row['start'], row['end'], row['speaker']))
     aligned, overlaps = diart_turns.split_exclusive(turns)
     return {'turns': turns, 'aligned': aligned, 'overlaps': overlaps}
@@ -464,8 +497,66 @@ class DiartStream:
                 except DiartStreamUnavailable:
                     self._streams.pop(stream_id, None)             # state unknown: the next window starts the stream over
                     raise
-            window = window_turns(mirror.history, start, end)
+            window = window_turns(mirror.history, start, end, cleanup=cleanup_enabled(self._config) if self._config is not None else False)
         return window['turns'], window['aligned'], diart_turns.label_vectors(window, mono, start, embed)
+
+    def feed_ahead(self, stream_id, mono, start):
+        """F15: feed one block of 16 kHz mono audio to the scout stream ``stream_id``, in order and without gaps, and return
+        {'rows', 'from', 'committed_until', 'created'}: the sidecar's fresh turns (labels 'Dnnn', absolute seconds) from
+        'from' on. The first block creates the stream at ``start`` ('created': True); so does a block that does not continue
+        it. The scout never starts or waits for the sidecar: without a running, ready one this raises
+        DiartStreamUnavailable('sidecar_not_running')."""
+        import numpy as np
+        mono = np.ascontiguousarray(mono, dtype=np.float32)
+        if not len(mono) or not math.isfinite(float(start)):
+            raise DiartStreamUnavailable('window_empty')
+        stream_id = str(stream_id)
+        with self._lock:
+            if self._closed or not (self._alive() and self._ready):
+                raise DiartStreamUnavailable('sidecar_not_running')
+            mirror = self._streams.get(stream_id)
+            if mirror is not None and abs(float(start) - mirror.fed_until) > EPS:
+                self.reset(stream_id)
+                mirror = None
+            created = mirror is None
+            if created:
+                while len(self._streams) >= MAX_STREAMS:
+                    self._streams.popitem(last=False)
+                mirror = self._streams[stream_id] = _Mirror(float(start))
+            else:
+                self._streams.move_to_end(stream_id)
+            try:
+                reply, _ = self._call({'op': 'feed', 'stream': stream_id, 'start': mirror.fed_until, 'n': len(mono),
+                                       'create': created}, mono.astype('<f4').tobytes())
+            except DiartStreamUnavailable:
+                self._streams.pop(stream_id, None)
+                raise
+            rows, cut, committed = reply.get('turns'), reply.get('from'), reply.get('committed_until')
+            clean = []
+            if isinstance(rows, list):
+                for row in rows:
+                    if (isinstance(row, dict) and isinstance(row.get('speaker'), str) and diart_turns._ID.fullmatch(row['speaker'])
+                            and all(isinstance(row.get(k), (int, float)) and math.isfinite(row[k]) for k in ('start', 'end'))):
+                        clean.append({'start': float(row['start']), 'end': float(row['end']), 'speaker': row['speaker']})
+            if (not isinstance(rows, list) or len(clean) != len(rows)
+                    or not all(isinstance(v, (int, float)) and math.isfinite(v) for v in (cut, committed))):
+                self._streams.pop(stream_id, None)
+                raise DiartStreamUnavailable('protocol_error', 'feed reply')
+            mirror.fed += len(mono)
+            return {'rows': clean, 'from': float(cut), 'committed_until': float(committed), 'created': created}
+
+    def centers(self, stream_id):
+        """F15: {label: [float, ...]}: the sidecar clusterer's centre of every speaker of one stream (labels 'Dnnn')."""
+        stream_id = str(stream_id)
+        with self._lock:
+            if self._closed or not (self._alive() and self._ready) or stream_id not in self._streams:
+                raise DiartStreamUnavailable('unknown_stream')
+            reply, _ = self._call({'op': 'centers', 'stream': stream_id})
+        labels, centers = reply.get('labels'), reply.get('centers')
+        if not isinstance(labels, list) or not isinstance(centers, list) or len(labels) != len(centers):
+            raise DiartStreamUnavailable('protocol_error', 'centers reply')
+        return {str(label): [float(value) for value in centre] for label, centre in zip(labels, centers)
+                if diart_turns._ID.fullmatch(str(label))}
 
     def _must_restart(self, mirror, start, end):
         if start < mirror.history_start - EPS or start - mirror.fed_until > SEEK_GAP:

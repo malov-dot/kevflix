@@ -93,6 +93,16 @@ class Engine:
             del buffer[0]
         return annotation
 
+    def centers(self, st):
+        """F15: the clusterer's centre of every speaker this stream has created: {'labels': ['D000', ...], 'centers': [[...]]}."""
+        clustering = st.clustering
+        centers = getattr(clustering, 'centers', None)
+        if centers is None:
+            return {'labels': [], 'centers': []}
+        active = sorted(int(index) for index in getattr(clustering, 'active_centers', ()))
+        return {'labels': ['D%03d' % index for index in active],
+                'centers': [[round(float(value), 5) for value in centers[index]] for index in active]}
+
     def rows(self, chunks, lower, upper, origin):
         from pyannote.core import Annotation
         merged = Annotation()
@@ -156,6 +166,11 @@ def handle(engine, streams, header, payload):
     if op in ('open', 'reset', 'close'):
         streams.pop(name, None)                       # the next feed (create=true) starts the stream at its own time
         return {'stream': name}
+    if op == 'centers':
+        stream = streams.get(name)
+        if stream is None:
+            raise ValueError('unknown_stream')
+        return {'stream': name, **engine.centers(stream)}
     if op != 'feed':
         raise ValueError('unknown op %r' % (op,))
     start, count = float(header['start']), int(header['n'])

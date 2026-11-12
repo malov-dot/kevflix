@@ -21,6 +21,7 @@
 #skin .sk-dot{position:absolute;left:0;top:50%;width:30px;height:30px;margin:-15px 0 0 -15px;border-radius:50%;opacity:0;transform:scale(.5);transition:transform .12s ease,opacity .12s ease}
 #skin.sk-bar-focus .sk-track{transform:scaleY(2)}
 #skin.sk-bar-focus .sk-dot{opacity:1;transform:scale(1)}
+#skin .sk-pos{position:absolute;left:0;top:0;width:100%;height:100%;pointer-events:none;will-change:transform}
 #skin .sk-bubble{position:absolute;bottom:44px;left:0;padding:6px 16px;border-radius:8px;font-size:28px;font-weight:700;white-space:nowrap;transform:translateX(-50%)}
 #skin .sk-times{display:flex;align-items:center;justify-content:space-between;font-size:28px;font-variant-numeric:tabular-nums;color:#ececec}
 #skin .sk-notice{position:absolute;max-width:1200px;padding:12px 28px;border-radius:999px;font-size:26px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -72,6 +73,10 @@
 #skin.sk-plex .sk-item.focus{background:#e5a00d;color:#1a1a1a}
 #skin.sk-plex .sk-item.focus .sk-value,#skin.sk-plex .sk-item.focus.sel .sk-mark{color:#3a2700}
 #skin.sk-plex .sk-more{color:#888}
+#skin.sk-plex .sk-upnext{position:absolute;right:90px;bottom:330px;width:620px;padding:26px 30px;border-radius:14px;background:#181818;border:2px solid #e5a00d}
+#skin.sk-plex .sk-up-label{font-size:26px;font-weight:700;color:#e5a00d;text-transform:uppercase;letter-spacing:.08em}
+#skin.sk-plex .sk-up-title{margin:10px 0 14px;font-size:36px;font-weight:700;line-height:1.2;max-height:2.4em;display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+#skin.sk-plex .sk-up-hint{font-size:25px;color:#c9c9c9}
 
 /* ================================================================================================================================
    YOUTUBE: near-black bottom scrim, red #FF0000 progress, round translucent #212121 buttons, white focus circle.
@@ -113,3 +118,12 @@
 #player.skin-plex #buffer-fill{background:#e5a00d}
 #player.skin-youtube .spinner{border-top-color:#f00}
 #player.skin-youtube #buffer-fill{background:#f00}
+
+/* The light look. controls.js adds sk-lite when the TV's own numbers say the skin is drawn slowly (median frame above 40 ms over two bar showings, or
+   median key-to-paint above 100 ms over eight presses) and keeps it for 30 days: no blurred shadows (a border instead), nothing animated. Keep these
+   rules last: they must win over the rules above with the same weight. */
+#skin.sk-lite .sk-ui,#skin.sk-lite.sk-on .sk-ui,#skin.sk-lite .sk-btn,#skin.sk-lite .sk-track,#skin.sk-lite .sk-dot{transition:opacity 0s,transform 0s}
+#skin.sk-lite .sk-menu,#skin.sk-lite.sk-youtube .sk-upnext{box-shadow:none}
+#skin.sk-lite.sk-plex .sk-menu{border-left:2px solid #333}
+#skin.sk-lite.sk-youtube .sk-menu,#skin.sk-lite.sk-youtube .sk-upnext{border:2px solid #3d3d3d}
+#skin.sk-lite .sk-name{text-shadow:none}

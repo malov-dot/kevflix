@@ -18,6 +18,7 @@ class ProcessOwner:
         self.cancelled = threading.Event()
         self._children = set()
         self._lock = threading.Lock()
+        self.priority = None      # "below_normal": run() starts its children below normal priority (far-ahead TV encodes)
 
     def check(self):
         if self.cancelled.is_set():
@@ -63,6 +64,11 @@ class ProcessOwner:
     def run(self, argv, *, timeout=1800, input_data=None, env=None, cwd=None):
         self.check()
         kwargs = {"creationflags": subprocess.CREATE_NO_WINDOW} if os.name == "nt" else {"start_new_session": True}
+        if getattr(self, "priority", None) == "below_normal":
+            if os.name == "nt":
+                kwargs["creationflags"] |= subprocess.BELOW_NORMAL_PRIORITY_CLASS
+            else:
+                kwargs["preexec_fn"] = lambda: os.nice(10)
         child = subprocess.Popen([str(x) for x in argv], stdin=subprocess.PIPE if input_data is not None else subprocess.DEVNULL,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, cwd=cwd, **kwargs)
         with self._lock:

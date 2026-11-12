@@ -211,6 +211,38 @@ def stamp_published(report, pending, cues, lines, placements, carry=(), window_f
 
 
 MAX_REASONS = 12
+# F22: a window with no line of its own whose audio is untouched is 'no-dialogue' when the detector heard less than this
+# much speech that nobody transcribed; with more it stays 'original-unverified' and says so.
+NO_DIALOGUE_MAX_UNTRANSCRIBED_SECONDS = 3.0
+
+
+def untranscribed_speech_seconds(report, pad=.2):
+    """Seconds inside the window's render range in which the detector's turns (report['raw_turns'], absolute seconds) are not
+    covered by any recognizer segment (report['transcript'], seconds from report['origin'], widened by ``pad`` each side)."""
+    try:
+        low, high, origin = float(report['render_start']), float(report['render_end']), float(report.get('origin') or 0.0)
+        speaking = sorted((max(low, float(t['start'])), min(high, float(t['end']))) for t in report.get('raw_turns') or ())
+        covered = sorted((float(s['start']) + origin - pad, float(s['end']) + origin + pad) for s in report.get('transcript') or ())
+    except (KeyError, TypeError, ValueError):
+        return 0.0
+    total, cursor = 0.0, low
+    for a, b in speaking:
+        a = max(a, cursor)
+        if b <= a:
+            continue
+        cursor = b
+        point = a
+        for c, d in covered:
+            if d <= point or c >= b:
+                continue
+            if c > point:
+                total += c - point
+            point = max(point, d)
+            if point >= b:
+                break
+        if point < b:
+            total += b - point
+    return round(total, 3)
 
 
 def _label_all_original(report, published, carry, window_frames):
@@ -258,6 +290,15 @@ def _label_all_original(report, published, carry, window_frames):
     head = ['unchanged_audio_no_published_takes'] if unaccounted else \
         ['all_selected_cues_original'] if selected else ['no_selected_cues']
     report['mode'] = 'original-unverified'
+    if not selected and all_unchanged:
+        # F22: nothing of this window was a line of its own and no frame changed. That is 'no-dialogue', unless the detector
+        # heard speech that was never transcribed: then the window stays flagged and names that first.
+        missed = untranscribed_speech_seconds(report)
+        report['untranscribed_speech_seconds'] = missed
+        if missed < NO_DIALOGUE_MAX_UNTRANSCRIBED_SECONDS:
+            report['mode'] = 'no-dialogue'
+        else:
+            head = ['speech_not_transcribed'] + head
     report['beta_original_reason'] = (head + sorted(kinds) + ([] if all_unchanged else ['no_replacement_candidate']))[:MAX_REASONS]
     report['beta_original_evidence'] = {
         'version': VERSION, 'published': 0, 'carried_mixed': 0, 'selected_cues': len(selected),

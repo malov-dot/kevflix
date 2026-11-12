@@ -36,6 +36,13 @@ push stream above, still served as the fallback, did: seconds of lag). `ms` is t
 slow average makes the PC send a smaller, lighter picture (`PICTURE_LEVELS` in `relay/youtube_host.py`: the configured size, then 80 % and
 about 67 %, with a lower JPEG quality) and a fast one for 8 s brings it back.
 
+Video transport (F20): `youtube.screen_transport` decides how the page reaches the TV. `"auto"` (the default) streams the page as
+low-latency H.264 video over one WebSocket (`GET /tv-api/youtube/ws?ticket=...`, encoded on the PC's CPU by `relay/youtube_video.py`)
+when the TV can show it (WebCodecs first, then Media Source) and falls back by itself to the JPEG pictures above when it cannot, or when a
+way fails or is slow on that TV (remembered per TV); `"video"` tries the video again even where the TV gave it up; `"jpeg"` switches the
+video off (only the pictures, as before). `video_encoder` (`cpu`, or `nvenc` only when set), `video_height`, `video_fps`, `video_crf`,
+`video_maxrate_kbps`, `video_threads` and `video_capture_quality` tune the stream.
+
 ## Hand-off to the KevFLIX player (stage 3)
 
 When you pick a video in the YouTube view, KevFLIX plays it in its OWN player instead of streaming the PC's picture: the PC downloads

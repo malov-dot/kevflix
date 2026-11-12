@@ -168,7 +168,7 @@ def original_protection_masks(frames, rate, origin, protected_intervals, *, tran
 
 
 def protect_dialogue_mix(original, speech, generated, envelope, *, origin, rate,
-                         channel_layout, protected_intervals, transition_seconds=.01):
+                         channel_layout, protected_intervals, transition_seconds=.01, bed_out=None, bed_gain=None):
     """Mix with exact original PCM on protected natural-short source intervals.
 
     A generated tail overlapping protection is suppressed and explicitly marked
@@ -202,12 +202,30 @@ def protect_dialogue_mix(original, speech, generated, envelope, *, origin, rate,
                                                     transition_seconds=transition_seconds)
     effective_envelope = (envelope*allowed).astype(original.dtype)
     effective_generated = (generated*allowed[:, None]).astype(original.dtype)
+    beds = [] if bed_out is not None else None
+    effective_gain = None
+    if bed_gain is not None:
+        # F26: the duck never reaches into kept original speech (it fades out with the same transition as every other edit).
+        bed_gain = np.asarray(bed_gain, dtype=np.float32)
+        if bed_gain.shape != (len(original),):
+            raise ValueError('Bed gain must have one value per frame')
+        effective_gain = (1.0 - (1.0 - bed_gain) * allowed).astype(np.float32)
     if len(original):
-        mixed, receipt = replace_dialogue(original, speech, effective_generated, effective_envelope, rate=rate)
+        mixed, receipt = replace_dialogue(original, speech, effective_generated, effective_envelope, rate=rate, bed_out=beds,
+                                          bed_gain=effective_gain)
     else:
         mixed = original.copy()
         receipt = {'unchanged_frames': 0, 'original_preserved_outside_replacements': True,
-                   'voice_limited_frames': 0, 'background_peak': 0., 'overrange_samples': 0}
+                   'voice_limited_frames': 0, 'background_peak': 0., 'overrange_samples': 0, 'bed_ducked_frames': 0}
+    if bed_out is not None:
+        # F08: exactly what a second call with an all-zero voice returns (the audibility check used to make that call).
+        bed = np.array(beds[0] if beds else original, dtype=original.dtype, copy=True)
+        silent = effective_envelope == 0          # replace_dialogue returns the original wherever nothing is replaced or added
+        if effective_gain is not None:
+            silent &= effective_gain >= 1          # ... except where the bed was lowered (F26)
+        bed[silent] = original[silent]
+        bed[protected] = original[protected]
+        bed_out.append(bed)
     # Even signed zero and original overrange values survive exactly. An
     # overrange source stays a reported output blocker; it is never normalized.
     mixed[protected] = original[protected]

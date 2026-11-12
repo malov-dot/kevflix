@@ -162,6 +162,13 @@ QWEN3_FULLER_TEMPLATE = ('Translate this {language} sentence into natural Englis
                          'natural phrasing (complete forms instead of terse shortcuts) so that it takes about as long to say as '
                          'the original. Keep exactly the same meaning, including negation and numbers, and add no new information, '
                          'names or details. Output only the English translation.\n\n{text}')
+# F13 (2026-11-11): a line whose plain translation is clearly too short for the time the actor speaks is translated once more
+# with the approved prompt plus ONE sentence that gives a word range. Only a row that carries BOTH min_words and max_words
+# (min <= max) uses this prompt; a row with one budget or none keeps its prompt byte for byte.
+QWEN3_TIMED_TEMPLATE = ('Translate this {language} sentence into natural, accurate English. Keep the meaning exactly, '
+                        'including negation and numbers. A dubbing actor will speak it, so use {range} words if the meaning '
+                        'allows it: prefer complete, natural phrasing over terse shortcuts, and add no new information, names '
+                        'or details. Output only the English translation.\n\n{text}')
 QWEN3_MAX_WORDS = 60
 QWEN3_MAX_NEW_TOKENS = 160
 QWEN3_MAX_BATCH = 16                      # rows per left-padded generate() call
@@ -242,6 +249,10 @@ def row_max_words(value):
 def qwen3_prompt(text, language, max_words=None, min_words=None):
     """The exact user message of the approved demo prompt (max_words: the concise variant for one over-long line; min_words, when
     there is no max_words: the fuller variant for one far-too-short line)."""
+    if row_max_words(max_words) is not None and row_max_words(min_words) is not None and min_words <= max_words:
+        return QWEN3_TIMED_TEMPLATE.format(language=qwen3_language_name(language), text=text,
+                                           range=('about %d' % max_words) if min_words == max_words
+                                           else 'between %d and %d' % (min_words, max_words))
     if row_max_words(max_words) is not None:
         return QWEN3_CONCISE_TEMPLATE.format(language=qwen3_language_name(language), words=max_words, text=text)
     if row_max_words(min_words) is not None:

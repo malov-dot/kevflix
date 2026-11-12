@@ -289,16 +289,34 @@ ROOM_TONE_MARGIN_DB = -3.0            # the fill reaches 3 dB under the surround
 ROOM_TONE_TRIGGER = .5                # ... and only where the bed falls under half (-6 dB) of that level
 
 
+ROOM_TONE_NOISE_VERSION = 'room-tone-noise-v2-fast-length'
+
+
+def _fast_length(length):
+    """The next FFT-friendly length >= ``length`` (5-smooth; a power of two without scipy)."""
+    length = max(1, int(length))
+    try:
+        from scipy.fft import next_fast_len
+        return int(next_fast_len(length, real=True))
+    except Exception:       # scipy missing or too old: any power of two is fast
+        return 1 << (length - 1).bit_length()
+
+
 def _room_tone_noise(quiet_blocks, frame, length, seed):
-    """Unit-RMS noise with the average spectrum of the quiet blocks (comfort noise), reproducible from ``seed``."""
+    """Unit-RMS noise with the average spectrum of the quiet blocks (comfort noise), reproducible from ``seed``.
+
+    F08 (2026-11-11): both transforms run at the next FFT-friendly length and the first ``length`` samples are used. A replaced
+    run of 600,478 samples has the prime factor 300,239; transformed at its exact length it took 12 times as long, and this
+    function was half of the whole mix stage. Level and spectrum are unchanged; the individual samples differ from v1."""
     import numpy as np
     rng = np.random.default_rng(int(seed) & 0xFFFFFFFF)
     window = np.hanning(frame)
     power = np.mean(np.abs(np.fft.rfft(quiet_blocks * window[None, :], axis=1)) ** 2, axis=0)
     amplitude = np.sqrt(power)
-    white = np.fft.rfft(rng.standard_normal(length))
+    size = _fast_length(length)
+    white = np.fft.rfft(rng.standard_normal(size))
     shape = np.interp(np.linspace(0, 1, len(white)), np.linspace(0, 1, len(amplitude)), amplitude)
-    noise = np.fft.irfft(white * shape, n=length)
+    noise = np.fft.irfft(white * shape, n=size)[:length]
     level = float(np.sqrt(np.mean(noise ** 2)))
     return noise / level if level > 0 else noise
 
@@ -361,9 +379,31 @@ def fill_room_tone(bed, original, envelope, rate):
     return out, filled
 
 
-def replace_dialogue(original, speech, generated, envelope, rate=None):
+BED_DUCK_VERSION = 'bed-duck-v1'
+BED_DUCK_MAX_DB = 3.0            # decided 2026-11-11 on the owner's behalf (he delegated design choices): never more than 3 dB, and only under a take that is still masked
+BED_DUCK_FADE_SECONDS = .06
+
+
+def duck_envelope(frames, rate, origin, spans, depth_db, fade_seconds=BED_DUCK_FADE_SECONDS):
+    """Per-frame gain (float32, 1.0 = untouched) that lowers the bed by ``depth_db`` (clamped to 0..BED_DUCK_MAX_DB) under
+    each absolute ``(start, end)`` span, reaching the full depth exactly at the span edges through ``fade_seconds`` ramps that
+    lie OUTSIDE the span. Overlapping spans do not add up."""
+    import numpy as np
+    depth = min(BED_DUCK_MAX_DB, max(0.0, float(depth_db)))
+    gain = np.ones(frames, dtype=np.float32)
+    if depth <= 0 or not spans:
+        return gain
+    wide = [(float(a) - fade_seconds, float(b) + fade_seconds) for a, b in spans if float(b) > float(a)]
+    shape = replacement_envelope(frames, rate, origin, wide, fade_seconds=fade_seconds)
+    return (1.0 - (1.0 - 10 ** (-depth / 20)) * shape).astype(np.float32)
+
+
+def replace_dialogue(original, speech, generated, envelope, rate=None, bed_out=None, bed_gain=None):
     """Preserve unscheduled samples; reduce only the added voice if peaks collide. With ``rate`` the room tone is kept where the
-    removal of the original speech would leave the bed silent (see fill_room_tone)."""
+    removal of the original speech would leave the bed silent (see fill_room_tone). ``bed_out`` (a list, F08) receives the bed
+    this mix was built on (original minus the removed speech, room tone filled, ducked when ``bed_gain`` is given), before any
+    voice is added. ``bed_gain`` (F26, per-frame gain from duck_envelope, or None) lowers the bed under a masked take; frames
+    it lowers count as changed."""
     import numpy as np
     if original.shape != speech.shape or generated.shape != original.shape or len(envelope) != len(original):
         raise ValueError('Dialogue tracks must share geometry and timeline')
@@ -371,11 +411,24 @@ def replace_dialogue(original, speech, generated, envelope, rate=None):
     room_tone_runs = 0
     if rate:
         bed, room_tone_runs = fill_room_tone(bed, original, envelope, rate)
-    # Headroom limiting never turns down the soundtrack to accommodate a dub.
+    ducked = None
+    if bed_gain is not None:
+        bed_gain = np.asarray(bed_gain, dtype=np.float32)
+        if bed_gain.shape != (len(original),) or not np.isfinite(bed_gain).all() or np.any(bed_gain <= 0) or np.any(bed_gain > 1):
+            raise ValueError('Bed gain must be one finite value in (0, 1] per frame')
+        ducked = bed_gain < 1
+        if ducked.any():
+            bed = (bed * bed_gain[:, None]).astype(bed.dtype)
+    if bed_out is not None:
+        bed_out.append(bed)
+    # Headroom limiting never turns down the soundtrack to accommodate a dub (F26's small duck under a masked take is the one
+    # stated exception and is applied above, to the bed, never through this limiter).
     headroom = np.maximum(0, .999-np.abs(bed))
     gain = np.minimum(1, headroom/np.maximum(1e-8,np.abs(generated))).min(axis=1)
     result = bed + generated*gain[:,None]
     untouched = (envelope == 0) & ~np.any(generated != 0,axis=1)
+    if ducked is not None:
+        untouched &= ~ducked
     result[untouched] = original[untouched]
     if not np.isfinite(result).all():
         raise ValueError('Dialogue mix is not finite')
@@ -384,4 +437,5 @@ def replace_dialogue(original, speech, generated, envelope, rate=None):
                     'voice_limited_frames':int(np.count_nonzero(gain<.999)),
                     'background_peak':float(np.max(np.abs(bed))) if bed.size else 0,
                     'overrange_samples':int(np.count_nonzero(np.abs(result)>1)),
-                    'room_tone_runs':room_tone_runs}
+                    'room_tone_runs':room_tone_runs,
+                    'bed_ducked_frames':int(ducked.sum()) if ducked is not None else 0}

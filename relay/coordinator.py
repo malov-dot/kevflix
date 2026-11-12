@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import os
 import shutil
@@ -126,6 +127,9 @@ class _ClaimedStore:
 class Coordinator:
     # enqueue(resume_cancelled=True): an explicit reopen may reactivate a matching cancelled job.
     RESUME_CANCELLED_VERSION = 1
+    # background(): the film just watched, finished with nobody watching. Far above every playback priority (those are
+    # negative, or 0..1100).
+    BACKGROUND_PRIORITY = 1_000_000_000
 
     def __init__(self, config, store):
         self.config, self.store = config, store
@@ -149,9 +153,24 @@ class Coordinator:
         self._xt_last_activity = 0.
         self._configuration_lock = threading.RLock()
         self._reconfiguring = False
+        self._background = set()            # id of the job handed to background() (at most one stays)
+        self.playback_active = lambda: False    # TVService replaces it: True while any TV playback session exists
 
     def start(self):
         self.store.recover()
+        # A background job of an earlier run continues only while tv.background_finish is on; otherwise it is cancelled
+        # (its finished windows stay in the cache).
+        try:
+            keep = self.config["tv"].get("background_finish") is True
+        except (KeyError, TypeError, AttributeError):
+            keep = False
+        for job in self.store.jobs():
+            if job["payload"].get("background") is True and job["state"] not in ("complete", "cancelled", "error", "needs_review"):
+                if keep and not self._background:
+                    self._background.add(job["id"])
+                else:
+                    self.store.update_job(job["id"], "cancelled", background=False,
+                                          message="Cancelled; completed chunks retained")
         from . import movie_pipeline as _movie
         # Exclusive producer selection: movie_pipeline.enabled -> MoviePipeline ONLY; otherwise the serial loop ONLY.
         # Never both: each owns the process's single movie GPU LeaseHub and AnalysisService.
@@ -416,6 +435,11 @@ class Coordinator:
                 self.wake.set()
                 return self.store.job(old["id"])
         if old:
+            if old["payload"].get("background") is True:
+                # A viewer opened the film again: it is a foreground job from here on; its finished windows are reused.
+                self.store.update_job(old["id"], background=False)
+                self._background.discard(old["id"])
+                old = self.store.job(old["id"])
             if mode == "prepared":
                 self.request_all(old["id"])
             elif initial_index is not None:
@@ -459,6 +483,8 @@ class Coordinator:
             self.store.request_chunk(job_id, next_index,
                                      {"start": next_index * seconds,
                                       "end": min(spec["duration"], (next_index + 1) * seconds)}, priority + 10)
+        if self._background and job_id not in self._background and self.movie is not None:
+            self.movie.yield_background(self._background)      # a film is being watched: background windows give way now
         self.wake.set()
 
     def request_all(self, job_id):
@@ -466,7 +492,43 @@ class Coordinator:
         for index in range(job["payload"]["chunks_total"]):
             self.request(job_id, index, 100 + index)
 
+    def background(self, job_id):
+        """Finish the film just watched with nobody watching (tv.background_finish; called by TVService when the linger
+        of the job's last session is over). Every chunk that is not ready is queued at BACKGROUND_PRIORITY + idx; ready
+        chunks are kept as they are. Only this job: any earlier background job is cancelled. MoviePipeline claims
+        background chunks only while its gate is open (relay/background_gate.py) and no other job is unfinished, and
+        request() of any other job makes the windows in flight give way. Returns False when there is nothing to
+        continue (missing, cancelled, error, needs_review, complete, or not an on-demand job)."""
+        job = self.store.job(job_id)
+        if not job or job["state"] in ("cancelled", "error", "needs_review", "complete") \
+                or job["payload"].get("mode") != "ondemand":
+            return False
+        for other in [ident for ident in self._background if ident != job_id]:
+            self.cancel(other)
+        spec = job["payload"]
+        seconds = spec["segment_seconds"]
+        self.store.update_job(job_id, background=True, background_since=time.time())
+        self._background.add(job_id)
+        self.store.set_unfinished_priority(job_id, self.BACKGROUND_PRIORITY)
+        for index in range(spec["chunks_total"]):
+            self.store.request_chunk(job_id, index, {"start": index * seconds,
+                                                     "end": min(spec["duration"], (index + 1) * seconds)},
+                                     self.BACKGROUND_PRIORITY + index)
+        self.store.event(job_id, "background")
+        self.wake.set()
+        return True
+
+    def background_jobs(self):
+        """The background job that still has work, as a set (a finished, cancelled or reopened one is forgotten here)."""
+        for job_id in list(self._background):
+            job = self.store.job(job_id)
+            if not job or job["state"] in ("complete", "cancelled", "error", "needs_review") \
+                    or job["payload"].get("background") is not True:
+                self._background.discard(job_id)
+        return self._background
+
     def cancel(self, job_id):
+        self._background.discard(job_id)
         self.store.update_job(job_id, "cancelled", message="Cancelled; completed chunks retained")
         if self.movie is not None:
             self.movie.cancel_job(job_id)
@@ -491,8 +553,9 @@ class Coordinator:
         self.summarize(job_id)
         self.wake.set()
 
-    def _cached_audio_problem(self, payload, revision):
-        """None when a ready/approved chunk's recorded audio exists and matches its sha256."""
+    def _cached_audio_problem(self, payload, revision, reads=None):
+        """None when a ready/approved chunk's recorded audio exists and matches its sha256. `reads`: a list that gets
+        the size of every file that had to be read (hashed) for the answer."""
         audio, sha = payload.get("audio"), payload.get("sha256")
         if not audio or not sha:
             return "missing audio receipt"
@@ -503,13 +566,21 @@ class Coordinator:
             stat = path.stat()
         except OSError:
             return "audio file missing"
-        if (str(path), stat.st_mtime_ns, stat.st_size, sha) in self.hash_cache:
+        key = (str(path), stat.st_mtime_ns, stat.st_size, sha)
+        if key in self.hash_cache or ("sha256",) + key in self.hash_cache:
             return None
+        if reads is not None:
+            reads.append(stat.st_size)
         try:
             digest = file_hash(path)
         except OSError:
             return "audio unreadable"
-        return None if digest == sha else "audio sha256 mismatch"
+        if digest != sha:
+            return "audio sha256 mismatch"
+        # F24: remembered for this file state (path, mtime, size, hash), so a second open in the same server run does
+        # not read the audio again. Its own key: audio_chunk() still checks the WAV format once under the plain key.
+        self.hash_cache[("sha256",) + key] = True
+        return None
 
     def _reopen_cancelled(self, job):
         """Explicit reopen of a matching cancelled job; None when it must not be resumed.
@@ -517,6 +588,7 @@ class Coordinator:
         Audio is hashed with no DB lock held; the store then rechecks job state, revision
         and every chunk hash inside one transaction and refuses if anything changed.
         """
+        began, reads = time.perf_counter(), []
         for _ in range(3):
             revision = int(job["payload"].get("revision", 1))
             verified, invalid = {}, {}
@@ -524,7 +596,7 @@ class Coordinator:
                 if chunk["state"] == "error":
                     return None
                 if chunk["state"] in ("ready", "approved"):
-                    problem = self._cached_audio_problem(chunk["payload"], revision)
+                    problem = self._cached_audio_problem(chunk["payload"], revision, reads)
                     if problem:
                         invalid[chunk["idx"]] = (chunk["payload"].get("sha256"), problem)
                     else:
@@ -535,6 +607,11 @@ class Coordinator:
             if outcome == "reactivated":
                 self.store.event(job["id"], "resumed", kept=len(verified),
                                  invalidated={str(i): v[1] for i, v in sorted(invalid.items())})
+                # F24: what this reopen cost. read = audio files hashed now; 0 when every kept window was already
+                # verified in this server run.
+                logging.info("dub_reopen %s", json.dumps({
+                    "job_id": job["id"], "kept": len(verified), "invalid": len(invalid), "read": len(reads),
+                    "read_mb": round(sum(reads) / 1e6, 1), "ms": round((time.perf_counter() - began) * 1000)}))
             job = self.store.job(job["id"])
             if job is None or job["state"] == "error":
                 return None
@@ -638,7 +715,8 @@ class Coordinator:
         job = self.store.job(job_id)
         if not job or job["state"] == "cancelled":
             return
-        chunks = self.store.chunks(job_id)
+        light = getattr(self.store, "chunk_rows", None)      # states only: no receipt is decoded
+        chunks = light(job_id) if callable(light) else self.store.chunks(job_id)
         ready = sum(x["state"] in ("ready", "approved") for x in chunks)
         if any(x["state"] == "needs_review" for x in chunks):
             state = "needs_review"

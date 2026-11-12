@@ -45,7 +45,10 @@
       pictures: s.n, fps: Math.round(10 * s.n / seconds) / 10, kb: Math.round(s.bytes / n / 1024), waitMs: Math.round(s.wait / n),
       xferMs: Math.round(s.xfer / n), xferMax: s.xferMax, decodeMs: Math.round(s.dec / n), decodeMax: s.decMax,
       lagAvg: Math.round(s.lag / Math.max(1, s.lagN)), lagMax: s.lagMax,
-      keys: keys.length, keyMedian: keys.length ? keys[keys.length >> 1] : 0, keyMax: keys.length ? keys[keys.length - 1] : 0, pull: pullOk ? 1 : 0 } }, 5000).catch(function () {});
+      keys: keys.length, keyMedian: keys.length ? keys[keys.length >> 1] : 0, keyMax: keys.length ? keys[keys.length - 1] : 0, pull: pullOk ? 1 : 0,
+      path: path, resets: resets, errs: decodeErrors, queueMax: queueMax } }, 5000).catch(function () {});
+    queueMax = 0;
+    noteWindow(keys.length ? keys[keys.length >> 1] : 0, keys.length);
   }
   // Once per page load: which browser features this TV has for a future video-based picture (the PC reads it from its log).
   var capsReported = false;
@@ -72,6 +75,270 @@
     stats.xfer += xfer; if (xfer > stats.xferMax) stats.xferMax = xfer;
     stats.dec += dec; if (dec > stats.decMax) stats.decMax = dec;
     if (keyAt) { stats.keys.push(shownAt - keyAt); keyAt = 0; }
+  }
+
+  // ---- F20: the picture as low-latency video ------------------------------------------------------------------------------
+  // The PC encodes the page as H.264 and pushes it over ONE WebSocket (/tv-api/youtube/ws) that also carries the remote keys, so a key and
+  // the picture it causes share a connection that is already open. Three ways to show the page, tried in this order, chosen by the TV:
+  //   'webcodecs'  the TV's own decoder through VideoDecoder, drawn on a canvas: a frame is on screen the moment it is decoded;
+  //   'mse'        the same stream as fragmented MP4 in a <video> through Media Source, kept at its newest frame;
+  //   'jpeg'       the pictures (pull, or the push stream): what the TV did before, always available.
+  // A way that shows no picture in time, loses its decoder twice or stays slow (key to picture above KEY_SLOW_MS in two reports running) is
+  // left at once, for this visit; after two such visits (or one slow one) this TV remembers it (localStorage) and starts with the next way.
+  // VIDEO_VERSION: raise it when this code changes, the memory is then forgotten and every way is tried again.
+  var VIDEO_VERSION = 1, PATHS = ['webcodecs', 'mse', 'jpeg'], MEMORY_KEY = 'kevflix-youtube-path';
+  var VIDEO_FIRST_MS = 4000, VIDEO_SILENT_MS = 15000, HEARTBEAT_MS = 5000, KEY_SLOW_MS = 400, DECODE_QUEUE_MAX = 6, APPEND_QUEUE_MAX = 60;
+  var path = 'jpeg', videoOffered = false, videoForced = false, sessionFailed = {}, retried = {}, sock = null, sockOpen = false, epoch = -1, needKey = true;
+  var decoder = null, mediaSource = null, sourceBuffer = null, appendQueue = [], pending = [], videoFps = 30, shownOnSocket = 0;
+  var videoFirstTimer = 0, heartbeatTimer = 0, frameTimer = 0, frameWatch = 0, lastMessageAt = 0, resets = 0, decodeErrors = 0, slowWindows = 0, queueMax = 0;
+
+  function loadMemory() {
+    var memory = null;
+    try { memory = JSON.parse(localStorage.getItem(MEMORY_KEY) || 'null'); } catch (ignore) {}
+    return memory && memory.v === VIDEO_VERSION && memory.bad && memory.ms ? memory : { v: VIDEO_VERSION, bad: {}, ms: {} };
+  }
+  function saveMemory(memory) { try { localStorage.setItem(MEMORY_KEY, JSON.stringify(memory)); } catch (ignore) {} }
+  function capable(name) {
+    if (name === 'jpeg') return true;
+    if (!videoOffered || typeof WebSocket !== 'function') return false;
+    try {
+      if (name === 'webcodecs') return typeof VideoDecoder === 'function' && typeof EncodedVideoChunk === 'function';
+      return typeof MediaSource === 'function' && MediaSource.isTypeSupported('video/mp4; codecs="avc1.42c028"');
+    } catch (ignore) { return false; }
+  }
+  function choosePath() {
+    var memory = loadMemory();
+    for (var i = 0; i < PATHS.length; i++) {
+      var name = PATHS[i], mark = memory.bad[name];
+      if (capable(name) && !sessionFailed[name] && (videoForced || !(mark && mark.n >= 2))) return name;
+    }
+    return 'jpeg';
+  }
+  function startPath(mine, why) {
+    if (videoOffered) {                                          // one line in the PC's log: which way this TV uses now, and why it left the last one
+      call('diagnostic', { stage: 'youtube-path', youtube: { path: path, why: String(why || '').slice(0, 80),
+        webcodecs: capable('webcodecs') ? 1 : 0, mse: capable('mse') ? 1 : 0, v: VIDEO_VERSION } }, 5000).catch(function () {});
+    }
+    if (path === 'jpeg') { showStream(mine); return; }
+    openSocket(mine);
+  }
+  // Leave the way in use and start the next one. strike 1 = count it against this way on this TV; 2 = remember it at once (measured slow).
+  function failPath(why, strike) {
+    if (path === 'jpeg' || !active) return;
+    var memory = loadMemory(), mark = memory.bad[path] || { n: 0 };
+    sessionFailed[path] = why;
+    if (strike) { memory.bad[path] = { n: strike === 2 ? 2 : mark.n + 1, why: String(why).slice(0, 60) }; saveMemory(memory); }
+    stopVideo();
+    path = choosePath();
+    startPath(serial, why);
+  }
+  function wsSend(value) { try { sock.send(JSON.stringify(value)); return true; } catch (ignore) { return false; } }
+  function openSocket(mine) {
+    var socket, place = window.location;
+    epoch = -1; needKey = true; pending = []; shownOnSocket = 0; lastMessageAt = Date.now();
+    try {
+      socket = new WebSocket((place.protocol === 'https:' ? 'wss://' : 'ws://') + place.host + '/tv-api/youtube/ws?ticket=' +
+        encodeURIComponent(ticket) + '&format=' + (path === 'webcodecs' ? 'avc' : 'fmp4'));
+      socket.binaryType = 'arraybuffer';
+    } catch (error) { failPath('socket'); return; }
+    sock = socket;
+    socket.onopen = function () { if (sock === socket) { sockOpen = true; pump(); } };
+    socket.onmessage = function (event) {
+      if (sock !== socket || mine !== serial) return;
+      lastMessageAt = Date.now();
+      try { if (typeof event.data === 'string') onText(mine, event.data); else onBinary(mine, event.data); }
+      catch (error) { decoderFailed(mine, (error && error.name) || 'error'); }
+    };
+    socket.onclose = socket.onerror = function () {
+      if (sock !== socket) return;
+      sock = null; sockOpen = false;
+      if (mine !== serial || !active) return;
+      if (state === 'live' && !retried[path]) { retried[path] = 1; closeDecoder(); closeMedia(); openSocket(mine); return; }   // once per visit: the PC may have restarted
+      failPath('socket');
+    };
+    clearTimeout(videoFirstTimer);
+    videoFirstTimer = setTimeout(function () { if (mine === serial && sock === socket && !shownOnSocket) failPath('no picture', 1); }, VIDEO_FIRST_MS);
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = setInterval(function () {
+      if (sock !== socket) return;
+      if (Date.now() - lastMessageAt > VIDEO_SILENT_MS) { failPath('silent'); return; }
+      if (sockOpen) wsSend({ t: 'hb', n: Date.now() % 1000000 });
+    }, HEARTBEAT_MS);
+  }
+  function onText(mine, text) {
+    var message = JSON.parse(text);
+    if (message.t === 'config') { epoch = message.epoch; configure(mine, message); }
+    else if (message.t === 'play') considerPlay(message.play);
+    else if (message.t === 'error' && !message.key) failPath('pc: ' + message.error);
+  }
+  function bytesOf(text) {
+    var raw = atob(text), out = new Uint8Array(raw.length);
+    for (var i = 0; i < raw.length; i++) out[i] = raw.charCodeAt(i);
+    return out;
+  }
+  // A new stream begins (the first one, or after a reset): set up the decoder for it.
+  function configure(mine, config) {
+    needKey = true; pending = []; videoFps = config.fps || 30;
+    closeDecoder(); closeMedia();
+    $('youtube-screen').hidden = true;
+    if (path === 'webcodecs') {
+      var canvas = $('youtube-canvas'), context;
+      canvas.width = config.width; canvas.height = config.height;
+      context = canvas.getContext('2d');
+      decoder = new VideoDecoder({
+        output: function (frame) {
+          try { context.drawImage(frame, 0, 0, canvas.width, canvas.height); } finally { frame.close(); }
+          pictureShown(mine, pending.shift());
+        },
+        error: function (error) { decoderFailed(mine, (error && error.name) || 'decoder'); }
+      });
+      decoder.configure({ codec: config.codec, description: bytesOf(config.description), codedWidth: config.width, codedHeight: config.height,
+        hardwareAcceleration: 'prefer-hardware', optimizeForLatency: true });
+      canvas.hidden = false;
+      return;
+    }
+    var video = $('youtube-video'), source = new MediaSource();
+    mediaSource = source; appendQueue = [];
+    video.muted = true; video.hidden = false;
+    video.onerror = function () { decoderFailed(mine, 'video element'); };
+    source.addEventListener('sourceopen', function () {
+      if (mediaSource !== source) return;
+      try {
+        sourceBuffer = source.addSourceBuffer('video/mp4; codecs="' + config.codec + '"');
+        sourceBuffer.addEventListener('updateend', function () { if (mediaSource === source) drain(mine); });
+        sourceBuffer.addEventListener('error', function () { decoderFailed(mine, 'source buffer'); });
+        drain(mine);
+      } catch (error) { decoderFailed(mine, (error && error.name) || 'media source'); }
+    });
+    video.src = URL.createObjectURL(source);
+    watchFrames(mine, video);
+  }
+  // One binary message: 8 bytes (kind 1 = MP4 start, 2 = frame; flags bit 0 = key frame; stream epoch; frame number), then the data.
+  function onBinary(mine, buffer) {
+    if (buffer.byteLength < 8 || epoch < 0) return;
+    var view = new DataView(buffer), kind = view.getUint8(0), key = view.getUint8(1) & 1, number = view.getUint32(4);
+    if (view.getUint16(2) !== (epoch & 0xFFFF)) return;          // left over from a stream that was reset
+    var data = new Uint8Array(buffer, 8), now = Date.now();
+    if (kind === 2) {
+      if (needKey && !key) return;
+      needKey = false;
+    }
+    if (path === 'webcodecs') {
+      if (kind !== 2 || !decoder || decoder.state !== 'configured') return;
+      if (decoder.decodeQueueSize > queueMax) queueMax = decoder.decodeQueueSize;
+      if (decoder.decodeQueueSize > DECODE_QUEUE_MAX) { requestReset('decode queue'); return; }   // the TV decodes slower than frames arrive: start again at the newest picture
+      pending.push({ n: number, at: now, bytes: data.byteLength });
+      decoder.decode(new EncodedVideoChunk({ type: key ? 'key' : 'delta', timestamp: Math.round(number * 1000000 / videoFps), data: data }));
+      return;
+    }
+    if (kind === 2) pending.push({ n: number, at: now, bytes: data.byteLength });
+    appendQueue.push(data);
+    if (appendQueue.length > queueMax) queueMax = appendQueue.length;
+    if (appendQueue.length > APPEND_QUEUE_MAX) { requestReset('append queue'); return; }
+    drain(mine);
+  }
+  // Media Source: append everything that has arrived in one go, keep the playhead at the newest frame, forget what was shown.
+  function drain(mine) {
+    var video = $('youtube-video');
+    if (mine !== serial || !sourceBuffer || sourceBuffer.updating || !mediaSource || mediaSource.readyState !== 'open') return;
+    try {
+      if (appendQueue.length) {
+        var total = 0, offset = 0, i;
+        for (i = 0; i < appendQueue.length; i++) total += appendQueue[i].byteLength;
+        var joined = new Uint8Array(total);
+        for (i = 0; i < appendQueue.length; i++) { joined.set(appendQueue[i], offset); offset += appendQueue[i].byteLength; }
+        appendQueue = [];
+        sourceBuffer.appendBuffer(joined);
+        return;
+      }
+      var ranges = video.buffered;
+      if (!ranges.length) return;
+      var start = ranges.start(0), end = ranges.end(ranges.length - 1);
+      if (video.paused) { var playing = video.play(); if (playing && playing.catch) playing.catch(function () {}); }
+      if (end - video.currentTime > 0.25 || video.currentTime < start) video.currentTime = Math.max(start, end - 0.04);
+      if (end - start > 12) sourceBuffer.remove(start, end - 6);
+    } catch (error) { decoderFailed(mine, (error && error.name) || 'append'); }
+  }
+  // Media Source: which frame is on screen (for the first-picture check and the key-to-picture time).
+  function watchFrames(mine, video) {
+    var watch = ++frameWatch;
+    function upTo(seconds) {
+      var last = null;
+      while (pending.length && pending[0].n / videoFps <= seconds + 0.001) last = pending.shift();
+      if (last) pictureShown(mine, last);
+    }
+    clearInterval(frameTimer);
+    if (typeof video.requestVideoFrameCallback === 'function') {
+      var next = function (now, shown) { if (watch !== frameWatch || mine !== serial) return; upTo(shown.mediaTime); video.requestVideoFrameCallback(next); };
+      video.requestVideoFrameCallback(next);
+    } else {
+      frameTimer = setInterval(function () { if (watch === frameWatch && mine === serial) upTo(video.currentTime); }, 16);
+    }
+  }
+  function pictureShown(mine, item) {
+    if (mine !== serial || !item) return;
+    shownOnSocket += 1;
+    if (shownOnSocket === 1) {                                   // this way works: an earlier single strike against it is forgotten
+      clearTimeout(videoFirstTimer);
+      var memory = loadMemory(), mark = memory.bad[path];
+      if (mark && mark.n < 2) { delete memory.bad[path]; saveMemory(memory); }
+    }
+    firstPicture(mine);
+    notePicture(item.bytes, item.at, item.at, item.at, Date.now());
+  }
+  // The decoder is behind or broken: ask the PC for a new stream (it begins with a key frame of the page as it is now).
+  function requestReset(why) {
+    resets += 1;
+    if (resets > 3) { failPath('resets: ' + why, 1); return; }
+    epoch = -2; needKey = true; pending = []; appendQueue = [];   // everything still on its way belongs to the old stream
+    if (!sockOpen || !wsSend({ t: 'reset', why: String(why).slice(0, 40) })) failPath('socket');
+  }
+  function decoderFailed(mine, what) {
+    if (mine !== serial || path === 'jpeg' || !active) return;
+    decodeErrors += 1;
+    closeDecoder(); closeMedia();
+    if (decodeErrors >= 2) failPath('decoder: ' + what, 1); else requestReset(what);
+  }
+  function closeDecoder() {
+    var old = decoder;
+    decoder = null;
+    if (old) { try { if (old.state !== 'closed') old.close(); } catch (ignore) {} }
+  }
+  function closeMedia() {
+    var video = $('youtube-video');
+    frameWatch += 1; clearInterval(frameTimer);
+    if (!mediaSource) return;
+    mediaSource = null; sourceBuffer = null; appendQueue = [];
+    video.onerror = null;
+    try { video.pause(); } catch (ignore) {}
+    if (video.src) { try { URL.revokeObjectURL(video.src); } catch (ignore) {} }
+    video.removeAttribute('src');
+    try { video.load(); } catch (ignore) {}
+  }
+  function stopVideo() {
+    var socket = sock;
+    clearTimeout(videoFirstTimer); clearInterval(heartbeatTimer);
+    sock = null; sockOpen = false; epoch = -1; pending = [];
+    if (socket) { try { socket.close(); } catch (ignore) {} }
+    closeDecoder(); closeMedia();
+    $('youtube-canvas').hidden = true; $('youtube-video').hidden = true; $('youtube-screen').hidden = false;
+  }
+  // Every 10 s report (reportStats): the key-to-picture median of this way. Slow twice running: leave it and remember.
+  function noteWindow(median, count) {
+    if (count < 3) return;
+    var memory = loadMemory();
+    memory.ms[path] = median;
+    if (path !== 'jpeg') {
+      slowWindows = median > KEY_SLOW_MS ? slowWindows + 1 : 0;
+      saveMemory(memory);
+      if (slowWindows >= 2) { slowWindows = 0; failPath('slow ' + median + ' ms', 2); }
+      return;
+    }
+    PATHS.forEach(function (name) {                              // a way left for being slow that was still faster than these pictures is tried again next visit
+      var mark = memory.bad[name], was = mark && /^slow (\d+)/.exec(mark.why || '');
+      if (was && Number(was[1]) < median) delete memory.bad[name];
+    });
+    saveMemory(memory);
   }
 
   function token() { try { return localStorage.getItem('sem-tv-token') || ''; } catch (ignore) { return ''; } }
@@ -106,6 +373,11 @@
     pump();
   }
   function pump() {
+    // F20: while the video socket is open the keys travel on it, in order and without a request each; the PC answers a picked video with 'play'
+    while (sockOpen && sock && !sending && queue.length) {
+      if (!wsSend(Object.assign({ t: 'key' }, queue[0]))) break;
+      queue.shift(); failures = 0;
+    }
     if (sending || !queue.length) return;
     sending = true;
     var item = queue.shift();
@@ -133,7 +405,9 @@
       ticket = result.screen_ticket || '';
       pullOk = result.frame_pull === true && typeof fetch === 'function' && typeof URL === 'function' && typeof URL.createObjectURL === 'function';
       seenSeq = Math.max(seenSeq, result.play_seq || 0);         // a selection made before this view opened is not a new pick
-      showStream(mine);
+      videoOffered = result.video === true; videoForced = result.video_forced === true;
+      path = choosePath();                                       // F20: video through the TV's decoder when it can, else the pictures
+      startPath(mine, '');
     }).catch(function (error) {
       if (mine !== serial || !active) return;
       setState('error', ((error && error.message) || 'YouTube could not start') + '. Press OK to retry, or Back to return.');
@@ -151,6 +425,7 @@
     }
   }
   function stopPicture() {
+    stopVideo();
     if (pullAbort) { try { pullAbort.abort(); } catch (ignore) {} pullAbort = null; }
     if (pullUrl) { try { URL.revokeObjectURL(pullUrl); } catch (ignore) {} pullUrl = ''; }
     lastCounter = 0; lastMs = 0; pullFailures = 0;
@@ -270,6 +545,7 @@
   function open() {
     if (active || handoff) return;
     active = true; failures = 0; queue = []; sending = false; notice = '';
+    sessionFailed = {}; retried = {}; resets = 0; decodeErrors = 0; slowWindows = 0;
     returnFocus = document.activeElement;
     releaseAll(false);
     Object.keys(downNow).forEach(function (code) { held[code] = 'stale'; });   // the key that opened the view is not a YouTube key

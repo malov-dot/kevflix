@@ -14,7 +14,7 @@
     <button id="nav-search" class="nav" data-page="search"><span class="symbol">⌕</span>Search</button>
     <button id="nav-settings" class="nav" data-page="settings"><span class="symbol">⚙</span>Settings</button>
   </nav>
-  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.4.68</small></div>
+  <div class="sidebar-bottom"><span class="local-dot"></span> Local network<br><small id="version">0.4.69</small></div>
 </aside>
 <main id="main">
   <header id="header"><div><small id="eyebrow">YOUR COLLECTION</small><h1 id="heading">Home</h1></div><span id="worker-mode"></span></header>
@@ -84,7 +84,7 @@
   <select id="watch-mode"><option value="balanced">Balanced</option><option value="quiet">Quiet</option><option value="ask-only">Only when asked</option></select>
   <select id="progress-sync"><option value="off">Off</option><option value="on">Save to Plex</option></select>
 </div>
-<section id="youtube-view" hidden aria-label="YouTube"><img id="youtube-screen" alt=""><div id="youtube-status" role="status" hidden></div></section>
+<section id="youtube-view" hidden aria-label="YouTube"><img id="youtube-screen" alt=""><canvas id="youtube-canvas" hidden></canvas><video id="youtube-video" hidden muted playsinline></video><div id="youtube-status" role="status" hidden></div></section>
 <div id="notice" role="status" aria-live="polite" hidden></div>
 <script src="no-native-hls.js"></script>
 <script src="youtube.js"></script>

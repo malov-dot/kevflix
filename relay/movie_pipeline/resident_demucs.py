@@ -55,6 +55,9 @@ def _faulted(error, kind, code, detail=None):
     return error
 
 
+SELF_REPORT_ALLOWANCE_MIB = 512        # F21: CUDA context of the Demucs worker, outside the PyTorch allocator
+
+
 class ResidentDemucs:
     def __init__(self, *, python, relay_dir, model_dir, model_pins, threads, device, lease_source, log_path,
                  resource_yield, cancelled, emit=None, idle_seconds=IDLE_UNLOAD_S, vram_reader=None):
@@ -448,6 +451,14 @@ class ResidentDemucs:
                 if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) == worker_pid and parts[1].isdigit():
                     mib = int(parts[1])
                     self.vram_method = 'nvidia-smi --query-compute-apps used_memory'
+        if mib is None:
+            # F21: last resort, the worker's own validated figure of its latest window (PyTorch peak reserved) plus an
+            # allowance for the CUDA context PyTorch does not count.
+            memory = self._last_window_memory
+            peak = memory.get('peak_reserved_bytes') if isinstance(memory, dict) and memory.get('pid') == worker_pid else None
+            if isinstance(peak, int) and not isinstance(peak, bool) and peak > 0:
+                mib = int(peak // (1 << 20)) + SELF_REPORT_ALLOWANCE_MIB
+                self.vram_method = 'worker peak_reserved_bytes + %d MiB allowance (no outside reader saw the process)' % SELF_REPORT_ALLOWANCE_MIB
         view.report_resident(child.pid, mib)              # None keeps the pid active-unknown
         if mib is not None:
             self.peak_mib = max(getattr(self, 'peak_mib', 0), mib)

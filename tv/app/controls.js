@@ -10,6 +10,8 @@
   'use strict';
   var SVGNS = 'http://www.w3.org/2000/svg';
   var HIDE_MS = 5000, NOTICE_MS = 5000, UPNEXT_SECONDS = 5, REQUEST_MS = 8000, MENU_ROWS = 8;
+  var SEEK_COMMIT_MS = 600;            // seek presses are collected; ONE seek is sent this long after the last press (0 = every press seeks at once, as before)
+  var PLEX_UPNEXT_SECONDS = 10;        // the next Plex episode starts by itself this many seconds after an episode ends, Back cancels (0 = off: the Next button is focused instead)
   var SEEK = { plex: { back: 10, forward: 30 }, youtube: { back: 10, forward: 10 } };
   var SPEEDS = [0.5, 0.75, 1, 1.25, 1.5, 2];
   var LEVELS = [1, 0.75, 0.5, 0.25, 0];
@@ -17,7 +19,7 @@
   var WATCH_MODES = [{ value: 'balanced', label: 'Balanced reactions' }, { value: 'quiet', label: 'Quiet reactions' }, { value: 'ask-only', label: 'Only when I ask Sem' }];
   // Samsung remote key codes (and the desktop equivalents) -> actions.
   var KEY_CODES = { 37: 'left', 38: 'up', 39: 'right', 40: 'down', 13: 'ok', 10009: 'back', 27: 'back', 8: 'back',
-    415: 'play', 19: 'pause', 10252: 'playpause', 32: 'playpause', 417: 'ff', 412: 'rw' };
+    415: 'play', 19: 'pause', 10252: 'playpause', 32: 'playpause', 417: 'ff', 412: 'rw', 10232: 'prevkey', 10233: 'nextkey' };
   var KEY_NAMES = { ArrowLeft: 37, ArrowUp: 38, ArrowRight: 39, ArrowDown: 40, Enter: 13, Backspace: 8, Escape: 27 };
 
   // ================================================================================================================================
@@ -213,10 +215,11 @@
   // State
   // ================================================================================================================================
   var S = { mode: null, sessionId: '', status: null, visible: false, peek: false, zone: 'buttons', focus: 'playpause', scrub: null, scrubRepeats: 0,
-    menu: null, notice: '', msg: '', upnext: null, history: [], switching: false, speed: 1 };
+    menu: null, notice: '', msg: '', msgSeen: '', upnext: null, history: [], switching: false, switchSerial: 0, speed: 1, rateRetry: false,
+    pending: null, ended: false };
   var Y = { infoFor: '', infoState: 'idle', info: null, rating: null, signedIn: null, busy: false, rateMissing: false };
   var ui = null, video = null, player = null, root = null, R = null, bound = false;
-  var hideTimer = 0, noticeTimer = 0, upTimer = 0;
+  var hideTimer = 0, noticeTimer = 0, upTimer = 0, seekTimer = 0, msgTimer = 0;
 
   function token() { try { return localStorage.getItem('sem-tv-token') || ''; } catch (ignore) { return ''; } }
   function isLive() { return !!(S.status && (S.status.live || (S.status.youtube && S.status.youtube.live))); }
@@ -256,6 +259,117 @@
   }
 
   // ================================================================================================================================
+  // Self-check. Nobody can read the TV's console, so the skin measures itself and tells the PC: POST /tv-api/diagnostic
+  // {stage: 'controls', session, controls: {...}} CHECK_REPORT_MS into a session, again when it ends, and at once if a skin handler throws. The PC
+  // writes one 'tv_diagnostic' log line and keeps at most 24 flat fields of up to 160 characters (relay/tv.py diagnostic_record), so every value
+  // here is a number, a flag or a short text. Two things are acted on right here: a TV that draws the skin slowly gets the light look (class
+  // sk-lite: no blurred shadows, no transitions), and a skin that throws hands the session back to the old controls.
+  // ================================================================================================================================
+  var CHECK_REPORT_MS = 20000, PAINT_SAMPLES = 200, FRAME_RUN = 90, FRAME_RUNS = 6, CODE_KINDS = 12;   // 12 codes as 'code x times' stay under the PC's 160 characters
+  var LITE_FRAME_MS = 40, LITE_PAINT_MS = 100, LITE_DAYS = 30, LITE_KEY = 'kevflix-skin-lite';
+  var D = null, reportTimer = 0, lite = false, brokenSession = '';
+  function freshCheck() {
+    return { codes: {}, repeat: false, presses: 0, paint: [], frames: [], frameWorst: null, runs: 0, probing: false,
+      seekPresses: 0, seekCommits: 0, seekDropped: 0, rateAsked: null, rateGot: null, ended: 0, upShown: 0, upPlayed: 0, upCancelled: 0,
+      errors: 0, errorFirst: '' };
+  }
+  function nextFrame(fn) {
+    if (typeof window.requestAnimationFrame !== 'function') { return false; }
+    window.requestAnimationFrame(fn);
+    return true;
+  }
+  function median(list) {
+    if (!list.length) { return null; }
+    var sorted = list.slice().sort(function (a, b) { return a - b; });
+    return sorted[Math.floor(sorted.length / 2)];
+  }
+  function worst(list) { return list.length ? Math.max.apply(null, list) : null; }
+  function loadLite() {
+    try { var since = Number(localStorage.getItem(LITE_KEY)); lite = since > 0 && Date.now() - since < LITE_DAYS * 86400000; } catch (ignore) { lite = false; }
+  }
+  function setLite() {
+    lite = true;
+    try { localStorage.setItem(LITE_KEY, String(Date.now())); } catch (ignore) {}
+    render();
+  }
+  // Slow by the TV's own numbers: the median frame of two bar showings above LITE_FRAME_MS, or the median key-to-paint of eight presses above LITE_PAINT_MS.
+  function judge() {
+    if (lite || !D) { return; }
+    if ((D.frames.length >= 2 && median(D.frames) > LITE_FRAME_MS) || (D.paint.length >= 8 && median(D.paint) > LITE_PAINT_MS)) { setLite(); }
+  }
+  // Every key the skin sees in its session: the code (which keys this remote really sends), whether the TV marks repeats, and for a handled key the
+  // time from the press to the frame AFTER the one that painted the change (two animation frames; at most PAINT_SAMPLES samples).
+  function noteKey(code, repeat, handled) {
+    var d = D;
+    if (!d) { return; }
+    if (repeat) { d.repeat = true; }
+    var name = String(code);
+    if (d.codes[name] || Object.keys(d.codes).length < CODE_KINDS) { d.codes[name] = (d.codes[name] || 0) + 1; }
+    if (!handled) { return; }
+    d.presses += 1;
+    if (d.paint.length >= PAINT_SAMPLES) { return; }
+    var pressed = Date.now();
+    nextFrame(guard(function () { nextFrame(guard(function () { d.paint.push(Date.now() - pressed); if (d === D) { judge(); } })); }));
+  }
+  // FRAME_RUN frames after the bar or a menu comes up, at most FRAME_RUNS times a session: how long the TV takes per frame while the skin is drawn.
+  function probeFrames() {
+    var d = D;
+    if (!d || d.probing || d.runs >= FRAME_RUNS) { return; }
+    var left = FRAME_RUN, last = 0, deltas = [];
+    var step = guard(function () {
+      var now = Date.now();
+      if (last) { deltas.push(now - last); }
+      last = now; left -= 1;
+      if (left > 0 && d === D && (S.visible || S.menu) && nextFrame(step)) { return; }
+      d.probing = false;
+      if (deltas.length >= 10) {
+        d.runs += 1; d.frames.push(median(deltas)); d.frameWorst = Math.max(d.frameWorst || 0, worst(deltas));
+        if (d === D) { judge(); }
+      }
+    });
+    d.probing = nextFrame(step);
+  }
+  function checkReport(when) {
+    var d = D, keys = window.KevFlixKeys || {};
+    if (!d || !S.sessionId) { return; }
+    request('POST', 'diagnostic', { stage: 'controls', session: S.sessionId, controls: {
+      when: when, mode: S.mode, keys_ok: (keys.ok || []).join(','), keys_failed: (keys.failed || []).join(','), keys_error: String(keys.error || ''),
+      codes: Object.keys(d.codes).map(function (code) { return code + 'x' + d.codes[code]; }).join(','), repeat_seen: d.repeat, presses: d.presses,
+      paint_n: d.paint.length, paint_median_ms: median(d.paint), paint_worst_ms: worst(d.paint),
+      frame_n: d.frames.length, frame_median_ms: median(d.frames), frame_worst_ms: d.frameWorst, lite: lite,
+      seek_presses: d.seekPresses, seek_commits: d.seekCommits, seek_dropped: d.seekDropped, rate_asked: d.rateAsked, rate_got: d.rateGot,
+      ended: d.ended, upnext: d.upShown + '/' + d.upPlayed + '/' + d.upCancelled, errors: d.errors, error_first: d.errorFirst } }).catch(function () {});
+  }
+  function startCheck() {
+    D = freshCheck();
+    clearTimeout(reportTimer);
+    reportTimer = setTimeout(guard(function () { reportTimer = 0; checkReport('start'); }), CHECK_REPORT_MS);
+  }
+  function endCheck(when) {
+    clearTimeout(reportTimer); reportTimer = 0;
+    if (D && S.mode) { checkReport(when); }
+    D = null;
+  }
+  // A skin handler threw: say so, then the old controls (still in the page) take over for the rest of this session.
+  function skinFailed(error) {
+    var text = String((error && error.message) || error).slice(0, 150);
+    if (D) { D.errors += 1; if (!D.errorFirst) { D.errorFirst = text; } }
+    if (!S.mode) { return; }
+    brokenSession = S.sessionId;
+    try { endCheck('error'); } catch (ignore) { D = null; }
+    try { deactivate(); } catch (ignore) {
+      S.mode = null; S.sessionId = ''; S.status = null;
+      if (player) { player.classList.remove('skin-on'); player.classList.remove('skin-plex'); player.classList.remove('skin-youtube'); }
+      if (root) { root.hidden = true; }
+    }
+  }
+  function guard(fn) {
+    return function () {
+      try { return fn.apply(this, arguments); } catch (error) { skinFailed(error); return undefined; }
+    };
+  }
+
+  // ================================================================================================================================
   // Network (YouTube extras). Every endpoint may be missing or fail: a failure hides or disables that button and never touches playback.
   // ================================================================================================================================
   function request(method, path, body) {
@@ -278,48 +392,95 @@
   function ratingOf(value) { return value === 'like' || value === 'dislike' ? value : null; }
   function loadInfo(id) {
     Y.infoFor = id; Y.info = null; Y.infoState = 'loading'; Y.rating = null; Y.signedIn = null; Y.rateMissing = false; Y.busy = false;
-    request('GET', 'youtube/info?video=' + encodeURIComponent(id)).then(function (value) {
+    request('GET', 'youtube/info?video=' + encodeURIComponent(id)).then(guard(function (value) {
       if (Y.infoFor !== id) { return; }
       Y.info = value && typeof value === 'object' ? value : {};
       Y.infoState = 'ok'; Y.rating = ratingOf(Y.info.rating); Y.signedIn = typeof Y.info.signed_in === 'boolean' ? Y.info.signed_in : null;
       render();
-    }, function () {
+    }), guard(function () {
       if (Y.infoFor !== id) { return; }
       Y.info = null; Y.infoState = 'missing';              // 404 or any failure: no rating buttons, no PC-side channel/up-next/captions; playback is untouched
       render();
-    });
+    }));
   }
   function rate(which) {
     if (S.mode !== 'youtube' || Y.busy) { return; }
     var id = videoId(S.status), target = Y.rating === which ? 'none' : which;
     if (Y.signedIn === false) { notice('Sign in to YouTube on your PC to rate videos.'); return; }
     Y.busy = true;
-    request('POST', 'youtube/rate', { video: id, rating: target }).then(function (reply) {
+    request('POST', 'youtube/rate', { video: id, rating: target }).then(guard(function (reply) {
       Y.busy = false;
       if (videoId(S.status) !== id) { return; }
       if (reply && reply.signed_in === false) { Y.signedIn = false; notice('Sign in to YouTube on your PC to rate videos.'); render(); return; }
       Y.rating = reply && Object.prototype.hasOwnProperty.call(reply, 'rating') ? ratingOf(reply.rating) : (target === 'none' ? null : target);
       render();
-    }, function (error) {
+    }), guard(function (error) {
       Y.busy = false;
       if (error && error.status === 404) { Y.rateMissing = true; notice('Rating is not available yet.'); }
       else if (error && (error.status === 401 || error.status === 403 || /sign.?in|signed/i.test(error.message || ''))) { Y.signedIn = false; notice('Sign in to YouTube on your PC to rate videos.'); }
       else { notice('Could not rate this video' + (error && error.message ? ': ' + error.message : '.')); }
       render();
-    });
+    }));
   }
 
   // ================================================================================================================================
   // Actions
   // ================================================================================================================================
-  function seekBy(delta) { if (ui && !isLive()) { ui.seekBy(delta); } }
+  // Seek presses are collected: each one moves a pending target that the bar shows at once, and ONE seek goes to the player SEEK_COMMIT_MS after the
+  // last press. (Every press used to seek by itself; beyond the prepared part each of them restarted the stream on the PC.)
+  function seekBy(delta) {
+    if (!ui || isLive()) { return; }
+    var duration = Number(S.status && S.status.duration) || 0, limit = duration > 0 ? Math.max(0, duration - 0.1) : Infinity;
+    var from = S.pending !== null ? S.pending : Number(ui.position()) || 0;
+    S.pending = Math.max(0, Math.min(limit, from + delta));
+    if (D) { D.seekPresses += 1; }
+    clearTimeout(seekTimer); seekTimer = 0;
+    if (SEEK_COMMIT_MS > 0) { seekTimer = setTimeout(guard(commitSeek), SEEK_COMMIT_MS); } else { commitSeek(); }
+  }
+  function commitSeek() {
+    clearTimeout(seekTimer); seekTimer = 0;
+    if (S.pending === null) { return; }
+    var target = S.pending;
+    S.pending = null;
+    if (ui && S.mode && !isLive() && Math.abs(target - (Number(ui.position()) || 0)) >= 1) { if (D) { D.seekCommits += 1; } seekTo(target); }
+    render();
+  }
+  function dropSeek() { if (D && S.pending !== null) { D.seekDropped += 1; } clearTimeout(seekTimer); seekTimer = 0; S.pending = null; }
+  function seekTo(target) { S.ended = false; ui.seekTo(target); }           // a seek after the end: Play then continues from there, not from the beginning
+  // While the PC is still preparing the stream (status.ready false, or not startable yet) a press that only wanted to look must not switch the automatic
+  // start off: OK with the bar hidden then just brings up the controls.
+  function preparing() { var s = S.status; return !!s && !s.error && !!ui.isPlaying() && (s.ready === false || s.startable === false); }
+  function togglePlay() {
+    if (S.ended && !ui.isPlaying()) { ui.seekTo(0); }             // after the end: play again from the beginning, not from where the loaded part happens to start
+    S.ended = false;
+    ui.playPause();
+  }
   function setSpeed(rate) {
-    S.speed = rate;
+    S.speed = rate; S.rateRetry = false;
     applySpeed();
   }
   function applySpeed() {
     if (!video) { return; }
     try { video.defaultPlaybackRate = S.speed; video.playbackRate = S.speed; } catch (ignore) {}
+    if (D && S.mode === 'youtube' && S.speed !== 1) { D.rateAsked = S.speed; D.rateGot = Number(video.playbackRate); }
+    readSpeed();
+  }
+  // What the TV really plays at. A decoder that refuses a rate throws, leaves playbackRate where it was or snaps it back ('ratechange'): the menu then
+  // shows the real speed and the refused one is not remembered for the next video.
+  function readSpeed() {
+    var real = video ? Number(video.playbackRate) : NaN;
+    if (S.mode !== 'youtube' || !isFinite(real) || real <= 0 || real === S.speed) { return; }
+    var wanted = S.speed;
+    S.speed = SPEEDS.indexOf(real) >= 0 ? real : 1;
+    notice('This TV cannot play at ' + speedText(wanted) + '.');
+  }
+  function onRate() {
+    if (S.mode !== 'youtube' || !video) { return; }
+    if (Number(video.playbackRate) === S.speed) { S.rateRetry = false; return; }
+    if (!S.rateRetry) { S.rateRetry = true; try { video.playbackRate = S.speed; } catch (ignore) {} return; }   // once more: a new load may only have reset it
+    S.rateRetry = false;
+    if (D) { D.rateGot = Number(video.playbackRate); }
+    readSpeed(); render();
   }
   function resetSpeed() {
     if (!video) { return; }
@@ -331,15 +492,19 @@
   }
   // Another YouTube video inside the player (Next, Previous, autoplay): KevFLIX's own openYoutube keeps the player screen up. Any failure returns to
   // the YouTube view with the reason, exactly like the first hand-off does.
+  function forgetViewing() { S.history = []; Y.infoFor = ''; Y.info = null; Y.infoState = 'idle'; Y.rating = null; Y.signedIn = null; Y.busy = false; Y.rateMissing = false; }
   function switchVideo(id) {
-    var opener = window.KevFlixPlayer;
+    var opener = window.KevFlixPlayer, mine = ++S.switchSerial;
     S.switching = true; stopUpNext(); hideBar();
     var opened;
     try {
       if (!opener || typeof opener.openYoutube !== 'function') { throw new Error('The KevFLIX player is not ready.'); }
       opened = opener.openYoutube(id);
     } catch (error) { opened = Promise.reject(error); }
-    Promise.resolve(opened).catch(function (error) {
+    Promise.resolve(opened).then(function () {
+      if (mine !== S.switchSerial || (ui && ui.session && ui.session())) { return; }
+      S.switching = false; forgetViewing();                       // the open ended without a video (cancelled, or a newer open won): this viewing is over
+    }, function (error) {
       S.switching = false; S.history = [];
       var reason = error && error.message === 'Cancelled' ? '' : ((error && error.message) || 'This YouTube video could not be played.');
       Promise.resolve(ui && ui.leave ? ui.leave() : null).catch(function () {}).then(function () { returnToYoutube(reason); });
@@ -347,12 +512,12 @@
   }
   function goNext() {
     var n = nextOf(S.status);
-    if (!n || isLive()) { return; }
+    if (!n || isLive() || S.switching) { return; }
     S.history.push(videoId(S.status));
     switchVideo(n.id);
   }
   function goPrevious() {
-    if (!S.history.length || isLive()) { return; }
+    if (!S.history.length || isLive() || S.switching) { return; }
     switchVideo(S.history.pop());
   }
   function openEpisode(target) {
@@ -363,19 +528,26 @@
     try { opened = opener.openPlex(target.key, target.title); } catch (error) { opened = Promise.reject(error); }
     Promise.resolve(opened).catch(function (error) { notice((error && error.message) || 'This episode could not be opened.'); });
   }
-  function startUpNext(n) {
-    stopUpNext(); clearTimeout(hideTimer); hideTimer = 0;
+  // n = {id, title} (the next YouTube video) or {key, title, plex: true} (the next Plex episode; only used when PLEX_UPNEXT_SECONDS > 0).
+  function startUpNext(n, seconds) {
+    stopUpNext(); clearTimeout(hideTimer); hideTimer = 0; dropSeek();
     S.visible = false; S.peek = false; S.menu = null; S.scrub = null;
-    S.upnext = { id: n.id, title: n.title, left: UPNEXT_SECONDS };
-    upTimer = setInterval(function () {
+    S.upnext = { id: n.plex ? String(n.key) : n.id, title: n.title, left: seconds || UPNEXT_SECONDS, plex: !!n.plex };
+    if (D) { D.upShown += 1; }
+    upTimer = setInterval(guard(function () {
       if (!S.upnext) { stopUpNext(); return; }
       S.upnext.left -= 1;
       if (S.upnext.left <= 0) { playUpNext(); } else { render(); }
-    }, 1000);
+    }), 1000);
     render();
   }
   function stopUpNext() { if (upTimer) { clearInterval(upTimer); upTimer = 0; } S.upnext = null; }
-  function playUpNext() { stopUpNext(); goNext(); }
+  function playUpNext() {
+    var up = S.upnext;
+    stopUpNext();
+    if (D && up) { D.upPlayed += 1; }
+    if (up && up.plex) { openEpisode({ key: up.id, title: up.title }); } else { goNext(); }
+  }
   function setWatch(value, s) {
     if (value === 'off') { if (s.watch) { ui.change('watch', { enabled: false }); } return; }
     var first = s.watch ? Promise.resolve() : Promise.resolve(ui.change('watch', { enabled: true })).then(function () {
@@ -407,7 +579,7 @@
   function activate(id) {
     var c = context();
     switch (id) {
-      case 'playpause': ui.playPause(); break;
+      case 'playpause': togglePlay(); break;
       case 'rew': seekBy(-SEEK.plex.back); break;
       case 'fwd': seekBy(SEEK.plex.forward); break;
       case 'prev': if (S.mode === 'plex') { openEpisode(c.plex.prev); } else { goPrevious(); } return;
@@ -425,6 +597,11 @@
 
   // ---- menus -------------------------------------------------------------------------------------------------------------------
   function topLevel() { return S.menu && S.menu.levels[S.menu.levels.length - 1]; }
+  // A list can get shorter while it is open (dubbing switched off removes its subtitle row, a caption list arrives): the focus never stays past the end.
+  function clampLevel(level, rows) {
+    if (level.index >= rows.length) { level.index = Math.max(0, rows.length - 1); }
+    if (rows.length && !rows[level.index].enabled) { level.index = firstIndex(rows); }
+  }
   function newLevel(pick) {
     var level = { pick: pick, index: 0, start: 0 };
     level.index = firstIndex(levelBuild(level, S.mode, context()).rows);
@@ -433,7 +610,7 @@
   function openMenu(pick) {
     S.menu = { origin: pick, levels: [newLevel(pick)] };
     clearTimeout(hideTimer); hideTimer = 0;
-    render();
+    render(); probeFrames();
   }
   function closeMenu() { S.menu = null; arm(); render(); }
   function menuBack() {
@@ -448,6 +625,7 @@
   }
   function handleMenu(action) {
     var level = topLevel(), rows = levelBuild(level, S.mode, context()).rows;
+    clampLevel(level, rows);
     if (action === 'up') { level.index = stepRow(rows, level.index, -1); }
     else if (action === 'down') { level.index = stepRow(rows, level.index, 1); }
     else if (action === 'ok') { activateRow(rows[level.index]); return; }
@@ -458,12 +636,12 @@
   // ---- showing, hiding, notices -----------------------------------------------------------------------------------------------
   function arm() {
     clearTimeout(hideTimer); hideTimer = 0;
-    if (S.visible && !S.menu && !S.upnext && !(S.status && S.status.error)) { hideTimer = setTimeout(function () { hideTimer = 0; if (!S.menu) { hideBar(); } }, HIDE_MS); }
+    if (S.visible && !S.menu && !S.upnext && !(S.status && S.status.error)) { hideTimer = setTimeout(guard(function () { hideTimer = 0; if (!S.menu) { hideBar(); } }), HIDE_MS); }
   }
-  function showBar(peek) { S.visible = true; S.peek = !!peek; arm(); render(); }
+  function showBar(peek) { S.visible = true; S.peek = !!peek; arm(); render(); probeFrames(); }
   function reveal() { S.focus = 'playpause'; S.zone = 'buttons'; S.scrub = null; showBar(false); }
   function hideBar() {
-    S.visible = false; S.peek = false; S.scrub = null; S.zone = 'buttons';
+    S.visible = false; S.peek = false; S.scrub = null; S.zone = 'buttons'; dropSeek();
     clearTimeout(hideTimer); hideTimer = 0;
     render();
   }
@@ -471,7 +649,7 @@
     S.notice = String(text || '');
     clearTimeout(noticeTimer); noticeTimer = 0;
     if (S.notice) {
-      noticeTimer = setTimeout(function () { noticeTimer = 0; S.notice = ''; render(); }, NOTICE_MS);
+      noticeTimer = setTimeout(guard(function () { noticeTimer = 0; S.notice = ''; render(); }), NOTICE_MS);
       if (!S.visible) { showBar(true); return; }
     }
     render();
@@ -480,9 +658,9 @@
   // ---- keys ----------------------------------------------------------------------------------------------------------------------
   function mediaKey(action, repeat) {
     var back = SEEK[S.mode].back, forward = SEEK[S.mode].forward;
-    if (action === 'play') { if (!ui.isPlaying()) { ui.playPause(); } }
+    if (action === 'play') { if (!ui.isPlaying()) { togglePlay(); } }
     else if (action === 'pause') { if (ui.isPlaying()) { ui.playPause(); } }
-    else if (action === 'playpause') { if (!repeat) { ui.playPause(); } }
+    else if (action === 'playpause') { if (!repeat) { togglePlay(); } }
     else if (action === 'ff') { seekBy(forward); }
     else if (action === 'rw') { seekBy(-back); }
     if (S.visible && !S.peek) { arm(); render(); } else { showBar(true); }
@@ -494,10 +672,26 @@
       case 'left': if (!isLive()) { seekBy(-seek.back); showBar(true); } break;
       case 'right': if (!isLive()) { seekBy(seek.forward); showBar(true); } break;
       case 'up': case 'down': reveal(); break;
-      case 'ok': if (!repeat) { ui.playPause(); reveal(); } break;
-      case 'back': if (S.visible) { hideBar(); } else if (!repeat) { ui.leave(); } break;
+      case 'ok':
+        if (repeat) { break; }
+        if (S.pending !== null) { commitSeek(); showBar(true); break; }       // OK sends the collected seek at once
+        if (!preparing()) { togglePlay(); }
+        reveal();
+        break;
+      case 'back':
+        if (S.pending !== null) { dropSeek(); render(); }                     // Back drops a seek that was not sent yet
+        else if (S.visible) { hideBar(); } else if (!repeat) { ui.leave(); }
+        break;
       default: break;
     }
+  }
+  // The remote's own previous / next keys (MediaTrackPrevious 10232, MediaTrackNext 10233): the same as OK on the Previous / Next button. With nothing to go
+  // to (a film, the last episode, no earlier video) the bar just shows.
+  function trackKey(id, repeat) {
+    if (repeat) { return; }
+    var target = buttonsFor(S.mode, context()).filter(function (b) { return b.id === id; })[0];
+    if (!target || target.hidden || !target.enabled) { showBar(true); return; }
+    activate(id);
   }
   function goBar() { if (isLive()) { return; } S.zone = 'bar'; S.scrub = null; S.scrubRepeats = 0; }
   function layoutBarAbove() { return S.mode === 'plex'; }
@@ -513,7 +707,7 @@
         break;
       case 'ok':
         if (repeat) { break; }
-        if (S.scrub !== null) { var target = S.scrub; S.scrub = null; ui.seekTo(target); } else { ui.playPause(); }
+        if (S.scrub !== null) { var target = S.scrub; S.scrub = null; seekTo(target); } else { togglePlay(); }
         break;
       case 'up': if (!layoutBarAbove()) { S.zone = 'buttons'; S.scrub = null; } break;
       case 'down': if (layoutBarAbove()) { S.zone = 'buttons'; S.scrub = null; } break;
@@ -524,7 +718,7 @@
     arm();
     if (action === 'back') {
       if (repeat) { return; }
-      if (S.scrub !== null) { S.scrub = null; render(); } else { hideBar(); }
+      if (S.scrub !== null || S.pending !== null) { S.scrub = null; dropSeek(); render(); } else { hideBar(); }
       return;
     }
     if (S.zone === 'bar') { handleBar(action, repeat); render(); return; }
@@ -541,10 +735,17 @@
   function handleUpNext(action, repeat) {
     if (repeat) { return; }
     if (action === 'ok') { playUpNext(); }
-    else if (action === 'back') { stopUpNext(); render(); ui.leave(); }
+    else if (action === 'back') {
+      var episode = !!(S.upnext && S.upnext.plex);
+      if (D) { D.upCancelled += 1; }
+      stopUpNext();
+      if (episode) { S.focus = 'next'; S.zone = 'buttons'; showBar(false); }       // an episode: only the countdown is cancelled, Next stays one OK away
+      else { render(); ui.leave(); }
+    }
   }
   function handle(action, repeat) {
     if (S.upnext) { handleUpNext(action, repeat); return; }
+    if (action === 'prevkey' || action === 'nextkey') { trackKey(action === 'nextkey' ? 'next' : 'prev', repeat); return; }
     if (action === 'play' || action === 'pause' || action === 'playpause' || action === 'ff' || action === 'rw') { mediaKey(action, repeat); return; }
     if (S.menu) { handleMenu(action); return; }
     if (!S.visible || S.peek) { handleHidden(action, repeat); return; }
@@ -555,7 +756,8 @@
     var y = window.KevFlixYoutube;
     if (y && typeof y.active === 'function' && y.active()) { return; }
     if (!(ui.session && ui.session())) { return; }
-    var action = keyAction(keyCodeOf(event));
+    var code = keyCodeOf(event), action = keyAction(code);
+    noteKey(code, !!event.repeat, !!action);
     if (!action) { return; }
     event.preventDefault(); event.stopImmediatePropagation();     // player.js's own handler never also acts on a key the skin handled
     handle(action, !!event.repeat);
@@ -570,28 +772,33 @@
     if (!current || !focusable(current)) { S.focus = 'playpause'; }
   }
   function newSession(mode, status) {
+    endCheck('leave');                                            // a session that changes without a leave in between still reports
     S.sessionId = status.id; S.mode = mode; S.switching = false;
     S.visible = false; S.peek = false; S.menu = null; S.scrub = null; S.zone = 'buttons'; S.focus = 'playpause';
-    S.notice = ''; S.msg = ''; stopUpNext();
-    clearTimeout(hideTimer); hideTimer = 0;
+    S.notice = ''; S.msg = ''; S.msgSeen = ''; S.ended = false; stopUpNext(); dropSeek();
+    clearTimeout(hideTimer); hideTimer = 0; clearTimeout(msgTimer); msgTimer = 0;
     S.status = status;
     if (!mode) { setActive(false); return; }
     ensureSkin(mode); setActive(true);
+    startCheck();
     if (mode === 'youtube') { applySpeed(); } else { resetSpeed(); }
     reveal();
   }
   function deactivate() {
-    clearTimeout(hideTimer); clearTimeout(noticeTimer); hideTimer = noticeTimer = 0; stopUpNext();
-    S.visible = false; S.peek = false; S.menu = null; S.scrub = null; S.zone = 'buttons'; S.focus = 'playpause'; S.notice = ''; S.msg = '';
+    endCheck('leave');
+    clearTimeout(hideTimer); clearTimeout(noticeTimer); clearTimeout(msgTimer); hideTimer = noticeTimer = msgTimer = 0; stopUpNext(); dropSeek();
+    S.visible = false; S.peek = false; S.menu = null; S.scrub = null; S.zone = 'buttons'; S.focus = 'playpause'; S.notice = ''; S.msg = ''; S.msgSeen = '';
+    S.ended = false;
     if (S.mode === 'youtube') { resetSpeed(); }
     if (!S.switching) {                                           // the viewing is over (Back, error): forget the previous-video stack
-      S.history = []; Y.infoFor = ''; Y.info = null; Y.infoState = 'idle'; Y.rating = null; Y.signedIn = null; Y.busy = false; Y.rateMissing = false;
+      forgetViewing();
     }
     S.mode = null; S.sessionId = ''; S.status = null;
     setActive(false);
   }
   function onStatus(status) {
-    if (!status) { deactivate(); return; }
+    if (!status) { brokenSession = ''; deactivate(); return; }
+    if (status.id === brokenSession) { return; }                  // the skin failed in this session: the old controls keep it
     var mode = modeOf(status, ui && ui.item ? ui.item() : null);
     if (mode !== S.mode || status.id !== S.sessionId) {
       var video0 = mode === 'youtube' ? videoId(status) : '';
@@ -604,43 +811,64 @@
     if (S.mode === 'youtube') { var id = videoId(status); if (id && id !== Y.infoFor) { loadInfo(id); } }
     if (S.mode) { fixFocus(); render(); }
   }
+  // player.js repeats an unchanged message with every status (every 2 s while an error or a wait lasts): only a NEW text is shown, it brings the bar up
+  // once, and it goes away after NOTICE_MS unless the status still carries the error / wait it describes.
+  function expireMsg() {
+    msgTimer = 0;
+    if (S.status && (S.status.error || S.status.resource_wait)) { msgTimer = setTimeout(guard(expireMsg), NOTICE_MS); return; }
+    if (S.msg) { S.msg = ''; render(); }
+  }
   function onMessage(text) {
-    S.msg = String(text || '');
+    text = String(text || '');
+    if (text === S.msgSeen) { return; }
+    S.msgSeen = text; S.msg = text;
+    clearTimeout(msgTimer); msgTimer = 0;
     if (!S.mode) { return; }
-    if (S.msg && !S.visible && !S.upnext) { showBar(true); return; }
+    if (S.msg) {
+      msgTimer = setTimeout(guard(expireMsg), NOTICE_MS);
+      if (!S.visible && !S.upnext) { showBar(true); return; }
+    }
     render();
   }
   function onEnded(event) {
     if (!ui || !S.mode) { return; }
-    if (S.mode === 'plex') { if (!S.menu) { showBar(false); } return; }                   // player.js does its end-of-video handling after this
+    if (D) { D.ended += 1; }
+    if (S.mode === 'plex') {                                      // player.js does its end-of-video handling after this (heartbeat 'ended', watched state)
+      S.ended = true; dropSeek();
+      var following = context().plex.next;
+      if (following && PLEX_UPNEXT_SECONDS > 0 && !S.menu) { startUpNext({ key: following.key, title: following.title, plex: true }, PLEX_UPNEXT_SECONDS); return; }
+      if (!S.menu) { if (following) { S.focus = 'next'; S.zone = 'buttons'; } showBar(false); }
+      return;
+    }
     var n = !isLive() && nextOf(S.status);
     if (!n) { return; }                                           // no up-next: player.js leaves to the YouTube view as before
     event.stopImmediatePropagation();                             // autoplay: the video that is next plays by itself unless the viewer presses Back
     startUpNext(n);
   }
   function onTime() { if (S.mode && S.visible) { renderProgress(); } }
-  function onVideoState() { if (S.mode && S.visible) { render(); } }
+  function onVideoState(event) { if (event && event.type === 'play') { S.ended = false; } if (S.mode && S.visible) { render(); } }
   function onLoaded() { if (S.mode === 'youtube') { applySpeed(); } }
   function bindVideo() {
     if (bound) { return; }
     video = (ui && ui.video) || document.getElementById('video');
     if (!video) { return; }
     bound = true;
-    video.addEventListener('ended', onEnded);
-    video.addEventListener('timeupdate', onTime);
-    video.addEventListener('play', onVideoState);
-    video.addEventListener('pause', onVideoState);
-    video.addEventListener('loadedmetadata', onLoaded);
+    video.addEventListener('ended', guard(onEnded));
+    video.addEventListener('timeupdate', guard(onTime));
+    video.addEventListener('play', guard(onVideoState));
+    video.addEventListener('pause', guard(onVideoState));
+    video.addEventListener('loadedmetadata', guard(onLoaded));
+    video.addEventListener('ratechange', guard(onRate));
   }
   function attach(api) {
     if (ui === api) { return; }
     ui = api;
     bindVideo();
     if (ui.video) { video = ui.video; }
-    ui.onStatus(onStatus);
-    ui.onMessage(onMessage);
+    ui.onStatus(guard(onStatus));
+    ui.onMessage(guard(onMessage));
     var current = ui.session && ui.session();
-    if (current) { onStatus(current); }
+    if (current) { guard(onStatus)(current); }
   }
 
   // ================================================================================================================================
@@ -719,24 +947,26 @@
     r.track.appendChild(r.buf); r.track.appendChild(r.played);
     r.dot = el('div', 'sk-dot');
     r.bubble = el('div', 'sk-bubble'); r.bubble.hidden = true;
-    r.bar.appendChild(r.track); r.bar.appendChild(r.dot); r.bar.appendChild(r.bubble);
-    r.bar.onclick = function (event) {                            // pointer remotes: a click on the bar seeks there
+    r.pos = el('div', 'sk-pos');                                  // carries the dot and the time bubble along the bar with a transform (no layout at every time update)
+    r.pos.appendChild(r.dot); r.pos.appendChild(r.bubble);
+    r.bar.appendChild(r.track); r.bar.appendChild(r.pos);
+    r.bar.onclick = guard(function (event) {                      // pointer remotes: a click on the bar seeks there
       if (!ui || isLive() || !r.bar.getBoundingClientRect) { return; }
       var box = r.bar.getBoundingClientRect(), width = box.width || 1;
-      ui.seekTo(Math.max(0, Math.min(1, (event.clientX - box.left) / width)) * (Number(S.status && S.status.duration) || 0));
+      seekTo(Math.max(0, Math.min(1, (event.clientX - box.left) / width)) * (Number(S.status && S.status.duration) || 0));
       S.zone = 'bar'; S.scrub = null; showBar(false);
-    };
+    });
     return r.bar;
   }
   function buildButton(r, id, big) {
     var b = el('div', 'sk-btn' + (big ? ' big' : ''));
     b.setAttribute('role', 'button');
     r.buttons[id] = { el: b, icon: '' };
-    b.onclick = function () {
+    b.onclick = guard(function () {
       if (!ui || !S.visible) { return; }
       S.focus = id; S.zone = 'buttons';
       activate(id);
-    };
+    });
     return b;
   }
   function buildMenu(r) {
@@ -749,10 +979,16 @@
     r.menuSig = '';
     return r.menu;
   }
+  function buildUpNext(r) {
+    r.upnext = el('div', 'sk-upnext'); r.upnext.hidden = true;
+    r.upLabel = el('div', 'sk-up-label'); r.upTitle = el('div', 'sk-up-title'); r.upHint = el('div', 'sk-up-hint');
+    r.upnext.appendChild(r.upLabel); r.upnext.appendChild(r.upTitle); r.upnext.appendChild(r.upHint);
+    return r.upnext;
+  }
   function buildPlex(r) {
     var top = el('div', 'sk-ui sk-top');
     var back = el('div', 'sk-back'); back.appendChild(iconNode('back'));
-    back.onclick = function () { if (ui && S.visible) { ui.leave(); } };
+    back.onclick = guard(function () { if (ui && S.visible) { ui.leave(); } });
     var title = el('div', 'sk-title');
     r.show = el('div', 'sk-show'); r.name = el('div', 'sk-name'); r.line = el('div', 'sk-line');
     title.appendChild(r.show); title.appendChild(r.name); title.appendChild(r.line);
@@ -767,7 +1003,7 @@
     row.appendChild(center); row.appendChild(right);
     bottom.appendChild(buildBar(r)); bottom.appendChild(r.times); bottom.appendChild(row);
     r.notice = el('div', 'sk-notice'); r.notice.hidden = true;
-    root.appendChild(top); root.appendChild(bottom); root.appendChild(r.notice); root.appendChild(buildMenu(r));
+    root.appendChild(top); root.appendChild(bottom); root.appendChild(r.notice); root.appendChild(buildMenu(r)); root.appendChild(buildUpNext(r));
   }
   function buildYoutube(r) {
     var bottom = el('div', 'sk-ui sk-bottom');
@@ -781,10 +1017,7 @@
     r.times.appendChild(r.elapsed); r.times.appendChild(r.live);
     bottom.appendChild(info); bottom.appendChild(row); bottom.appendChild(buildBar(r)); bottom.appendChild(r.times);
     r.notice = el('div', 'sk-notice'); r.notice.hidden = true;
-    r.upnext = el('div', 'sk-upnext'); r.upnext.hidden = true;
-    r.upLabel = el('div', 'sk-up-label'); r.upTitle = el('div', 'sk-up-title'); r.upHint = el('div', 'sk-up-hint');
-    r.upnext.appendChild(r.upLabel); r.upnext.appendChild(r.upTitle); r.upnext.appendChild(r.upHint);
-    root.appendChild(bottom); root.appendChild(r.notice); root.appendChild(buildMenu(r)); root.appendChild(r.upnext);
+    root.appendChild(bottom); root.appendChild(r.notice); root.appendChild(buildMenu(r)); root.appendChild(buildUpNext(r));
   }
   function ensureSkin(mode) {
     if (!root) { return; }
@@ -807,14 +1040,15 @@
   function renderProgress() {
     if (!R || !S.mode || !S.status) { return; }
     var live = isLive(), duration = Number(S.status.duration) || 0, position = ui ? Number(ui.position()) || 0 : 0;
-    var shown = S.scrub !== null ? S.scrub : position;
+    var preview = S.scrub !== null ? S.scrub : S.pending;         // a scrub on the bar, or seek presses that are still being collected
+    var shown = preview !== null ? preview : position;
     var played = live ? 1 : duration > 0 ? Math.max(0, Math.min(1, shown / duration)) : 0;
     var ready = live ? 1 : duration > 0 && typeof S.status.ready_through === 'number' ? Math.max(0, Math.min(1, S.status.ready_through / duration)) : 0;
     setStyle(R.played, 'transform', 'scaleX(' + played.toFixed(4) + ')');
     setStyle(R.buf, 'transform', 'scaleX(' + ready.toFixed(4) + ')');
-    setStyle(R.dot, 'left', (played * 100).toFixed(2) + '%');
-    setHidden(R.bubble, S.scrub === null);
-    if (S.scrub !== null) { setStyle(R.bubble, 'left', (played * 100).toFixed(2) + '%'); setText(R.bubble, clock(S.scrub)); }
+    setStyle(R.pos, 'transform', 'translateX(' + (played * 100).toFixed(2) + '%)');
+    setHidden(R.bubble, preview === null);
+    if (preview !== null) { setText(R.bubble, clock(preview)); }
     if (S.mode === 'plex') {
       setText(R.elapsed, clock(shown));
       setText(R.ends, duration > 0 ? endsAt(new Date(Date.now()), duration - shown) : '');
@@ -828,6 +1062,7 @@
     setHidden(R.menu, !open);
     if (!open) { R.menuSig = ''; return; }
     var level = topLevel(), built = levelBuild(level, S.mode, c), rows = built.rows;
+    clampLevel(level, rows);
     level.start = windowStart(rows.length, level.index, MENU_ROWS, level.start);
     var shown = rows.slice(level.start, level.start + MENU_ROWS), root0 = level.pick === 'root';
     var sig = JSON.stringify([built.title, level.index, level.start, rows.length, shown.map(function (r) { return [r.label, r.value, r.selected, r.enabled, r.note]; })]);
@@ -851,7 +1086,7 @@
         item.appendChild(chev);
       }
       if (row.note) { item.appendChild(el('div', 'sk-note', row.note)); }
-      item.onclick = function () { if (S.menu && topLevel() === level) { level.index = index; activateRow(rows[index]); } };
+      item.onclick = guard(function () { if (S.menu && topLevel() === level) { level.index = index; activateRow(rows[index]); } });
       R.menuList.appendChild(item);
     });
   }
@@ -859,7 +1094,7 @@
     if (!R || !S.mode || !root) { return; }
     fixFocus();                                                   // a focused button that has just disappeared or been dimmed hands the focus to Play/Pause
     var c = context(), plex = S.mode === 'plex';
-    setClass(root, 'sk-root sk-' + S.mode + (S.visible ? ' sk-on' : '') + (S.visible && (S.zone === 'bar' || S.peek) ? ' sk-bar-focus' : '') + (S.menu ? ' sk-menu-open' : '') + (c.live ? ' sk-is-live' : ''));
+    setClass(root, 'sk-root sk-' + S.mode + (S.visible ? ' sk-on' : '') + (S.visible && (S.zone === 'bar' || S.peek) ? ' sk-bar-focus' : '') + (S.menu ? ' sk-menu-open' : '') + (c.live ? ' sk-is-live' : '') + (lite ? ' sk-lite' : ''));
     if (plex) {
       var head = plexHeader(c.plex);
       setText(R.show, head.show); setHidden(R.show, !head.show);
@@ -884,13 +1119,11 @@
     setText(R.notice, text); setHidden(R.notice, !text);
     renderProgress();
     renderMenu(c);
-    if (!plex) {
-      setHidden(R.upnext, !S.upnext);
-      if (S.upnext) {
-        setText(R.upLabel, 'Up next');
-        setText(R.upTitle, S.upnext.title || 'Next video');
-        setText(R.upHint, 'Playing in ' + S.upnext.left + ' · OK to play now · Back to cancel');
-      }
+    setHidden(R.upnext, !S.upnext);
+    if (S.upnext) {
+      setText(R.upLabel, S.upnext.plex ? 'Next episode' : 'Up next');
+      setText(R.upTitle, S.upnext.title || (S.upnext.plex ? 'Next episode' : 'Next video'));
+      setText(R.upHint, 'Playing in ' + S.upnext.left + ' · OK to play now · Back to cancel');
     }
   }
 
@@ -898,7 +1131,7 @@
   function snapshot() {
     var c = S.mode ? context() : null, level = S.menu ? topLevel() : null, built = level ? levelBuild(level, S.mode, c) : null;
     return {
-      mode: S.mode, visible: S.visible, peek: S.peek, zone: S.zone, focus: S.focus, scrub: S.scrub, notice: S.notice || S.msg,
+      mode: S.mode, visible: S.visible, peek: S.peek, zone: S.zone, focus: S.focus, scrub: S.scrub, pending: S.pending, notice: S.notice || S.msg,
       buttons: c ? buttonsFor(S.mode, c).map(function (b) { return { id: b.id, icon: b.icon, enabled: b.enabled, hidden: !!b.hidden, pressed: !!b.pressed }; }) : [],
       menu: S.menu ? { depth: S.menu.levels.length, pick: level.pick, title: built.title, index: level.index,
         rows: built.rows.map(function (r) { return { id: r.id, label: r.label, value: r.value, selected: r.selected, enabled: r.enabled, note: r.note }; }) } : null,
@@ -913,8 +1146,9 @@
   player = document.getElementById('player');
   root = document.getElementById('skin');
   if (!root && player) { root = document.createElement('div'); root.id = 'skin'; root.hidden = true; player.appendChild(root); }
+  loadLite();
   bindVideo();
-  window.addEventListener('keydown', onKeyDown, true);
+  window.addEventListener('keydown', guard(onKeyDown), true);
   window.KevFlixControls = {
     attach: attach, snapshot: snapshot, mode: function () { return S.mode; },
     pure: { keyAction: keyAction, clock: clock, clockTime: clockTime, endsAt: endsAt, modeOf: modeOf, plexInfo: plexInfo, plexHeader: plexHeader, moveFocus: moveFocus,

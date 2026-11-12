@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hmac
 import json
 import logging
@@ -10,9 +11,11 @@ import re
 import signal
 import secrets
 import hashlib
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -28,9 +31,11 @@ from .tv import TVService
 from .updates import PlayerUpdates
 from .settings import PCSettings
 from .desktop_updates import DesktopUpdates
+from . import housekeeping as _housekeeping
 
 ROOT = Path(__file__).resolve().parent.parent
 IDENT = re.compile(r"^[a-f0-9]{32}$")
+LOG_MAX_BYTES, LOG_BACKUPS = 8 * 1024 * 1024, 5
 
 
 class Application:
@@ -50,6 +55,7 @@ class Application:
         self.pc_launch_codes = {}
         self.settings = PCSettings(self)
         self.desktop_updates = DesktopUpdates(config)
+        self.housekeeping = _housekeeping.Housekeeper(config, self.store, self.tv)
         self._youtube, self._youtube_lock = None, threading.Lock()
 
     def youtube_host(self, create=True):
@@ -63,6 +69,7 @@ class Application:
     def start(self):
         if self.config["setup_only"]:
             return
+        self.housekeeping.start()      # dead jobs leave the store BEFORE the coordinator starts (only once deleting is on)
         self.jobs.start()
         self.plex.start()
         self.tv.start()
@@ -73,6 +80,7 @@ class Application:
         host = self.youtube_host(create=False)
         if host is not None:
             host.close()
+        self.housekeeping.close()
         self.tv.close()
         self.updates.close()
         self.desktop_updates.close()
@@ -150,17 +158,96 @@ class Application:
 class Handler(BaseHTTPRequestHandler):
     server_version = "KevFLIXWorker/" + __version__
     protocol_version = "HTTP/1.1"
+    # F11. A keep-alive connection that is silent for this long is closed and its thread ends (http.server applies the
+    # value to the socket). Without it a TV switched off at the wall kept one thread per connection for ever.
+    timeout = 120
+    MEDIA_SEND_TIMEOUT = 900        # one block of a segment / file body to a player that paused its download
+    SLOW_MS = 1000                  # a quiet path is still logged when it took this long or failed
+    QUIET_PATHS = frozenset({"/tv-api/version", "/tv-api/heartbeat", "/tv-api/producer", "/tv-api/youtube/status",
+                             "/api/status", "/api/settings", "/api/events", "/api/desktop-updates",
+                             "/api/player-updates"})
+    PLAYLIST_SEEN_MAX = 64          # (session id, generation) pairs whose first playlist request is already in the log
+    _playlist_seen = {}             # shared by all handler threads; the oldest pair is dropped first
+    _playlist_lock = threading.Lock()
 
     @property
     def app(self):
         return self.server.app
 
-    def log_message(self, fmt, *args):
+    def parse_request(self):
+        self._began, self._response_started = time.monotonic(), False
+        return super().parse_request()
+
+    def send_response(self, code, message=None):
+        self._response_started = True
+        super().send_response(code, message)
+
+    def log_request(self, code="-", size="-"):
         # Never log query strings, stream tickets, media text or Plex credentials.
-        path = urlparse(self.path).path
+        path = urlparse(getattr(self, "path", "") or "").path
         if path == "/tv-api/youtube/frame":
             return                                              # ten or more per second while YouTube is on screen: would drown the log
-        logging.info("%s %s", self.command, "/hooks/plex/[redacted]" if path.startswith("/hooks/plex/") else path)
+        status = getattr(code, "value", code)
+        elapsed = int((time.monotonic() - getattr(self, "_began", time.monotonic())) * 1000)
+        ok = isinstance(status, int) and status < 400
+        quiet = path in self.QUIET_PATHS
+        if ok and path.startswith("/tv-media/") and path.endswith("/index.m3u8"):
+            # The TV asks for the playlist again and again. The first successful GET of every session and generation
+            # stays in the log (the "first picture" moment that other checks read); the polls after it are quiet.
+            quiet = not (self.command == "GET" and self._first_playlist(path))
+        if quiet and ok and elapsed < self.SLOW_MS:
+            return                                              # polls (the tray asks /tv-api/version every 5 s): logged only when slow or failing
+        logging.info("%s %s %s %dms", self.command, "/hooks/plex/[redacted]" if path.startswith("/hooks/plex/") else path,
+                     status, elapsed)
+
+    def _first_playlist(self, path):
+        # True once per (session id, generation). Only a successful playlist GET gets here, so both parts are the
+        # checked values of a live session; they are cut anyway so the memory stays small whatever arrives.
+        query = parse_qs(urlparse(getattr(self, "path", "") or "").query)
+        key = (path.split("/")[2][:32], (query.get("generation") or [""])[-1][:12])
+        with Handler._playlist_lock:
+            if key in Handler._playlist_seen:
+                return False
+            Handler._playlist_seen[key] = True
+            while len(Handler._playlist_seen) > self.PLAYLIST_SEEN_MAX:
+                del Handler._playlist_seen[next(iter(Handler._playlist_seen))]
+            return True
+
+    def log_message(self, fmt, *args):
+        # log_error(): a malformed request line or an idle time-out. The text can quote the raw request line (with its
+        # query string), so only the HTTP status is logged; an idle keep-alive time-out is normal and not logged.
+        if "timed out" in fmt:
+            return
+        logging.info("http error %s", args[0] if args and isinstance(args[0], int) else "bad request")
+
+    def fail(self, error):
+        """The one place a handler exception ends. A peer that is gone only closes the connection; so does an error
+        after the response began (JSON appended to a half-sent body would corrupt it); otherwise 400 / 500 JSON."""
+        if isinstance(error, (ConnectionError, TimeoutError)):
+            self.close_connection = True
+            return
+        if getattr(self, "_response_started", False):
+            self.close_connection = True
+            logging.warning("%s %s failed after the response began: %s", self.command,
+                            urlparse(getattr(self, "path", "") or "").path, type(error).__name__)
+            return
+        code = 400 if isinstance(error, (ValueError, KeyError, FileNotFoundError)) else 500
+        try:
+            self.json_response({"error": str(error)}, code)
+        except (ConnectionError, TimeoutError):
+            self.close_connection = True
+
+    @contextlib.contextmanager
+    def slow_send(self):
+        """A media body may wait on a player that paused its download: the longer send time-out, for the body only."""
+        try:
+            self.connection.settimeout(self.MEDIA_SEND_TIMEOUT)
+            yield
+        finally:
+            try:
+                self.connection.settimeout(self.timeout)
+            except OSError:
+                pass
 
     def authorized(self, nas=False):
         provided = self.headers.get("Authorization", "")
@@ -349,6 +436,36 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(found[1])
 
+    def youtube_socket(self, query):
+        """F20: GET /tv-api/youtube/ws?ticket=<screen_ticket>&format=avc|fmp4, upgraded to a WebSocket. The PC pushes the
+        YouTube page as H.264 video and the TV sends its remote keys on the same connection (relay/youtube_video.py). A
+        browser cannot put an Authorization header on a WebSocket, so the screen ticket is the proof, as for the pictures.
+        This request thread serves the connection until the TV closes it."""
+        youtube = self.app.config["youtube"]
+        if self.app.config["setup_only"] or not youtube["enabled"]:
+            return self.json_response({"error": "YouTube is turned off (youtube.enabled)"}, 403)
+        if self.command == "HEAD":
+            return self.json_response({"error": "GET only"}, 405)
+        if str(youtube.get("screen_transport", "auto")) == "jpeg":
+            return self.json_response({"error": "The video picture is turned off (youtube.screen_transport)"}, 404)
+        host = self.app.youtube_host(create=False)
+        if host is None or not host.ticket_valid(query.get("ticket")):
+            return self.json_response({"error": "Pair this TV with the worker first"}, 401)
+        if host.state != "running":
+            return self.json_response({"error": "YouTube is not open"}, 409)
+        from . import youtube_video as video
+        key, fmt = self.headers.get("Sec-WebSocket-Key", ""), str(query.get("format", "avc"))
+        if "websocket" not in self.headers.get("Upgrade", "").lower() or not key or fmt not in video.FORMATS:
+            return self.json_response({"error": "A WebSocket request with format avc or fmp4 is needed"}, 400)
+        self.send_response(101, "Switching Protocols")
+        self.send_header("Upgrade", "websocket")
+        self.send_header("Connection", "Upgrade")
+        self.send_header("Sec-WebSocket-Accept", video.accept_key(key))
+        self.end_headers()
+        self.close_connection = True
+        video.serve(host, self.connection, self.rfile.read, fmt, host.settings, self.app.config["ffmpeg"],
+                    on_play=self.app.tv.youtube_prefetch)
+
     def do_GET(self):
         parsed = urlparse(self.path)
         path = parsed.path
@@ -377,6 +494,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.youtube_screen(query)
             if path == "/tv-api/youtube/frame":
                 return self.youtube_frame(query)
+            if path == "/tv-api/youtube/ws":
+                return self.youtube_socket(query)
             if path.startswith("/tv-api/"):
                 device = self.tv_device()
                 if path == "/tv-api/youtube/status":
@@ -387,7 +506,8 @@ class Handler(BaseHTTPRequestHandler):
                     return self.json_response(self.app.tv.browse(
                         query.get("folder"), query.get("offset", 0), query.get("query", "")))
                 if path == "/tv-api/session":
-                    return self.json_response(self.app.tv.status(query["id"], device))
+                    return self.json_response(self.app.tv.status(query["id"], device,
+                                                                 evidence=query.get("evidence") == "1"))
                 if path == "/tv-api/probe/status":
                     return self.json_response(self.app.tv.probe.status())
                 probe_clip = re.fullmatch(r"/tv-api/probe/clip/([a-z0-9_]{1,40})\.mp4", path)
@@ -415,21 +535,23 @@ class Handler(BaseHTTPRequestHandler):
                         if k in ("section", "query", "genre", "year", "collection")}))
                 if path == "/tv-api/plex/poster":
                     content, kind = self.app.tv.plex_poster(query["key"])
-                    return self.bytes_response(content, kind)
+                    return self.bytes_response(content, kind, cache="private, max-age=86400")   # F24: the TV keeps it for a day
                 if path == "/tv-api/settings":
                     return self.json_response({"plex_url": self.app.config["plex"]["url"],
                         "plex_configured": bool(self.app.config["plex"]["token"]),
-                        "local_only": self.app.config["tv"]["local_only"], "pc_process_all": self.app.config["tv"]["pc_process_all"]})
+                        "local_only": self.app.config["tv"]["local_only"], "pc_process_all": self.app.config["tv"]["pc_process_all"],
+                        "video_probe": self.app.tv.video_probe_needed(device)})
                 return self.json_response({"error": "Unknown TV endpoint"}, 404)
-            tv_media = re.fullmatch(r"/tv-media/([a-f0-9]{32})/(index\.m3u8|[0-9]+\.ts|original|captions\.vtt)", path)
+            tv_media = re.fullmatch(r"/tv-media/([a-f0-9]{32})/(index\.m3u8|master\.m3u8|init\.mp4|[0-9]+\.ts|[0-9]+\.m4s|"
+                                    r"original|captions\.vtt)", path)
             if tv_media:
                 session = self.app.tv.authorize_media(tv_media[1], query)
                 if tv_media[2] == "original":
                     return self.ranged_file(self.app.config.media_path(session["source"]))
                 if tv_media[2] == "captions.vtt":
                     return self.bytes_response(self.app.tv.captions(session), "text/vtt; charset=utf-8")
-                if tv_media[2] == "index.m3u8":
-                    content = self.app.tv.playlist(session)
+                if tv_media[2] in ("index.m3u8", "master.m3u8"):
+                    content = self.app.tv.playlist(session) if tv_media[2] == "index.m3u8" else self.app.tv.master_playlist(session)
                     self.send_response(200)
                     self.cors()
                     self.send_header("Content-Type", "application/vnd.apple.mpegurl")
@@ -439,7 +561,10 @@ class Handler(BaseHTTPRequestHandler):
                     if self.command != "HEAD":
                         self.wfile.write(content)
                     return
-                return self.file(self.app.tv.segment(session, int(tv_media[2][:-3])), "video/mp2t")
+                if tv_media[2] == "init.mp4":
+                    return self.file(self.app.tv.init_segment(session), "video/mp4")
+                number, suffix = tv_media[2].split(".")
+                return self.file(self.app.tv.segment(session, int(number), suffix), "video/mp4" if suffix == "m4s" else "video/mp2t")
             if path in ("/", "/app.js", "/style.css"):
                 name = "index.html" if path == "/" else path[1:]
                 return self.file(ROOT / "web" / name)
@@ -502,12 +627,8 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Audio changed since generation")
                 return self.file(p, "audio/wav")
             self.json_response({"error": "Endpoint not found"}, 404)
-        except (ValueError, KeyError, FileNotFoundError) as error:
-            self.json_response({"error": str(error)}, 400)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
         except Exception as error:
-            self.json_response({"error": str(error)}, 500)
+            self.fail(error)
 
     def do_POST(self):
         path = urlparse(self.path).path
@@ -534,8 +655,12 @@ class Handler(BaseHTTPRequestHandler):
                     if data.get("youtube"):
                         return self.json_response(self.app.tv.open_youtube(device, data["youtube"]))
                     if data.get("plex_key"):
-                        return self.json_response(self.app.tv.open_plex(device, data["plex_key"], data.get("resume", True)))
-                    return self.json_response(self.app.tv.open_movie(device, data["node"], data.get("audio_index")))
+                        value = self.app.tv.open_plex(device, data["plex_key"], data.get("resume", True))
+                    else:
+                        value = self.app.tv.open_movie(device, data["node"], data.get("audio_index"))
+                    if isinstance(data.get("prefs"), dict):       # F24: what the TV used to send as 3-5 control requests
+                        value = self.app.tv.apply_open_prefs(value["id"], device, data["prefs"])
+                    return self.json_response(value)
                 if path == "/tv-api/control":
                     return self.json_response(self.app.tv.control(data["id"], device, data["action"],
                         data.get("position"), data.get("enabled"), data.get("audio_index"),
@@ -640,12 +765,8 @@ class Handler(BaseHTTPRequestHandler):
                                         corrections=data.get("corrections"))
                 return self.json_response({"ok": True}, 202)
             self.json_response({"error": "Endpoint not found"}, 404)
-        except (ValueError, KeyError, FileNotFoundError) as error:
-            self.json_response({"error": str(error)}, 400)
-        except (BrokenPipeError, ConnectionResetError):
-            pass
         except Exception as error:
-            self.json_response({"error": str(error)}, 500)
+            self.fail(error)
 
     def audio(self, job_id, revision):
         audio = VirtualAudio(self.app.jobs, job_id, revision)
@@ -676,12 +797,12 @@ class Handler(BaseHTTPRequestHandler):
             # JSON or fabricated silence to a requested English audio track.
             self.close_connection = True
 
-    def bytes_response(self, content, content_type):
+    def bytes_response(self, content, content_type, cache="no-store"):
         self.send_response(200)
         self.cors()
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(content)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache)
         self.send_header("X-Content-Type-Options", "nosniff")
         self.end_headers()
         if self.command != "HEAD":
@@ -709,7 +830,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         if self.command == "HEAD":
             return
-        with path.open("rb") as source:
+        with path.open("rb") as source, self.slow_send():
             source.seek(start)
             remaining = end - start + 1
             while remaining:
@@ -730,14 +851,67 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("X-Content-Type-Options", "nosniff")
         self.send_header("Cache-Control", "no-store")
         if tv_asset:
-            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; media-src 'self' http: https: blob:; connect-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
+            # F20: the TV page opens a WebSocket to this same server. Not every browser engine lets 'self' cover ws:, so the
+            # host the TV used is named as well (only a plain host[:port] is ever put into the header).
+            named = self.headers.get("Host", "")
+            socket_source = " ws://" + named if re.fullmatch(r"[A-Za-z0-9.-]+(:[0-9]{1,5})?", named) else ""
+            self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; media-src 'self' http: https: blob:; connect-src 'self'" + socket_source + "; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
         else:
             self.send_header("Content-Security-Policy", "default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
         self.end_headers()
         if self.command != "HEAD":
-            with path.open("rb") as stream:
+            with path.open("rb") as stream, self.slow_send():
                 for block in iter(lambda: stream.read(256 * 1024), b""):
                     self.wfile.write(block)
+
+
+class Server(ThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request, client_address):
+        """A peer that reset, aborted or timed out between requests is normal (TV switched off, the tray's 2 s health
+        check): no traceback. Anything else is logged once with its traceback."""
+        error = sys.exc_info()[1]
+        if isinstance(error, (ConnectionError, TimeoutError)):
+            return
+        logging.exception("Unhandled error while serving %s", client_address[0] if client_address else "?")
+
+
+class _RotatingLog(RotatingFileHandler):
+    def doRollover(self):
+        try:
+            super().doRollover()
+        except OSError:
+            # Windows: another program has server.log open, so it cannot be renamed now. Keep writing; the next
+            # record tries again.
+            if self.stream is None:
+                self.stream = self._open()
+
+
+def configure_logging(config):
+    """INFO and above to <profile>/logs/server.log, rotated at 8 MiB with 5 old files (housekeeping.log_to_file,
+    default on). The guard holds server.stderr.log open for the whole run, so that file cannot be rotated from this
+    process: it keeps receiving warnings, errors and tracebacks only. log_to_file false (or an unusable log folder):
+    everything goes to stderr exactly as before."""
+    line = logging.Formatter("%(asctime)s %(levelname)s %(message)s")
+    root = logging.getLogger()
+    root.setLevel(logging.INFO)
+    for old in list(root.handlers):
+        root.removeHandler(old)
+    stderr = logging.StreamHandler()
+    stderr.setFormatter(line)
+    if _housekeeping.settings(config)["log_to_file"]:
+        try:
+            folder = Path(config.file).parent / "logs"
+            folder.mkdir(parents=True, exist_ok=True)
+            rotating = _RotatingLog(folder / "server.log", maxBytes=LOG_MAX_BYTES, backupCount=LOG_BACKUPS,
+                                    encoding="utf-8", delay=True)
+            rotating.setFormatter(line)
+            root.addHandler(rotating)
+            stderr.setLevel(logging.WARNING)
+        except OSError:
+            pass
+    root.addHandler(stderr)
 
 
 def main():
@@ -772,11 +946,10 @@ def main():
     if args.setup_only:
         config.data["setup_only"] = True
         config.data["setup_locked"] = True
+    configure_logging(config)
     application = Application(config)
-    server = ThreadingHTTPServer((config["bind"], int(config["port"])), Handler)
-    server.daemon_threads = True
+    server = Server((config["bind"], int(config["port"])), Handler)
     server.app = application
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     application.start()
     def stop(*_):
         threading.Thread(target=server.shutdown, daemon=True).start()

@@ -391,7 +391,7 @@ def voice_mode(label, bind_evidence, merged_labels, *, cue_seconds=None, prefer_
 
 
 def silence_slack(cue, *, raw_turns=(), transcript=(), all_cues=(), protected=(), placements=(),
-                  origin=0.0, analysis_end, window_limit=None):
+                  origin=0.0, analysis_end, window_limit=None, edge_blind=0.0):
     """Bound a proposed tail by all detected speech, existing takes and horizon.
 
 Transcript intervals are relative to ``origin``; other intervals are absolute.
@@ -441,6 +441,10 @@ The caller still enforces scheduler, ownership and committed-window limits.
             consider(a, b, kind)
     if next_onset is not None:
         limit = min(limit, max(natural_end, next_onset - .15))
+    elif edge_blind > 0:
+        # F01 (optional): nothing was detected after the line, but the last `edge_blind` seconds of the analysed audio are
+        # not evidence of silence (the next window may find a line starting there).
+        limit = min(limit, max(natural_end, float(analysis_end) - float(edge_blind)))
     return {'version': SLACK_VERSION, 'natural_end': natural_end,
             'allowed_end': limit, 'extension_available': limit > natural_end,
             'natural_end_within_bound': natural_end <= limit, 'next_onset': next_onset,

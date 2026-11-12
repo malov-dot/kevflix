@@ -101,17 +101,45 @@ DEFAULTS = {
            "local_only": True,
            "max_height": 2160, "encoder_threads": 2, "buffer_segments": 2,
            "video_encoder": "auto", "nvenc_min_free_mib": 2048, "upscale": False,
+           # F19 picture path. video_codec: "auto" (HEVC Main10 in fMP4 once this TV passed its own silent decode test and
+           # hevc_nvenc is usable; H.264 MPEG-TS until then and after any failure) | "h264" (always MPEG-TS, the off switch)
+           # | "hevc" (forced). gpu_filters: "auto" (decode, scale and tone-map on the graphics card whenever NVENC
+           # encodes; steps down to the CPU chain by itself) | "off".
+           "video_codec": "auto", "gpu_filters": "auto",
            "hdr_mode": "auto", "surround": "auto", "pc_process_all": True, "sync_plex_progress": False,
            "min_free_disk_gib": 10,
            "idle_seconds": 45, "allow_origins": ["http://127.0.0.1:8081", "http://localhost:8081"],
+           # Linger: an on-demand dub job (and with it the loaded models) outlives its last TV session by this many
+           # seconds, so Back + reopen, an episode switch or a missed heartbeat does not reload them. 0 = cancel at once.
+           "dub_linger_seconds": 180,
+           # Background finish: after the linger the film just watched is dubbed to the end with nobody watching, at
+           # below-normal priority, only while the PC has been idle for background_idle_minutes and the graphics card
+           # is below background_max_gpu_celsius. FALSE until the owner reports the card's fan repaired (2026-11-10).
+           "background_finish": False, "background_idle_minutes": 5, "background_max_gpu_celsius": 78,
            "allow_plex_controls": False,
            # One constant -23 LUFS gain per dubbed movie (owner decision 2026-10-19); set {"enabled": false} to turn it off.
            "loudness": {"enabled": True},
            # No-stall playback (owner decision 2026-10-19): dub + video are prepared toward the end of the film whether or
            # not playback is paused; playback starts only when it is safe not to stall. See producer_policy.py.
            "mux_ahead_unlimited": True, "mux_ahead_workers": 2, "mux_ahead_disk_margin_gib": 5,
+           # F07: gapless segment joins (relay/segment_join.py). False: the previous argument list and cache key.
+           "seamless_joins": True,
+           # F25: while the dub still produces windows, far-ahead encodes use this many workers and run below normal priority.
+           "mux_ahead_workers_while_dubbing": 1, "mux_ahead_low_priority": True,
            "adaptive_start_gate": True, "actor_beta_start_seconds": 60, "start_gate_fast_rho": 1.25,
-           "low_water_seconds": 10, "rho_window_chunks": 6, "actor_beta_producer_queue": 4},
+           "low_water_seconds": 10, "rho_window_chunks": 6, "actor_beta_producer_queue": 4,
+           # F09. heartbeat_evidence False: a heartbeat / control reply carries only a summary of playback_evidence
+           # (the full record: GET /tv-api/session?id=..&evidence=1); True puts the full record back into every reply.
+           # light_chunk_states True: the playback path reads chunk states without decoding receipts; False = as before.
+           "heartbeat_evidence": False, "light_chunk_states": True,
+           # No freeze when the dub cannot arrive in time: that one window plays with the film's own audio (tv.py
+           # _original_due). blocked: the dub job is held (no graphics card); late: the dub is only slow (0 = never).
+           "original_when_dub_late": True, "original_blocked_lead_seconds": 25, "original_late_lead_seconds": 20,
+           # F06: the start / seek lead is counted in whole windows from the window under the playhead, and the
+           # throughput rule of the start gate never asks for more than max_gate_lead_seconds.
+           "lead_whole_windows": True, "max_gate_lead_seconds": 120,
+           # A seek parks the windows requested for the position the viewer left (producer_policy.on_seek, Store.demote_pending).
+           "seek_demote_stale": True},
     # Background YouTube TV page streamed to the TV (relay/youtube_host.py). OFF until the owner turns it on.
     "youtube": {"enabled": False, "profile_dir": "C:/KevFLIX-Runtime/youtube-profile", "chrome_path": "",
                 "idle_seconds": 120, "grace_seconds": 5, "user_agent": "", "user_agent_profile": "tizen",
@@ -119,18 +147,32 @@ DEFAULTS = {
                 "every_nth_frame": 3, "max_fps": 20, "memory_limit_mb": 3072, "userscripts": [], "userscripts_when": "ready", "stream_width": 1920, "stream_height": 1080,
                 # Hand-off of a picked video to the KevFLIX player (relay/youtube_source.py; yt-dlp downloads it into media_dir).
                 "handoff": True, "media_dir": "C:/KevFLIX-Runtime/youtube-media", "max_minutes": 240, "max_cache_gb": 30,
-                "max_height": 1080, "node_path": ""},
+                "max_height": 1080, "node_path": "",
+                # F20: the menu picture as low-latency video (relay/youtube_video.py); "jpeg" turns it off.
+                "screen_transport": "auto", "video_encoder": "cpu", "video_height": 1080, "video_fps": 30, "video_crf": 23,
+                "video_maxrate_kbps": 12000, "video_threads": 4, "video_capture_quality": 85},
     "updates": {"enabled": True, "repository": "malov-dot/kevflix",
                 "branch": "main", "path": "tv", "interval_seconds": 3600,
                 "token_env": "MOVIEDUB_GITHUB_TOKEN"},
     # Persistent profile data (fix 4): actor references owned by the app; '' = <config folder>/actor-bank.
     "actor_bank_dir": "",
+    # F11 housekeeping (relay/housekeeping.py). store_prune 'auto': list what would be deleted in
+    # <profile>/logs/housekeeping-plan.json for the first 24 h, then delete it without being asked; 'dry-run' lists
+    # only; 'on' deletes from the first start; 'off' does not look.
+    "housekeeping": {"store_prune": "auto", "tv_media_cap_gib": 40, "tv_media_max_age_days": 30,
+                     "keep_intermediates": False, "log_to_file": True},
     # Movie GPU lease held by the app guard (relay/app_runtime). sem_mode is explicit: 'absent' when Sem is shut
     # down for movies, 'running' (needs status_file) when Sem stays up and must be proved idle.
     # budget_mib 'auto' (v2): fresh free VRAM - reserve_mib - admission_margin_mib at acquire, capped by an optional
     # integer budget_cap_mib (relay/app_runtime/movie_lease.py); an explicit integer budget_mib is honoured.
     "gpu_lease": {"sem_mode": "absent", "status_file": "", "reserve_mib": 3072, "budget_mib": "auto",
-                  "admission_margin_mib": 512, "budget_cap_mib": None, "grace_s": 0.15, "retry_seconds": 30},
+                  "admission_margin_mib": 512, "budget_cap_mib": None, "grace_s": 0.15,
+                  # A dub held because the card is unavailable looks every retry_seconds whether it is free (a
+                  # read-only probe) and resumes then; a retry round refused again backs off up to retry_max_seconds.
+                  "retry_seconds": 30, "retry_max_seconds": 300, "probe_before_retry": True,
+                  # Heat guard (F28): no new dub window starts while the card is at or above max_gpu_celsius (0 = off);
+                  # dubbing resumes at resume_gpu_celsius. Read with nvidia-smi, a read-only query.
+                  "max_gpu_celsius": 85, "resume_gpu_celsius": 78},
 }
 # The earlier app default for gpu_lease.budget_mib (Demucs/Vox-only design); only this exact value is migrated.
 OLD_DEFAULT_BUDGET_MIB = 6144
@@ -206,6 +248,10 @@ class Config:
         self.data["tv"] = {**copy.deepcopy(DEFAULTS["tv"]), **raw.get("tv", {})}
         self.data["updates"] = {**copy.deepcopy(DEFAULTS["updates"]), **raw.get("updates", {})}
         self.data["youtube"] = {**copy.deepcopy(DEFAULTS["youtube"]), **raw.get("youtube", {})}
+        if "housekeeping" in raw and not isinstance(raw["housekeeping"], dict):
+            raise ValueError("housekeeping must be an object")
+        from . import housekeeping as _housekeeping
+        self.data["housekeeping"] = _housekeeping.validate(raw.get("housekeeping"))
         for key in CT2_COMPUTE_KEYS:
             if raw.get(key) not in (None, "", CUDA_COMPUTE_TYPE):
                 raise ValueError('%s must be "%s" or unset (CT2 policy %s): the movie CUDA path has no int8/auto '
@@ -233,6 +279,21 @@ class Config:
         if self.data["gpu_lease"]["budget_cap_mib"] not in (None, ""):
             _mib(self.data["gpu_lease"]["budget_cap_mib"], "gpu_lease.budget_cap_mib")
         _mib(self.data["gpu_lease"]["admission_margin_mib"], "gpu_lease.admission_margin_mib", allow_zero=True)
+        for key, low, high in (("retry_seconds", 5, 600), ("retry_max_seconds", 30, 3600)):
+            value = self.data["gpu_lease"][key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+                raise ValueError("gpu_lease.%s must be a number between %s and %s" % (key, low, high))
+        if self.data["gpu_lease"]["retry_max_seconds"] < self.data["gpu_lease"]["retry_seconds"]:
+            raise ValueError("gpu_lease.retry_max_seconds must not be below gpu_lease.retry_seconds")
+        if not isinstance(self.data["gpu_lease"]["probe_before_retry"], bool):
+            raise ValueError("gpu_lease.probe_before_retry must be true or false")
+        for key, low, high in (("max_gpu_celsius", 0, 95), ("resume_gpu_celsius", 40, 93)):
+            value = self.data["gpu_lease"][key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+                raise ValueError("gpu_lease.%s must be a number between %s and %s" % (key, low, high))
+        lease = self.data["gpu_lease"]
+        if lease["max_gpu_celsius"] and lease["resume_gpu_celsius"] > lease["max_gpu_celsius"] - 2:
+            raise ValueError("gpu_lease.resume_gpu_celsius must be at least 2 below gpu_lease.max_gpu_celsius")
         if migrated:
             self.data["gpu_first_migration"] = migrated      # in-memory record; the guard persists the same change
         beta = self.data.get("actor_beta")
@@ -244,6 +305,10 @@ class Config:
             pipeline.setdefault("enabled", True)
             pipeline.setdefault("queues", {"separation": 3, "analysis": 1})
             pipeline.setdefault("poll_seconds", 0.5)
+            # F17: pre-run the next window's ASR + speaker analysis while the current window renders.
+            pipeline.setdefault("warm_next_window", True)
+            if not isinstance(pipeline["warm_next_window"], bool):
+                raise ValueError("actor_beta.movie_pipeline.warm_next_window must be true or false")
             beta["movie_pipeline"] = pipeline
             beta.setdefault("first_pass_admission", "movie-lease")
             beta.setdefault("demucs_device", "cuda")
@@ -267,10 +332,28 @@ class Config:
             lease.setdefault("reserve_mib", int(self.data["gpu_lease"]["reserve_mib"]))
         if not 1 <= int(self.data["tv"]["encoder_threads"]) <= 8:
             raise ValueError("TV encoder threads must be between 1 and 8")
+        if not isinstance(self.data["tv"]["original_when_dub_late"], bool):
+            raise ValueError("tv.original_when_dub_late must be true or false")
+        for key, low, high, zero in (("original_blocked_lead_seconds", 5, 120, False),
+                                     ("original_late_lead_seconds", 2, 60, True)):
+            value = self.data["tv"][key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                    or not (low <= value <= high or (zero and value == 0)):
+                raise ValueError("tv.%s must be a number between %s and %s%s"
+                                 % (key, low, high, " (or 0 for never)" if zero else ""))
         if not 10 <= int(self.data["youtube"]["idle_seconds"]) <= 86400:
             raise ValueError("youtube.idle_seconds must be between 10 and 86400")
         if not 1 <= int(self.data["youtube"]["max_fps"]) <= 30:
             raise ValueError("youtube.max_fps must be between 1 and 30")
+        if self.data["youtube"]["screen_transport"] not in ("auto", "video", "jpeg"):
+            raise ValueError("youtube.screen_transport must be auto, video or jpeg")
+        if self.data["youtube"]["video_encoder"] not in ("cpu", "nvenc"):
+            raise ValueError("youtube.video_encoder must be cpu or nvenc")
+        for key, low, high in (("video_height", 360, 2160), ("video_fps", 10, 60), ("video_crf", 15, 35),
+                               ("video_maxrate_kbps", 1000, 40000), ("video_threads", 1, 8), ("video_capture_quality", 40, 100)):
+            value = self.data["youtube"][key]
+            if isinstance(value, bool) or not isinstance(value, int) or not low <= value <= high:
+                raise ValueError("youtube.%s must be a whole number between %s and %s" % (key, low, high))
         if not 1 <= int(self.data["youtube"]["max_minutes"]) <= 1440:
             raise ValueError("youtube.max_minutes must be between 1 and 1440")
         if not 1 <= float(self.data["youtube"]["max_cache_gb"]) <= 4000:
@@ -295,10 +378,38 @@ class Config:
             media_dir = Path(os.path.expandvars(str(self.data["youtube"]["media_dir"]))).expanduser()
             if not media_dir.is_absolute() or media_dir.parent == media_dir:
                 raise ValueError("youtube.media_dir must be an absolute folder (not a drive root)")
+        if not isinstance(self.data["tv"]["background_finish"], bool):
+            raise ValueError("tv.background_finish must be true or false")
+        for key, low, high in (("background_idle_minutes", 1, 120), ("background_max_gpu_celsius", 50, 90)):
+            value = self.data["tv"][key]
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not low <= value <= high:
+                raise ValueError("tv.%s must be a number between %s and %s" % (key, low, high))
+        linger = self.data["tv"]["dub_linger_seconds"]
+        if isinstance(linger, bool) or not isinstance(linger, (int, float)) or not 0 <= linger <= 1800:
+            raise ValueError("tv.dub_linger_seconds must be a number between 0 and 1800")
+        if not isinstance(self.data["tv"]["lead_whole_windows"], bool):
+            raise ValueError("tv.lead_whole_windows must be true or false")
+        gate_lead = self.data["tv"]["max_gate_lead_seconds"]
+        if isinstance(gate_lead, bool) or not isinstance(gate_lead, (int, float)) or not 30 <= gate_lead <= 3600:
+            raise ValueError("tv.max_gate_lead_seconds must be a number between 30 and 3600")
         if int(self.data["tv"]["max_height"]) not in (480, 720, 1080, 2160):
             raise ValueError("TV output height must be 480, 720, 1080 or 2160")
         if self.data["tv"]["video_encoder"] not in ("auto", "nvenc", "software"):
             raise ValueError("TV video_encoder must be auto, nvenc or software")
+        if self.data["tv"].get("video_codec", "h264") not in ("h264", "auto", "hevc"):
+            raise ValueError("TV video_codec must be h264, auto or hevc")
+        if self.data["tv"].get("gpu_filters", "off") not in ("off", "auto"):
+            raise ValueError("TV gpu_filters must be off or auto")
+        if not isinstance(self.data["tv"]["seamless_joins"], bool):
+            raise ValueError("tv.seamless_joins must be true or false")
+        if not isinstance(self.data["tv"]["mux_ahead_low_priority"], bool):
+            raise ValueError("tv.mux_ahead_low_priority must be true or false")
+        workers = self.data["tv"]["mux_ahead_workers_while_dubbing"]
+        if isinstance(workers, bool) or not isinstance(workers, int) or not 1 <= workers <= 4:
+            raise ValueError("tv.mux_ahead_workers_while_dubbing must be a whole number from 1 to 4")
+        for key in ("heartbeat_evidence", "light_chunk_states"):
+            if not isinstance(self.data["tv"].get(key, False), bool):
+                raise ValueError("tv.%s must be true or false" % key)
         # Owner decision 2026-10-19: everything on the GPU where possible. 'auto' picks NVENC when ffmpeg has h264_nvenc and
         # enough VRAM is free (tv.nvenc_min_free_mib), otherwise software; an NVENC failure retries in software (tv.py).
         for key, env in (("api_token", "MOVIEDUB_API_TOKEN"),
@@ -557,8 +668,12 @@ class Config:
                    'slot_fill',
                    # owner decision 2026-10-19/20: Diart film-global speaker turns (opt-in actor_beta.diart_turns)
                    'diart_turns',
+                   # F15 (2026-11-11): film-level speakers; an id may refuse a borrowed reference (relay/film_speakers.py)
+                   'film_speakers',
                    # owner decision 2026-10-21: live streaming Diart sidecar (actor_beta.diart_stream, default on with the beta)
-                   'diart_stream')
+                   'diart_stream',
+                   # F02 (2026-11-11): the film's language is decided once from its confident windows (relay/film_language.py)
+                   'film_language')
             values['actor_implementation']={name:hashlib.sha256(Path(__file__).with_name(name+'.py').read_bytes()).hexdigest()
                                             for name in names}
             from . import slot_fill as _slot_fill        # stdlib-only; the EFFECTIVE slot-fill / fuller settings (defaults filled in)

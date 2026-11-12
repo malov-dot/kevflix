@@ -11,6 +11,7 @@ import re
 import secrets
 import subprocess
 import shutil
+import struct
 import threading
 import time
 import uuid
@@ -20,11 +21,12 @@ from urllib.parse import urlencode
 from .media import probe, fingerprint, file_hash, subtitle_cues, wav_info, RATE, CHANNELS
 from .process import ProcessOwner, Cancelled
 from .plex_browse import PlexBrowse
-from .tv_probe import ProbeClips
+from .tv_probe import ProbeClips, SPEC_VERSION as PROBE_SPEC
 from .buffer_policy import buffer_metrics, next_request, note_heartbeat
 from . import producer_policy as _producer
 from . import embedded_subtitles as _subs
 from . import youtube_stream as _ystream
+from . import segment_join as _join
 
 
 # A stereo dub of a 5.1 film that has no surround mix for that chunk. The stereo dub is on the ITU-normalised scale (the downmix is divided
@@ -40,8 +42,70 @@ def passthrough_mode(mode):
     """True for a chunk whose english.wav is just the original soundtrack: no-dialogue, original-unverified, original-trial-fallback,
     original-English... (every producer mode that starts with "original")."""
     return mode == "no-dialogue" or str(mode or "").startswith("original")
+# F19 picture path -------------------------------------------------------------------------------------------------
+FMP4_FLAGS = "+frag_keyframe+empty_moov+default_base_moof+frag_discont+skip_trailer"
+# Version of the non-default picture path: part of the cache key of every such segment and of a TV's HEVC failure mark.
+# Bump it whenever the HEVC arguments, the fMP4 flags or a GPU chain change: old segments are then not reused and a TV
+# that failed on the old stream tries HEVC again by itself.
+PICTURE_VERSION = "picture-v1"
+# What the TV's player reports (tv/app/player.js reportFailure) and how much each counts toward HEVC_FAILURES: a failed
+# load or a stall is followed by the player's own try with its other decoder (1 each); after 'playback-error' the
+# player tries nothing more (2).
+PLAYER_FAILURE_WEIGHT = {"hls.js-failed": 1, "native-failed": 1, "stalled": 1, "playback-error": 2}
+
+
+def hevc_codec_string(height):
+    """RFC 6381 codec string of the HEVC stream for the master playlist: Main10, main tier, level 5.1 above 1080 lines,
+    else 4.1 (an upper bound; the encoder chooses the real level)."""
+    return "hvc1.2.4.L153.B0" if int(height) > 1080 else "hvc1.2.4.L123.B0"
+
+
+def video_range(transfer):
+    """HLS VIDEO-RANGE of a transfer characteristic."""
+    return {"smpte2084": "PQ", "arib-std-b67": "HLG"}.get(transfer, "SDR")
+
+
+SELFCHECK_PSNR_DB = 26.0          # the same frame through another codec or scaler
+SELFCHECK_TONE_PSNR_DB = 14.0     # another tone-map curve: only a gross error (black, green, garbage) is below this
+SELFCHECK_SIZE = (320, 180)
+
+
+def gray_psnr(a, b):
+    """PSNR in dB between two 8-bit gray pictures of the same size given as bytes; 99.0 when they are identical."""
+    if not a or len(a) != len(b):
+        raise ValueError("the two pictures differ in size")
+    error = sum((x - y) * (x - y) for x, y in zip(a, b))
+    return 99.0 if error == 0 else 10.0 * math.log10(255.0 * 255.0 * len(a) / error)
+
+
+def split_fmp4(source, media):
+    """Split ffmpeg's fragmented MP4 `source` (ftyp, moov, then moof/mdat pairs) in two: returns the init segment (every
+    box before the first moof) as bytes and writes the rest (the media segment) to `media`. ValueError when the file
+    is not that shape."""
+    data = Path(source).read_bytes()
+    position, kinds, first = 0, [], None
+    while position + 8 <= len(data):
+        size, kind = struct.unpack(">I4s", data[position:position + 8])
+        if size == 1:
+            if position + 16 > len(data):
+                raise ValueError("TV mux produced a truncated MP4 box")
+            size = struct.unpack(">Q", data[position + 8:position + 16])[0]
+        elif size == 0:
+            size = len(data) - position
+        if size < 8 or position + size > len(data):
+            raise ValueError("TV mux produced a damaged MP4 box")
+        if kind == b"moof" and first is None:
+            first = position
+        kinds.append(kind)
+        position += size
+    if first is None or position != len(data) or kinds[:2] != [b"ftyp", b"moov"] or b"mdat" not in kinds:
+        raise ValueError("TV mux produced no fragmented MP4")
+    Path(media).write_bytes(data[first:])
+    return data[:first]
+
+
 DIAGNOSTIC_KEYS = ("stage", "engine", "code", "message", "ready_state", "network_state", "native_hls", "hls_js", "ua",
-                   "session", "error", "hls", "codecs", "probe", "youtube")
+                   "session", "error", "hls", "codecs", "probe", "youtube", "open", "controls", "joins", "picture")
 _URL = re.compile(r"https?://\S+", re.I)
 
 
@@ -106,6 +170,11 @@ MEDIA_EXTENSIONS = {".mp4", ".mkv", ".m4v", ".avi", ".mov", ".ts", ".m2ts", ".we
 KEEP_READY_STATES = ("error", "needs_review")
 READY_CHUNK_STATES = ("ready", "approved")
 BOUNDARY_SECONDS = 2.0
+PLEX_REPORT_TIMEOUT = 5.0        # one Plex progress report (F24: sent by its own thread, never by a TV request)
+PLEX_NEIGHBOUR_TIMEOUT = 3.0     # each Plex request of the previous / next episode look-up (at most four)
+# The code a held chunk's receipt names: "MovieResourceWait: lease_sem_started: sem_started: ..." -> lease_sem_started.
+_RESOURCE_CODE = re.compile(r"(?:^|:\s)([a-z][a-z0-9]*(?:_[a-z0-9]+)+):")
+STATUS_SLOW_MS = 500             # F09: a status() that took this long is reported in the log (tv_status_slow)
 
 
 class ResourceBusy(Exception):
@@ -115,6 +184,7 @@ class ResourceBusy(Exception):
 class TVService:
     def __init__(self, config, store, coordinator, plex=None):
         self.config, self.store, self.jobs = config, store, coordinator
+        _producer.LIGHT_ROWS = self._tv_cfg().get("light_chunk_states", True) is not False     # F09 switch
         self.lock = threading.RLock()
         self.sessions, self.nodes, self.codes, self.attempts = {}, {}, {}, {}
         self.active_owner, self.active_session = None, None
@@ -130,16 +200,62 @@ class TVService:
         # Run-ahead mux (tv.mux_ahead_unlimited): the encodes running now, per session id (every generation still
         # unwinding included); the per-session encoder choice; one cached `ffmpeg -encoders` listing per ffmpeg path.
         self._encodes, self._encoder_choice, self._encoder_listing = {}, {}, {}
+        # F19: one cached hevc_nvenc listing per ffmpeg path; picture-path pins of this server run (a GPU filter chain
+        # or hevc_nvenc that failed once is not tried again until the server restarts).
+        self._hevc_listing, self._picture_pins = {}, {}
+        self._picture_checked = {}         # picture plan -> {"ok", "psnr_db", "limit_db"}: one self-check per plan and server run
         self._encoder_lock = threading.Lock()
         self._premeasure_thread = None
         self._vram_probe = None            # tests inject: callable() -> free MiB | None
         self._yt_source, self._yt_lock = None, threading.Lock()   # the YouTube hand-off downloader (relay/youtube_source.py), created on first use
+        self._joins = None                 # F07 self-check per TV: {device id: {"fails": n, "off_until": unix time}} (lazy, from tv_devices)
         self.probe = ProbeClips(config)    # the "Test this TV" clips (relay/tv_probe.py); nothing runs until the TV asks
+        # F24: Plex progress reports wait here for their own thread: newest per session, {session id: report}.
+        self._plex_reports, self._plex_report_wake, self._plex_report_thread = {}, threading.Event(), None
+        # Linger (tv.dub_linger_seconds): on-demand dub jobs whose last session ended, {job_id: time.time() at which the
+        # job is cancelled unless a session picked it up again}; _enqueueing > 0 while control() attaches a job (no
+        # expiry meanwhile). Both under self.lock.
+        self._linger, self._enqueueing = {}, 0
+        if hasattr(coordinator, "playback_active"):
+            coordinator.playback_active = lambda: bool(self.sessions)      # background finish pauses during any playback
 
     def start(self):
+        self._forget_stale_records()
         if self.config["tv"]["enabled"]:
             self.thread = threading.Thread(target=self.loop, name="tv-segment-mux", daemon=True)
             self.thread.start()
+
+    def _forget_stale_records(self):
+        """F11. A run that crashed never expired its 'tv-<session>' rows (they stayed in /api/status and in the watch
+        context for ever); a revoked TV pairing is dropped 30 days after it was revoked."""
+        records = getattr(self.store, "records", None)
+        if not callable(records):
+            return
+        try:
+            for record in records("sessions"):
+                if str(record["id"]).startswith("tv-"):
+                    self.store.expire_record("sessions", record["id"])
+            cutoff = time.time() - 30 * 86400
+            for record in records("tv_devices"):
+                if record["payload"].get("revoked") and float(record.get("updated") or 0) < cutoff:
+                    self.store.expire_record("tv_devices", record["id"])
+        except Exception:
+            logging.exception("Stale TV records were not cleared")
+
+    def live_job_ids(self):
+        """Dub jobs attached to a current session (housekeeping never prunes these)."""
+        with self.lock:
+            return {value["job_id"] for value in self.sessions.values() if value.get("job_id")}
+
+    def live_segment_paths(self):
+        """Every muxed file a current session may still serve (housekeeping never evicts these)."""
+        with self.lock:
+            return {str(path) for value in self.sessions.values() for path in value["segments"].values()}
+
+    def session_count(self):
+        """Open TV sessions (housekeeping deletes nothing while a film is on screen)."""
+        with self.lock:
+            return len(self.sessions)
 
     def close(self):
         self.stop_event.set()
@@ -147,9 +263,14 @@ class TVService:
             ids = list(self.sessions)
         for ident in ids:
             self.stop(ident)
+        self._flush_linger()                            # server close: a lingering dub job is cancelled now
         if self._yt_source is not None:
             self._yt_source.cancel()                    # a download or start-up no session owns any more
         self.wake.set()
+        self._plex_report_wake.set()
+        reporter = self._plex_report_thread
+        if reporter is not None:
+            reporter.join(timeout=PLEX_REPORT_TIMEOUT + 1)      # the 'stopped' reports of the sessions just closed
         if self.thread:
             self.thread.join(timeout=20)
 
@@ -272,6 +393,8 @@ class TVService:
         spec = {"id": ident, "device_id": device, "source": str(source),
                 "fingerprint": fingerprint(source) if _preset is None else _preset["fingerprint"], "title": source.stem,
                 "duration": metadata["duration"], "streams": metadata["streams"],
+                "container": str((metadata.get("format") or {}).get("format_name") or ""),
+                "seamless": self._seamless_for(device),
                 "audio_index": audio_index, "segment_seconds": int(self.config["segment_seconds"]),
                 "position": 0.0, "start_index": 0, "generation": 1, "epoch": 0,
                 "dub": False, "compatibility": bool(self.config["tv"]["pc_process_all"]),
@@ -764,13 +887,20 @@ class TVService:
                 # Subtitles are for viewing only and never feed translation: the dub job is always created with
                 # subtitles OFF (no sidecar file, no embedded track, no automatic English choice). The viewer's own
                 # subtitle track is served separately by captions() from the session's "subtitles" selection.
-                job = self.jobs.enqueue(value["source"], audio_index=value["audio_index"],
-                                        mode="ondemand", title=value["title"], subtitles=_subs.OFF,
-                                        **({"resume_cancelled": True}
-                                           if getattr(self.jobs, "RESUME_CANCELLED_VERSION", 0) >= 1 else {}),
-                                        **({"initial_index": int(min(max(0, new_position), max(0, value["duration"] - .1))
-                                                                // value["segment_seconds"])}
-                                           if _playback_buffering_on(self.config) else {}))
+                with self.lock:
+                    self._enqueueing += 1       # a lingering job is not cancelled while it is being picked up again
+                try:
+                    job = self.jobs.enqueue(value["source"], audio_index=value["audio_index"],
+                                            mode="ondemand", title=value["title"], subtitles=_subs.OFF,
+                                            **({"resume_cancelled": True}
+                                               if getattr(self.jobs, "RESUME_CANCELLED_VERSION", 0) >= 1 else {}),
+                                            **({"initial_index": int(min(max(0, new_position), max(0, value["duration"] - .1))
+                                                                    // value["segment_seconds"])}
+                                               if _playback_buffering_on(self.config) else {}))
+                    self._job_attached(job["id"])
+                finally:
+                    with self.lock:
+                        self._enqueueing -= 1
             with self.lock:
                 value["position"] = min(max(0, new_position), max(0, value["duration"] - .1))
                 value["start_index"] = int(value["position"] // value["segment_seconds"])
@@ -803,8 +933,13 @@ class TVService:
                         raise
             if _playback_buffering_on(self.config) and action in ("seek", "dub", "audio"):
                 _producer.on_seek(value, self.store, self.jobs, self.config["tv"], time.time())
+                # One log line per seek: which window the viewer went to and how many requests of the position he left were parked.
+                logging.info("tv_seek %s", json.dumps({"session": ident, "job_id": value["job_id"], "action": action,
+                                                       "index": value["start_index"], "parked": value.get("seek_demoted", 0)}))
             if old_job and old_job != value["job_id"]:
-                self.cancel_unshared_job(old_job)
+                # Replaced by another dub job (audio track): that one needs the GPU now. Dubbing switched off: linger,
+                # the viewer may switch it on again.
+                self.cancel_unshared_job(old_job, linger=not value["job_id"])
         elif action in ("play", "pause"):
             value["state"] = "playing" if action == "play" else "paused"
             if _playback_buffering_on(self.config) or value.get("yt_stream") or value.get("live"):
@@ -815,8 +950,171 @@ class TVService:
         return self.status(ident, device)
 
     def diagnostic(self, device, data):
-        logging.info("tv_diagnostic %s", json.dumps(diagnostic_record(data), ensure_ascii=False))
+        record = diagnostic_record(data)
+        logging.info("tv_diagnostic %s", json.dumps(record, ensure_ascii=False))
+        self._note_joins(device, record)                # F07: the TV's report of three joins
+        try:
+            self._note_diagnostic(device, record)
+        except Exception:                       # bookkeeping must never fail the TV's report
+            logging.exception("tv diagnostic bookkeeping failed")
         return {"ok": True}
+
+    def _device_video(self, device):
+        """The stored video record of one paired TV ({} when none): {"probe": {...}, "probe_at", "hevc_failed", ...}."""
+        records = getattr(self.store, "records", None)
+        if not device or not callable(records):
+            return {}
+        for record in records("tv_devices"):
+            if record["id"] == device:
+                return dict(record["payload"].get("video") or {})
+        return {}
+
+    def _store_device_video(self, device, **fields):
+        """Merge fields into the TV's stored video record; a field given as None is removed."""
+        records = getattr(self.store, "records", None)
+        if not device or not callable(records):
+            return
+        for record in records("tv_devices"):
+            if record["id"] == device:
+                video = dict(record["payload"].get("video") or {})
+                video.update(fields)
+                self.store.put_record("tv_devices", device, {**record["payload"],
+                                      "video": {k: v for k, v in video.items() if v is not None}})
+                return
+
+    def video_probe_needed(self, device):
+        """True while this TV should run its silent decode test by itself (asked once per app start through
+        /tv-api/settings): tv.video_codec is 'auto' and no result for the current clip set is stored for this TV."""
+        if str(_producer._tv(self._tv_cfg(), "video_codec", "h264")) != "auto":
+            return False
+        return self._device_video(device).get("probe_spec") != PROBE_SPEC
+
+    def _note_diagnostic(self, device, record):
+        """F19: keep what the TV proved about itself with its record (the decode test, an HEVC playback that ran for
+        30 s), and send a playback that fails on the HEVC stream (both decoders tried, a failure the player does not
+        retry, or more than a tenth of the frames dropped) back to H.264 MPEG-TS. The TV itself is marked when the HEVC
+        stream never played in this playback or dropped frames."""
+        stage = record.get("stage")
+        if stage == "probe" and isinstance(record.get("probe"), dict):
+            self._store_device_video(device, probe=record["probe"], probe_at=time.time(), probe_spec=PROBE_SPEC,
+                                     hevc_failed=None, hevc_failed_stage=None, hevc_failed_picture=None)
+            return
+        weight, dropping = PLAYER_FAILURE_WEIGHT.get(stage), False
+        picture = record.get("picture") if stage == "picture" and isinstance(record.get("picture"), dict) else None
+        if picture is not None:
+            if picture.get("codec") != "hevc":
+                return
+            decoded, dropped = picture.get("dec"), picture.get("drop")
+            dropping = (isinstance(decoded, (int, float)) and isinstance(dropped, (int, float)) and decoded > 0
+                        and dropped * 10 > decoded)
+            if not dropping and (picture.get("adv") or 0) >= 25 and (picture.get("w") or 0) > 0:
+                self._store_device_video(device, hevc_played=time.time(), hevc_played_engine=record.get("engine"),
+                                         hevc_played_picture="%sx%s dec %s drop %s" % (
+                                             picture.get("w"), picture.get("h"), decoded, dropped))
+                return
+            weight = _producer.HEVC_FAILURES if dropping else None
+        if not weight:
+            return
+        ident = str(record.get("session") or "")
+        with self.lock:
+            value = self.sessions.get(ident)
+            if value is None or value["device_id"] != device:
+                return
+            generation = value["generation"]
+            played = bool(value.get("beta_started")) and value.get("beta_epoch") == value.get("epoch")
+        with self._encoder_lock:
+            choice = self._encoder_choice.get(ident)
+            if not choice or choice.get("generation") != generation or choice.get("codec") != "hevc":
+                return
+            choice["player_failures"] = int(choice.get("player_failures") or 0) + weight
+            failures = choice["player_failures"]
+        if failures >= _producer.HEVC_FAILURES and self._restart_picture(
+                ident, generation, "the TV reported '%s' on the HEVC stream" % stage, codec_pin="tv-playback") \
+                and (dropping or not played):
+            self._store_device_video(device, hevc_failed=time.time(), hevc_failed_stage=stage,
+                                     hevc_failed_picture=PICTURE_VERSION)
+
+    def _restart_picture(self, ident, generation, reason, codec_pin=None):
+        """The stream format or look must change (HEVC goes back to H.264, a tone-map chain failed): one new playback
+        generation, exactly like a dub revision change, so one playlist never mixes containers. False when the session
+        ended or already moved to another generation."""
+        with self.lock:
+            value = self.sessions.get(ident)
+            if value is None or value["generation"] != generation:
+                return False
+            if codec_pin:
+                value["codec_pinned"] = codec_pin
+            value["generation"] += 1
+            value["epoch"] += 1
+            value["start_index"] = int(value["position"] // value["segment_seconds"])
+            value["segments"] = {}
+        logging.warning("tv picture path restarted for %s: %s", ident[:8], reason)
+        self._cancel_encodes(ident)
+        self.wake.set()
+        return True
+
+    # --- F07 self-check: the TV reports what its player did at three joins; nobody has to listen ------------------------
+    JOINS_FAIL_STAGES = ("stalled", "playback-error", "hls.js-failed", "native-failed")
+    JOINS_PIN_SECONDS = 14 * 86400
+
+    def _joins_state(self):
+        if self._joins is None:
+            try:
+                self._joins = {r["id"]: dict(r["payload"]["joins"]) for r in self.store.records("tv_devices")
+                               if isinstance(r["payload"].get("joins"), dict)}
+            except Exception:
+                self._joins = {}
+        return self._joins
+
+    def _seamless_for(self, device):
+        """Decided once, when a session opens, and kept for its whole life (one playlist never mixes the two segment formats):
+        tv.seamless_joins, unless this TV's own reports failed in two sessions in a row; then the previous format for
+        JOINS_PIN_SECONDS, after which the new one is tried again."""
+        if not _producer._flag(self._tv_cfg(), "seamless_joins", True):
+            return False
+        return time.time() >= float((self._joins_state().get(device) or {}).get("off_until") or 0)
+
+    def _note_joins(self, device, record):
+        """One verdict per session: a "joins" report decides it; a failure report before any passing joins report counts as
+        a failure. Applied when the session ends (_settle_joins)."""
+        with self.lock:
+            value = self.sessions.get(str(record.get("session") or ""))
+            if value is None or value.get("device_id") != device or value.get("yt_stream") or value.get("live"):
+                return
+            stage = record.get("stage")
+            if stage == "joins":
+                ok, why = _join.joins_verdict(record.get("joins"))
+                if ok is None:
+                    return
+            elif stage in self.JOINS_FAIL_STAGES and value.get("_joins") != "pass":
+                ok, why = False, [str(stage)]
+            else:
+                return
+            value["_joins"] = "pass" if ok else "fail"
+            seamless = self._seamless_on(value)
+        logging.info("tv_joins %s", json.dumps({"session": value["id"][:8], "device": str(device)[:8], "seamless": seamless,
+                                                "ok": bool(ok), "why": why}))
+
+    def _settle_joins(self, value):
+        """A session ended: count its verdict for its TV. Only sessions that used the new format count."""
+        verdict = value.get("_joins")
+        if verdict not in ("pass", "fail") or not self._seamless_on(value):
+            return
+        device = value["device_id"]
+        state = self._joins_state().get(device) or {}
+        fails = 0 if verdict == "pass" else int(state.get("fails") or 0) + 1
+        state = {"fails": fails, "off_until": float(state.get("off_until") or 0)}
+        if fails >= 2:
+            state = {"fails": 0, "off_until": time.time() + self.JOINS_PIN_SECONDS}
+            logging.warning("tv_joins_pinned %s", json.dumps({"device": str(device)[:8], "days": self.JOINS_PIN_SECONDS // 86400,
+                                                              "format": "previous segment format (tv.seamless_joins off for this TV)"}))
+        self._joins_state()[device] = state
+        try:
+            for record in self.store.records("tv_devices"):
+                if record["id"] == device:
+                    self.store.put_record("tv_devices", device, {**record["payload"], "joins": state})
+        except Exception:
+            pass                            # kept in memory; a store problem must never break a stop
 
     def heartbeat(self, ident, device, position, state, generation):
         value = self.session(ident, device)
@@ -828,10 +1126,19 @@ class TVService:
         with self.lock:
             value["position"] = max(0, min(value["duration"], position))
             value["state"] = state if state in ("playing", "paused", "buffering", "ended") else "paused"
+            # F11: the HTTP log no longer lists every heartbeat; one line per state change and per minute says where
+            # the viewer is (the old lines carried neither position nor state).
+            mark = value.get("_progress_log")
+            if mark is None or mark[0] != value["state"] or time.time() - mark[1] >= 60:
+                value["_progress_log"] = (value["state"], time.time())
+                logging.info("tv_progress %s", json.dumps({"session": ident[:8], "state": value["state"],
+                                                           "position": round(value["position"], 1),
+                                                           "generation": value["generation"]}))
             self._note_playback_evidence(value)
             if _playback_buffering_on(self.config) or value.get("yt_stream") or value.get("live"):
                 if not value.get("live"):
                     note_heartbeat(value, value["position"], value["state"], time.time())
+                    self._note_standstill(value, time.time())
                 if value["state"] in ("playing", "paused"):
                     value["paused_intent"] = value["state"] == "paused"
         self.store.put_record("sessions", "tv-" + ident, {
@@ -843,30 +1150,66 @@ class TVService:
             "dub": value["dub"], "watch": value["watch"], "watch_mode": value["watch_mode"]})
         if value["sync_progress"] and value["plex_key"] and (state == "ended" or time.time() - value.get("progress_at", 0) >= 15):
             value["progress_at"] = time.time()
-            try:
-                self.plex.call("/:/timeline", {"ratingKey": value["plex_key"],
-                    "key": "/library/metadata/" + value["plex_key"],
-                    "state": "stopped" if value["state"] == "ended" else value["state"],
-                    "time": round(value["position"] * 1000), "duration": round(value["duration"] * 1000)})
-                if state == "ended" and value["position"] >= value["duration"] - 5 and not value.get("scrobbled"):
-                    self.catalog.watched(value["plex_key"], True)
-                    value["scrobbled"] = True
-            except Exception:
-                value["progress_warning"] = "Plex progress could not be saved"
+            self._queue_plex_report(value, "stopped" if value["state"] == "ended" else value["state"],
+                                    scrobble=state == "ended" and value["position"] >= value["duration"] - 5)
         self.wake.set()
         return self.status(ident, device)
+
+    def _queue_plex_report(self, value, state, scrobble=False):
+        """Hand one Plex progress report (timeline; scrobble: also 'watched') to the reporter thread. The TV's request
+        never waits for Plex. Only the newest report of a session is kept while Plex is slow."""
+        report = {"value": value, "scrobble": bool(scrobble),
+                  "params": {"ratingKey": value["plex_key"], "key": "/library/metadata/" + value["plex_key"],
+                             "state": state, "time": round(value["position"] * 1000),
+                             "duration": round(value["duration"] * 1000)}}
+        with self.lock:
+            waiting = self._plex_reports.pop(value["id"], None)
+            report["scrobble"] = report["scrobble"] or bool(waiting and waiting["scrobble"])
+            self._plex_reports[value["id"]] = report
+            if self._plex_report_thread is None or not self._plex_report_thread.is_alive():
+                self._plex_report_thread = threading.Thread(target=self._plex_report_loop, name="tv-plex-progress",
+                                                            daemon=True)
+                self._plex_report_thread.start()
+        self._plex_report_wake.set()
+
+    def _plex_report_loop(self):
+        while True:
+            with self.lock:
+                ident = next(iter(self._plex_reports), None)
+                report = self._plex_reports.pop(ident) if ident is not None else None
+            if report is None:
+                if self.stop_event.is_set():
+                    return                           # nothing left to send at shutdown
+                self._plex_report_wake.wait(5)
+                self._plex_report_wake.clear()
+                continue
+            value = report["value"]
+            try:
+                self.plex.call("/:/timeline", report["params"], timeout=PLEX_REPORT_TIMEOUT)
+                if report["scrobble"] and not value.get("scrobbled"):
+                    self.catalog.watched(value["plex_key"], True)
+                    value["scrobbled"] = True
+                value["progress_warning"] = None
+            except Exception as error:
+                if value.get("progress_warning") is None:
+                    logging.info("tv plex_report_failed %s", json.dumps({"session": str(value["id"])[:8],
+                                                                         "error": type(error).__name__}))
+                value["progress_warning"] = "Plex progress could not be saved"
 
     def stop(self, ident):
         with self.lock:
             value = self.sessions.pop(ident, None)
+        timing = value.get("_status_timing") if value else None
+        if timing and timing[0]:
+            # F09: what status() cost during this session (it runs on every heartbeat, under the session lock).
+            logging.info("tv_status_timing %s", json.dumps({"session": ident[:8], "calls": timing[0],
+                                                            "mean_ms": round(timing[1] / timing[0], 1),
+                                                            "max_ms": round(timing[2], 1)}))
         if value and value["sync_progress"] and value["plex_key"]:
-            try:
-                self.plex.call("/:/timeline", {"ratingKey": value["plex_key"],
-                    "key": "/library/metadata/" + value["plex_key"], "state": "stopped",
-                    "time": round(value["position"] * 1000), "duration": round(value["duration"] * 1000)})
-            except Exception:
-                pass
+            self._queue_plex_report(value, "stopped")       # F24: Back never waits for Plex
         self.store.expire_record("sessions", "tv-" + ident)
+        if value:
+            self._settle_joins(value)
         if self.active_session == ident and self.active_owner:
             self.active_owner.cancel()
         self._cancel_encodes(ident)
@@ -902,14 +1245,98 @@ class TVService:
                 except OSError:
                     pass
 
-    def cancel_unshared_job(self, job_id):
+    def _linger_seconds(self):
+        """tv.dub_linger_seconds (0..1800): how long an on-demand dub job outlives its last session. Absent or 0: the
+        job is cancelled at once, exactly as before."""
+        value = self._tv_cfg().get("dub_linger_seconds", 0)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+            return 0.0
+        return min(1800.0, max(0.0, float(value)))
+
+    def _cancel_if_unshared(self, job_id):
         with self.lock:
             shared = any(s["job_id"] == job_id for s in self.sessions.values())
         job = self.store.job(job_id)
-        if not shared and job and job["payload"].get("mode") == "ondemand":
-            self.jobs.cancel(job_id)
+        if shared or not job or job["payload"].get("mode") != "ondemand":
+            return False
+        if job["state"] == "complete":
+            # F24: a finished dub has nothing left to cancel; cancelling it only made the next open re-hash every
+            # window and bump every claim token (Coordinator._reopen_cancelled).
+            logging.info("tv dub_kept_complete %s", json.dumps({"job_id": job_id}))
+            return False
+        self.jobs.cancel(job_id)
+        return True
 
-    def status(self, ident, device=None):
+    def _release_job(self, job_id):
+        """The linger of the film just watched is over (or there is none). tv.background_finish on: hand the job to
+        Coordinator.background (it is finished at the lowest priority while nobody watches or uses the PC); otherwise,
+        or when it cannot continue, cancel it as before."""
+        if self._tv_cfg().get("background_finish") is True and callable(getattr(self.jobs, "background", None)):
+            with self.lock:
+                shared = any(s["job_id"] == job_id for s in self.sessions.values())
+            if shared:
+                return False
+            if self.jobs.background(job_id):
+                logging.info("tv dub_background %s", json.dumps({"job_id": job_id}))
+                return True
+        return self._cancel_if_unshared(job_id)
+
+    def cancel_unshared_job(self, job_id, *, linger=True):
+        """The last session of an on-demand dub job ended (Back, stop, idle, revoke, switch to another video, dubbing
+        switched off). linger True: the job keeps running for tv.dub_linger_seconds, so its windows in flight are kept,
+        the models stay loaded (the pipeline unloads them only when no job is unfinished) and a reopen of the same film
+        attaches to the live job; the scheduler loop cancels it afterwards (_expire_linger). linger False, or the
+        setting at 0: cancelled now. The GPU lease is not involved: the other app still preempts at once."""
+        seconds = self._linger_seconds() if linger else 0.0
+        if seconds <= 0:
+            with self.lock:
+                self._linger.pop(job_id, None)
+            if linger:
+                self._release_job(job_id)           # no linger configured: background hand-over or cancel
+            else:
+                self._cancel_if_unshared(job_id)    # replaced by another job / server close: always cancel
+            return
+        with self.lock:
+            if any(s["job_id"] == job_id for s in self.sessions.values()):
+                return
+            self._linger[job_id] = time.time() + seconds
+        logging.info("tv dub_linger %s", json.dumps({"job_id": job_id, "seconds": seconds}))
+        self.wake.set()
+
+    def _job_attached(self, job_id):
+        """A session is attaching dub job `job_id`: it no longer lingers, and every OTHER lingering job is cancelled now
+        (the film being watched never shares the GPU with one nobody watches)."""
+        with self.lock:
+            self._linger.pop(job_id, None)
+            others, self._linger = list(self._linger), {}
+        for other in others:
+            if self._cancel_if_unshared(other):
+                logging.info("tv dub_linger_ended %s", json.dumps({"job_id": other, "reason": "another_dub_started"}))
+
+    def _expire_linger(self, now=None):
+        """Scheduler loop, once per pass: cancel the jobs whose linger is over and that no session picked up again."""
+        now = time.time() if now is None else now
+        with self.lock:
+            if self._enqueueing:
+                return
+            due = [job_id for job_id, at in self._linger.items() if now >= at]
+            for job_id in due:
+                del self._linger[job_id]
+        for job_id in due:
+            if self._release_job(job_id):
+                logging.info("tv dub_linger_ended %s", json.dumps({"job_id": job_id, "reason": "expired"}))
+
+    def _flush_linger(self):
+        with self.lock:
+            jobs, self._linger = list(self._linger), {}
+        for job_id in jobs:
+            self._cancel_if_unshared(job_id)
+
+    def status(self, ident, device=None, evidence=False):
+        """evidence=True (GET /tv-api/session?id=..&evidence=1) or tv.heartbeat_evidence adds the full per-segment
+        playback_evidence; every other reply carries its small summary (the full record is about 1.9 KB per muxed
+        segment)."""
+        began = time.perf_counter()
         value = self.session(ident, device)
         with self.lock:
             current = int(value["position"] // value["segment_seconds"])
@@ -942,7 +1369,8 @@ class TVService:
                 "caption_url": self.media_url(value, "captions.vtt") if value["subtitles"] != "off" else None,
                 "ready": ready, "ready_through": value["duration"] if direct else self.ready_through(value),
                 "error": issue, "segment_seconds": value["segment_seconds"],
-                "url": self.media_url(value, "original") if direct else self.media_url(value, "index.m3u8") if ready else None,
+                "url": self.media_url(value, "original") if direct else self.media_url(
+                    value, "master.m3u8" if self._container(value) == "fmp4" else "index.m3u8") if ready else None,
                 "profile": "Original file" if direct else "PC processing · up to " + str(value["quality"]) + "p" + (" · upscaling" if value["upscale"] else ""),
                 "subtitle_tracks": [{"index": s["index"], "language": s.get("tags", {}).get("language", "und"),
                                     "title": s.get("tags", {}).get("title", s.get("codec_name", ""))}
@@ -963,14 +1391,25 @@ class TVService:
                 result.update(self._youtube_fields(value, result))
             if _loudness_on(self.config):
                 result["loudness"] = self._loudness_status(value, job_payload)
-            # A detached snapshot: later muxes/heartbeats must not mutate a status response.
-            evidence = json.loads(json.dumps(self._playback_evidence(value)))
-            for prepared in evidence["prepared_segments"]:
-                ranges = [[max(prepared["start"], a), min(prepared["end"], b)]
-                          for a, b in evidence["played_ranges"]
-                          if min(prepared["end"], b) > max(prepared["start"], a)]
-                prepared["heartbeat_played_ranges"] = ranges
-                prepared["heartbeat_played_seconds"] = round(sum(b - a for a, b in ranges), 6)
+            full_evidence = (bool(evidence) or self._tv_cfg().get("heartbeat_evidence") is True
+                             or value.get("speech_engine") in ("generic", "xtranslator"))
+            if full_evidence:
+                # A detached snapshot: later muxes/heartbeats must not mutate a status response.
+                evidence = json.loads(json.dumps(self._playback_evidence(value)))
+                for prepared in evidence["prepared_segments"]:
+                    ranges = [[max(prepared["start"], a), min(prepared["end"], b)]
+                              for a, b in evidence["played_ranges"]
+                              if min(prepared["end"], b) > max(prepared["start"], a)]
+                    prepared["heartbeat_played_ranges"] = ranges
+                    prepared["heartbeat_played_seconds"] = round(sum(b - a for a, b in ranges), 6)
+            else:
+                live = self._playback_evidence(value)
+                evidence = {"version": live["version"], "generation": live["generation"], "summary": True,
+                            "prepared_segment_count": len(live["prepared_segments"]),
+                            "played_seconds": live["played_seconds"],
+                            "played_range_count": len(live["played_ranges"]),
+                            "human_listening_acceptance": False,
+                            "detail": "GET /tv-api/session?id=<session>&evidence=1 returns the full record"}
             result["playback_evidence"] = evidence
             if value.get("speech_engine") in ("generic", "xtranslator"):
                 evidence["generic_take_evidence"] = self._generic_take_evidence(value, evidence)
@@ -988,6 +1427,16 @@ class TVService:
                 result.update(buffer_metrics(value, time.time(), self.config["tv"], lead))
                 result.update(_producer.status_fields(value, self.store, self.config["tv"], time.time()))
                 result["run_ahead"] = self._run_ahead_status(value)
+                # Original-audio windows of this generation and whether the dub is held (additive, for the TV's notice).
+                ahead = value.get("_mux_ahead")
+                played_original = sorted(ahead["original"]) if ahead and ahead["generation"] == value["generation"] else []
+                blocked = value.get("dub_blocked") if value["job_id"] else None
+                result.update(original_fallback=_producer._flag(self._tv_cfg(), "original_when_dub_late", True),
+                              original_fallback_segments=played_original,
+                              original_audio_now=current in played_original,
+                              dub_blocked={"code": blocked["code"], "since": blocked["since"]} if blocked else None,
+                              standstills=int(value.get("standstills", 0)),
+                              original_lead_bonus=float(value.get("original_lead_bonus") or 0.0))
             if dub_issue:
                 # Additive, informational: the blocked job's reason and where its playable parts end (None: they don't).
                 result.update(dub_issue=dub_issue, dub_stops_at=stops_at)
@@ -999,6 +1448,11 @@ class TVService:
                     result["eof_ready"] = True
                     if "startable" in result:
                         result["startable"] = True
+            elapsed = (time.perf_counter() - began) * 1000
+            timing = value.setdefault("_status_timing", [0, 0.0, 0.0])      # calls, total ms, slowest ms
+            timing[0], timing[1], timing[2] = timing[0] + 1, timing[1] + elapsed, max(timing[2], elapsed)
+            if elapsed >= STATUS_SLOW_MS:
+                logging.warning("tv_status_slow %s", json.dumps({"session": ident[:8], "ms": round(elapsed)}))
             return result
 
     def _playback_evidence(self, value):
@@ -1300,7 +1754,7 @@ class TVService:
         (neither muxed nor backed by ready audio; a blocked job claims no new chunks). None: all remaining parts can."""
         seg = value["segment_seconds"]
         total = math.ceil(value["duration"] / seg)
-        states = {int(c["idx"]): c["state"] for c in self.store.chunks(value["job_id"])}
+        states, _ = _producer.chunk_states(self.store, value["job_id"])
         index = max(value["start_index"], int(value["position"] // seg))
         while index < total and (index in value["segments"] or states.get(index) in READY_CHUNK_STATES):
             index += 1
@@ -1542,22 +1996,60 @@ class TVService:
                 index += 1
             if not indexes:
                 raise ValueError("The first playback segment is still being prepared")
-            lines = ["#EXTM3U", "#EXT-X-VERSION:6", "#EXT-X-TARGETDURATION:" + str(value["segment_seconds"]),
+            fmp4 = self._container(value) == "fmp4"
+            lines = ["#EXTM3U", "#EXT-X-VERSION:" + ("7" if fmp4 else "6"), "#EXT-X-TARGETDURATION:" + str(value["segment_seconds"]),
                      "#EXT-X-MEDIA-SEQUENCE:" + str(value["start_index"]), "#EXT-X-PLAYLIST-TYPE:EVENT",
                      "#EXT-X-INDEPENDENT-SEGMENTS", "#EXT-X-START:TIME-OFFSET=0,PRECISE=YES"]
+            if fmp4:
+                lines.append('#EXT-X-MAP:URI="%s"' % self.media_url(value, "init.mp4"))
             for number in indexes:
                 seconds = min(value["segment_seconds"], value["duration"] - number * value["segment_seconds"])
-                lines += ["#EXTINF:%.6f," % seconds, self.media_url(value, str(number) + ".ts")]
+                lines += ["#EXTINF:%.6f," % seconds, self.media_url(value, str(number) + (".m4s" if fmp4 else ".ts"))]
             if index * value["segment_seconds"] >= value["duration"]:
                 lines.append("#EXT-X-ENDLIST")
             return ("\n".join(lines) + "\n").encode()
 
-    def segment(self, value, index):
+    def segment(self, value, index, suffix="ts"):
         with self.lock:
             path = value["segments"].get(index)
-        if path is None:
+        if path is None or Path(path).suffix != "." + suffix:
             raise ValueError("That playback segment is not ready")
         return Path(path)
+
+    def _container(self, value):
+        """'fmp4' when this playback generation is muxed as HEVC in fragmented MP4, else 'ts'."""
+        choice = self._encoder_choice.get(value["id"])
+        return choice.get("container", "ts") if choice and choice.get("generation") == value["generation"] else "ts"
+
+    def init_segment(self, value):
+        """The init segment (EXT-X-MAP) every fMP4 segment of this playback generation shares."""
+        choice = self._encoder_choice.get(value["id"])
+        if not choice or choice.get("generation") != value["generation"] or not choice.get("init"):
+            raise ValueError("That playback segment is not ready")
+        return self.config.cache / "tv-media" / choice["init"]
+
+    def master_playlist(self, value):
+        """One-variant master playlist of an HEVC playback: codec, size and dynamic range before any segment is loaded."""
+        with self.lock:
+            if self._container(value) != "fmp4":
+                raise ValueError("This playback has no HEVC stream")
+            video = next((s for s in value["streams"] if s.get("codec_type") == "video"
+                          and not s.get("disposition", {}).get("attached_pic")), {})
+            transfer = video.get("color_transfer")
+            preserve = transfer in ("smpte2084", "arib-std-b67") and value["hdr_mode"] == "auto"
+            height = int(value["quality"])
+            box_w, box_h = height * 16 // 9, height
+            source_w, source_h = int(video.get("width") or box_w), int(video.get("height") or box_h)
+            if not value["upscale"]:
+                box_w, box_h = min(box_w, source_w), min(box_h, source_h)
+            factor = min(box_w / max(1, source_w), box_h / max(1, source_h))
+            out_w, out_h = max(2, int(source_w * factor) // 2 * 2), max(2, int(source_h * factor) // 2 * 2)
+            bandwidth = (20000000 if height == 2160 else 6000000) + (384000 if self._surround_stream(value) is not None else 192000)
+            lines = ["#EXTM3U", "#EXT-X-VERSION:7", "#EXT-X-INDEPENDENT-SEGMENTS",
+                     '#EXT-X-STREAM-INF:BANDWIDTH=%d,CODECS="%s,mp4a.40.2",RESOLUTION=%dx%d,VIDEO-RANGE=%s' % (
+                         bandwidth, hevc_codec_string(out_h), out_w, out_h, video_range(transfer) if preserve else "SDR"),
+                     self.media_url(value, "index.m3u8")]
+            return ("\n".join(lines) + "\n").encode()
 
     # --- run-ahead mux (config tv.mux_ahead_unlimited, default ON for dubbed jobs) ---------------------------------
     # The scheduler tick (loop thread) never encodes: it calls producer_policy.produce() (dubbed audio toward EOF, only
@@ -1568,6 +2060,19 @@ class TVService:
     # encode is published only while its session, generation and job are still current (the existing epoch rules).
     # Switching the key off restores the legacy buffer_segments/MAX_EXTRA_MUX_SEGMENTS serial loop untouched.
     SNAPSHOT_TTL = 1.0
+    # Original audio for a window the dub cannot deliver in time (tv.original_when_dub_late, default ON): when playback
+    # is this close to a window whose dub is not ready, that ONE window is muxed with the film's own audio (levelled
+    # with the job's gain) instead of letting the picture freeze. The TV re-reads an unchanged playlist every 15 s and
+    # fetches a segment 29 s before it is needed (2026-10-25 log), so the window must be published about 23 s ahead:
+    # 15 s playlist + 4 s mux + 2 s heartbeat age + 2 s fetch.
+    ORIGINAL_BLOCKED_LEAD = 25.0     # default of tv.original_blocked_lead_seconds: the dub job is held (no graphics card)
+    ORIGINAL_LATE_LEAD = 20.0        # default of tv.original_late_lead_seconds: the dub is merely late (0 = never)
+    DUB_BLOCKED_GRACE = 45.0         # status 'dub_blocked' outlives a retry round of the held job by this long
+    # Self-check: a standstill the heartbeats show at an original-audio window means that window reached the TV too
+    # late; this playback's two leads are then raised by ORIGINAL_LEAD_STEP, at most ORIGINAL_LEAD_BONUS_MAX in all.
+    STANDSTILL_MIN_SECONDS = 3.0     # shorter ones are not logged (heartbeats are 2 s apart)
+    ORIGINAL_LEAD_STEP = 10.0
+    ORIGINAL_LEAD_BONUS_MAX = 30.0
 
     def _tv_cfg(self):
         try:
@@ -1582,7 +2087,8 @@ class TVService:
         state = value.get("_mux_ahead")
         if state is None or state["generation"] != value["generation"]:
             state = {"generation": value["generation"], "inflight": {}, "failed": {}, "hold_until": 0.0,
-                     "disk": "ok", "launched": 0, "completed": 0, "snapshot": None, "request": None}
+                     "disk": "ok", "launched": 0, "completed": 0, "snapshot": None, "request": None,
+                     "original": set()}     # segments of this generation muxed with the film's own audio
             value["_mux_ahead"] = state
         return state
 
@@ -1648,6 +2154,7 @@ class TVService:
             return {i for i, s in snapshot[1].items() if s in _producer.READY}
 
         ready = chunk_ready(self.SNAPSHOT_TTL)
+        self._note_dub_blocked(value, job, state["snapshot"][1], now)
         first = next((i for i in range(current, total) if i not in muxed), None)
         if first is None:
             return
@@ -1691,32 +2198,165 @@ class TVService:
         parked = set(exhausted) | {i for i, r in failed.items() if now < r["next_try"]}
         with self.lock:
             inflight = set(state["inflight"])
+        reason = self._original_due(value, cfg, job, first, ready, position)
+        if (reason and first not in inflight and first not in parked
+                and self._encode_total() < _producer.mux_workers(cfg) + 1):
+            # The dub of the window playback needs next cannot reach the TV in time: the film's own audio for that one
+            # window. The store chunk is not touched, so the window is still dubbed and used the next time.
+            if not self._start_encode(ident, value, first, generation, state, original=True):
+                return
+            inflight.add(first)
+            logging.info("tv original audio for segment %d (%s, %.0f s before it is needed, lead bonus %.0f s)", first,
+                         reason, max(0.0, first * seg - position), float(value.get("original_lead_bonus") or 0.0))
+        dubbing = gap is not None           # the job still has windows to dub from the playhead to the end
         picks = _producer.plan_mux(current=current, total=total, muxed=muxed, inflight=inflight,
-                                   ready=ready - parked, workers=_producer.mux_workers(cfg),
+                                   ready=ready - parked, workers=_producer.mux_workers(cfg, dubbing=dubbing),
                                    active=self._encode_total(), ahead_allowed=gate == "ok")
+        low_priority = dubbing and _producer._flag(cfg, "mux_ahead_low_priority", True)
         if first not in ready and not inflight:
             self._ensure_premeasure(ident, value)       # idle until the first chunk exists: measure the job gain
         for index in picks:
-            owner = ProcessOwner()
-            with self.lock:
-                if value["generation"] != generation or self.sessions.get(ident) is not value:
-                    return
-                state["inflight"][index] = owner
-                self._encodes.setdefault(ident, set()).add(owner)
-                state["launched"] += 1
-            threading.Thread(target=self._ahead_encode, args=(ident, value, index, generation, owner, state),
-                             name="tv-mux-%d" % index, daemon=True).start()
+            # nobody waits for a segment URGENT_SPAN or more ahead yet: its ffmpeg yields the CPU to the dub (F25)
+            if not self._start_encode(ident, value, index, generation, state,
+                                      low_priority=low_priority and index - current >= _producer.URGENT_SPAN):
+                return
 
-    def _ahead_encode(self, ident, value, index, generation, owner, state):
+    def _start_encode(self, ident, value, index, generation, state, original=False, low_priority=False):
+        """Start one mux on its own thread, registered under the session so a seek or stop cancels it. False (nothing
+        started) when the session or its generation changed meanwhile. original: see render(). low_priority: the
+        encode's ffmpeg runs below normal priority (F25; never for the segment playback needs, nor an original window)."""
+        owner = ProcessOwner()
+        if low_priority:
+            owner.priority = "below_normal"
+        with self.lock:
+            if value["generation"] != generation or self.sessions.get(ident) is not value:
+                return False
+            state["inflight"][index] = owner
+            self._encodes.setdefault(ident, set()).add(owner)
+            state["launched"] += 1
+        threading.Thread(target=self._ahead_encode, args=(ident, value, index, generation, owner, state, original),
+                         name="tv-mux-%d" % index, daemon=True).start()
+        return True
+
+    def _note_dub_blocked(self, value, job, states, now):
+        """value['dub_blocked'] = {'code', 'since', 'seen'} while the dub job is held for a resource (job state
+        waiting_resources: none of its windows is claimed until the graphics card is free), else None. The code comes
+        from the receipt of the first held chunk ('resource_wait' until one is read: the chunk snapshot can be a second
+        older than the job row). Kept DUB_BLOCKED_GRACE seconds after the hold was last seen, so a retry round of the
+        job does not make the TV's notice blink."""
+        current = value.get("dub_blocked")
+        if job["state"] != "waiting_resources":
+            if current is not None and now - current["seen"] > self.DUB_BLOCKED_GRACE:
+                value["dub_blocked"] = None
+            return
+        if current is None:
+            current = value["dub_blocked"] = {"code": "resource_wait", "since": now, "seen": now}
+        current["seen"] = now
+        if current["code"] != "resource_wait":
+            return
+        held = min((i for i, s in states.items() if s == "waiting_resources"), default=None)
+        if held is None:
+            return
+        chunk = self.store.chunk(value["job_id"], held) or {}
+        found = _RESOURCE_CODE.search(str((chunk.get("payload") or {}).get("resource_wait") or ""))
+        if found:
+            current["code"] = found.group(1)
+
+    def _original_due(self, value, cfg, job, first, ready, position):
+        """'start' | 'blocked' | 'late' when segment `first` (the first one from the playhead that is not muxed) has to
+        be muxed with the film's own audio NOW, else None. Never while the viewer paused, never for an errored /
+        needs-review job (its own boundary rule, P1-1, stays).
+        'blocked': playback runs and the dub job is held for a resource (no graphics card).
+        'late':    playback runs and the dub is only slow.
+        'start':   playback has not started in this seek epoch and the dub job is held: nothing can be dubbed until
+                   the card is free, so the lead the start gate asks for is filled with the film's own audio and the
+                   film starts now. With the card available the start gate waits for the dub: the film opens dubbed."""
+        if first is None or first in ready or not _producer._flag(cfg, "original_when_dub_late", True):
+            return None
+        if job["state"] in KEEP_READY_STATES:
+            return None
+        held = job["state"] == "waiting_resources"
+        started = bool(value.get("beta_started")) and value.get("beta_epoch") == int(value.get("epoch", 0))
+        if not started and not held:
+            return None
+        if value.get("paused_intent", value.get("state") == "paused"):
+            return None
+        lead = max(0.0, first * value["segment_seconds"] - position)
+        bonus = float(value.get("original_lead_bonus") or 0.0)          # raised by _note_standstill, per playback
+        if held and not started:
+            # exactly the lead the start gate asks for (status 'startable'), never more: the gate then lets the film start
+            required = max(_producer.required_seconds(value, cfg)[0], float(value.get("_gate_required_lead") or 0.0))
+            return "start" if lead < min(600.0, required) - 1e-6 else None
+        if held:
+            limit = min(120.0, bonus + _producer._number(
+                _producer._tv(cfg, "original_blocked_lead_seconds", self.ORIGINAL_BLOCKED_LEAD),
+                self.ORIGINAL_BLOCKED_LEAD, 5.0, 120.0))
+            return "blocked" if lead <= limit else None
+        limit = _producer._number(_producer._tv(cfg, "original_late_lead_seconds", self.ORIGINAL_LATE_LEAD),
+                                  self.ORIGINAL_LATE_LEAD, 0.0, 60.0)
+        return "late" if limit > 0 and lead <= min(60.0, limit + bonus) else None
+
+    def _note_standstill(self, value, now):
+        """Standstill meter, fed by every heartbeat (the TV reports every 2 s): playback has started in this seek
+        epoch, two heartbeats in a row say 'playing' or 'buffering', and the position did not move between them. When
+        it moves again, a standstill of at least STANDSTILL_MIN_SECONDS (first to last heartbeat at that position) is
+        counted in the session and written to the log ('tv standstill {...}').
+        If the picture stood inside a window that was muxed with the film's own audio, or within 1.5 s of the start
+        of one, that window reached the TV too late: this playback's leads for original-audio windows are raised by
+        ORIGINAL_LEAD_STEP (ORIGINAL_LEAD_BONUS_MAX in all), so the next one is published earlier."""
+        epoch = int(value.get("epoch", 0))
+        position = float(value["position"])
+        previous = value.get("_standstill")
+        started = bool(value.get("beta_started")) and value.get("beta_epoch") == epoch
+        sample = {"position": position, "at": now, "since": None, "epoch": epoch,
+                  "moving": started and value["state"] in ("playing", "buffering")}
+        value["_standstill"] = sample
+        if previous is None or previous["epoch"] != epoch:
+            return
+        if (sample["moving"] and previous["moving"] and abs(position - previous["position"]) < 0.05
+                and value["duration"] - position > 1.0):
+            sample["since"] = previous["since"] if previous["since"] is not None else previous["at"]
+            return
+        if previous["since"] is None:
+            return
+        seconds = previous["at"] - previous["since"]        # first to last heartbeat at the same position: a lower bound
+        if seconds < self.STANDSTILL_MIN_SECONDS:
+            return
+        seg = value["segment_seconds"]
+        index = int(previous["position"] // seg)
+        ahead = value.get("_mux_ahead")
+        original = set(ahead["original"]) if ahead and ahead["generation"] == value["generation"] else set()
+        at_original = index in original or (index + 1 in original and (index + 1) * seg - previous["position"] <= 1.5)
+        value["standstills"] = int(value.get("standstills", 0)) + 1
+        bonus = float(value.get("original_lead_bonus") or 0.0)
+        if at_original and bonus < self.ORIGINAL_LEAD_BONUS_MAX:
+            bonus = value["original_lead_bonus"] = min(self.ORIGINAL_LEAD_BONUS_MAX, bonus + self.ORIGINAL_LEAD_STEP)
+        logging.info("tv standstill %s", json.dumps({
+            "session": value["id"], "position": round(previous["position"], 1), "seconds_at_least": round(seconds, 1),
+            "segment": index, "original_window": at_original, "original_lead_bonus": bonus,
+            "standstills": value["standstills"]}))
+
+    def _ahead_encode(self, ident, value, index, generation, owner, state, original=False):
         try:
             render_value = dict(value)
             started = time.time()
-            path = self.render(render_value, index, owner)
+            # The extra argument is passed only for an original-audio window, so a render() replaced by a
+            # three-argument callable keeps working.
+            path = (self.render(render_value, index, owner, original=True) if original
+                    else self.render(render_value, index, owner))
             finished = time.time()
+            # One line per segment: the only record of what the encodes cost (low_priority/mux_workers are judged from it).
+            logging.info("tv_mux %s", json.dumps({
+                "session": ident[:8], "index": index, "seconds": round(finished - started, 2),
+                "cached": bool(render_value.get("_mux_cached")), "below_normal": getattr(owner, "priority", None) == "below_normal",
+                "running": self._encode_total()}))
             current_job = self._mux_job_current(value)
             if self._publish_segment(ident, value, generation, index, path, render_value, current_job, started, finished):
                 state["completed"] += 1
                 state["failed"].pop(index, None)
+                if original:
+                    with self.lock:
+                        state["original"].add(index)
         except Cancelled:
             pass
         except TimeoutError as error:
@@ -1771,7 +2411,7 @@ class TVService:
         """Stale .partial.ts files of a crashed run (a live encode's file is far younger)."""
         try:
             now = time.time()
-            for path in (self.config.cache / "tv-media").glob("*.partial.ts"):
+            for path in (self.config.cache / "tv-media").glob("*.partial*"):
                 try:
                     if now - path.stat().st_mtime > max_age:
                         path.unlink()
@@ -1789,6 +2429,7 @@ class TVService:
             choice = None
         floor = _producer._tv(cfg, "min_free_disk_gib", 10)
         return {"mux_ahead_unlimited": _producer.ahead_enabled(value, cfg), "workers": _producer.mux_workers(cfg),
+                "workers_while_dubbing": _producer.mux_workers(cfg, dubbing=True),
                 "muxed_segments": len(value["segments"]),
                 "inflight_segments": sorted(state["inflight"]) if state else [],
                 "encodes_running": self._encode_total(),
@@ -1798,7 +2439,8 @@ class TVService:
                                         "renders (resource_wait is reported) and muxing resumes by itself when space is freed",
                 "failed_segments": {str(i): {"attempts": r["count"], "message": r["message"]}
                                     for i, r in (state["failed"].items() if state else ())},
-                "encoder": ({k: choice[k] for k in ("requested", "used", "reason", "fallback", "free_vram_mib")}
+                "encoder": ({k: choice.get(k) for k in ("requested", "used", "reason", "fallback", "free_vram_mib",
+                                                         "codec", "container", "codec_reason", "filters", "tonemap")}
                             if choice else {"requested": str(value.get("encoder") or "software"), "used": None,
                                             "reason": "not chosen yet (first encode of this playback)"})}
 
@@ -1811,6 +2453,15 @@ class TVService:
             except Exception:
                 self._encoder_listing[path] = False
         return self._encoder_listing[path]
+
+    def _ffmpeg_has_hevc_nvenc(self):
+        path = str(self.config["ffmpeg"])
+        if path not in self._hevc_listing:
+            try:
+                self._hevc_listing[path] = b"hevc_nvenc" in ProcessOwner().run([path, "-hide_banner", "-encoders"], timeout=30)
+            except Exception:
+                self._hevc_listing[path] = False
+        return self._hevc_listing[path]
 
     def _free_vram_mib(self):
         if self._vram_probe is not None:
@@ -1833,15 +2484,40 @@ class TVService:
             if choice and choice["generation"] == generation:
                 return choice["used"], choice
             requested = str(value.get("encoder") or "software")
-            wanted = requested in ("auto", "nvenc") and not hdr_preserve
+            cfg, pins = self._tv_cfg(), self._picture_pins
+            setting = "h264" if pins.get("codec") == "h264" else str(_producer._tv(cfg, "video_codec", "h264"))
+            hevc_setting = setting in ("auto", "hevc")
+            minimum = int(_producer._tv(cfg, "nvenc_min_free_mib", 2048))
+            wanted = requested in ("auto", "nvenc") and (hevc_setting or not hdr_preserve)
             listed = self._ffmpeg_has_nvenc() if wanted else False
             free = self._free_vram_mib() if listed else None
-            used, reason = _producer.choose_encoder(
-                requested, nvenc_listed=listed, free_vram_mib=free, hdr_preserve=hdr_preserve,
-                min_free_mib=int(_producer._tv(self._tv_cfg(), "nvenc_min_free_mib", 2048)))
+            nvenc_ok = bool(listed and free is not None and free >= minimum)
+            codec, codec_reason = "h264", "tv.video_codec is h264"
+            if hevc_setting:
+                device = self._device_video(value.get("device_id")) if setting == "auto" else {}
+                codec, codec_reason = _producer.choose_codec(
+                    setting, encoder="nvenc" if nvenc_ok else "software",
+                    hevc_nvenc_listed=self._ffmpeg_has_hevc_nvenc() if nvenc_ok else False,
+                    device_ok=_producer.probe_passes_hevc(device.get("probe")),
+                    device_failed=device.get("hevc_failed_picture") == PICTURE_VERSION,
+                    pinned=value.get("codec_pinned"), short_segments=bool(value.get("yt_stream") or value.get("live")))
+            if codec == "hevc":
+                used = "nvenc" if nvenc_ok and self._ffmpeg_has_hevc_nvenc() else "software"
+                reason = codec_reason
+            else:
+                used, reason = _producer.choose_encoder(
+                    requested, nvenc_listed=listed, free_vram_mib=free, hdr_preserve=hdr_preserve, min_free_mib=minimum)
+            gpu = used == "nvenc" and str(_producer._tv(cfg, "gpu_filters", "off")) == "auto"
+            filters = "cuda" if gpu and pins.get("filters") != "cpu" else "cpu"
+            tonemap = (pins.get("tonemap") or ("placebo" if filters == "cuda" else "opencl")) if gpu else "cpu"
             choice = {"generation": generation, "requested": requested, "used": used, "reason": reason,
-                      "free_vram_mib": free, "checked_at": time.time(), "fallback": None}
+                      "free_vram_mib": free, "checked_at": time.time(), "fallback": None,
+                      "codec": codec, "container": "fmp4" if codec == "hevc" else "ts", "codec_reason": codec_reason,
+                      "filters": filters, "tonemap": tonemap, "init": None, "player_failures": 0}
             self._encoder_choice[ident] = choice
+            logging.info("tv_encoder %s", json.dumps({"session": str(ident)[:8], "generation": generation, "requested": requested,
+                                                      "used": used, "reason": reason, "free_vram_mib": free,
+                                                      "codec": codec, "filters": filters}))
             return used, choice
 
     def _pin_software(self, value, reason):
@@ -1849,10 +2525,168 @@ class TVService:
             choice = self._encoder_choice.get(value["id"])
             if choice and choice["generation"] == value["generation"]:
                 choice.update(used="software", fallback=reason, reason="software after NVENC failure")
+                logging.warning("tv_encoder_fallback %s", json.dumps({"session": str(value["id"])[:8],
+                                                                      "generation": value["generation"], "reason": reason[-300:]}))
+
+    def _degrade_picture(self, value, choice, encoder, detail):
+        """An ffmpeg run of this plan failed. Take the next step down: True = render this segment again with the changed
+        plan; False = nothing left to change (the error is real). A step that changes the container or the tone-map look
+        restarts the playback generation and raises Cancelled for this encode."""
+        tone_step = None
+        with self._encoder_lock:
+            if self._encoder_choice.get(value["id"]) is not choice or choice["generation"] != value["generation"]:
+                raise Cancelled("picture plan changed")
+            if value.get("_tone_mapped") and choice.get("tonemap") in ("placebo", "opencl"):
+                tone_step = "opencl" if choice["tonemap"] == "placebo" else "cpu"
+                self._picture_pins["tonemap"] = tone_step
+            elif choice.get("filters") == "cuda":
+                self._picture_pins["filters"] = "cpu"
+                choice.update(filters="cpu", fallback="GPU filters failed: " + detail)
+                return True
+            elif choice.get("codec") == "hevc":
+                self._picture_pins["codec"] = "h264"
+        if tone_step:
+            self._restart_picture(value["id"], value["generation"], "GPU tone mapping failed, next is %s: %s" % (tone_step, detail))
+            raise Cancelled("picture plan changed")
+        if choice.get("codec") == "hevc":
+            self._restart_picture(value["id"], value["generation"], "HEVC encode failed: " + detail, codec_pin="encode-failed")
+            raise Cancelled("picture plan changed")
+        if encoder != "nvenc":
+            return False
+        self._pin_software(value, "h264_nvenc encode failed: " + detail)
+        return True
+
+    def _video_filters(self, value, choice, hdr, preserve_hdr, encoder, transfer):
+        """(ffmpeg options placed before -ss/-i, the video filter chain, the -pix_fmt arguments) of this generation's plan.
+        With the defaults (H.264, gpu_filters off) the chain and pixel format are exactly the v4 ones."""
+        height, width = value["quality"], value["quality"] * 16 // 9
+        hevc, tone = choice.get("codec") == "hevc", hdr and not preserve_hdr
+        size = ("w=%s:h=%s" % (width, height) if value["upscale"] else "w='min(%s,iw)':h='min(%s,ih)'" % (width, height))
+        if choice.get("filters") == "cuda" and (not tone or choice.get("tonemap") == "placebo"):
+            fit = size + ":force_original_aspect_ratio=decrease:force_divisible_by=2:reset_sar=1"
+            if tone:
+                return (["-init_hw_device", "vulkan=vk:0", "-filter_hw_device", "vk", "-hwaccel", "cuda",
+                         "-hwaccel_output_format", "cuda"],
+                        "hwupload=derive_device=vulkan,libplacebo=" + fit + ":upscaler=ewa_lanczossharp:tonemapping=bt.2390"
+                        ":gamut_mode=perceptual:colorspace=bt709:color_primaries=bt709:color_trc=bt709:range=tv:format=nv12,"
+                        "hwupload=derive_device=cuda", [])
+            return (["-hwaccel", "cuda", "-hwaccel_output_format", "cuda"],
+                    "scale_cuda=" + fit + ":interp_algo=lanczos:format=" + ("p010le" if hevc and preserve_hdr else "nv12"), [])
+        chain = "scale=" + size + ":force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,setsar=1"
+        options = []
+        if tone and choice.get("tonemap") == "opencl":
+            options = ["-init_hw_device", "opencl=ocl", "-filter_hw_device", "ocl"]
+            chain = ("format=p010le,hwupload,tonemap_opencl=tonemap=hable:desat=0:t=bt709:m=bt709:p=bt709:r=tv:format=nv12,"
+                     "hwdownload,format=nv12," + chain)
+        elif tone:
+            chain = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv," + chain
+        if hevc and preserve_hdr:
+            chain += ",setparams=color_primaries=bt2020:color_trc=%s:colorspace=bt2020nc" % transfer
+        if hevc and encoder == "nvenc":
+            pixel = "p010le" if preserve_hdr else "yuv420p"          # 8-bit input is encoded as Main10 by -highbitdepth 1
+        elif hevc:
+            pixel = "yuv420p10le"                                     # libx265 takes its Main10 profile from the pixel format
+        else:
+            pixel = "yuv420p10le" if preserve_hdr else "yuv420p"
+        return options, chain, ["-pix_fmt", pixel]
 
     @staticmethod
-    def _video_codec(encoder, preserve_hdr, threads):
-        """(codec, options). Software options are exactly the v4 ones; NVENC is a quality-equivalent constant-quality VBR."""
+    def _container_args(container, start_ts, index, seamless=True):
+        """Muxer arguments. fMP4: true timestamps in every fragment (frag_discont + avoid_negative_ts disabled), no edit
+        list, a fragment at every forced key frame, fragment numbers that rise across segments. MPEG-TS: F07's tail
+        (restart of the continuity counters, start_ts = start + its 10 s base); seamless False (tv.seamless_joins off):
+        today's tail, byte for byte."""
+        if container == "fmp4":
+            return ["-output_ts_offset", str(start_ts), "-avoid_negative_ts", "disabled", "-movflags", FMP4_FLAGS,
+                    "-video_track_timescale", "90000", "-fragment_index", str(index * 64 + 1), "-f", "mp4"]
+        if seamless:
+            return ["-output_ts_offset", "%.6f" % float(start_ts), "-muxdelay", "0", "-muxpreload", "0",
+                    "-mpegts_flags", "+resend_headers+initial_discontinuity", "-f", "mpegts"]
+        return ["-output_ts_offset", str(start_ts), "-muxdelay", "0", "-muxpreload", "0", "-mpegts_flags", "+resend_headers",
+                "-f", "mpegts"]
+
+    def _install_fmp4(self, temporary, output, directory):
+        """Split ffmpeg's file into the shared init segment (<sha256>.init.mp4, written once) and this segment's media
+        file at `output`; returns the init file name."""
+        media = temporary.with_name(temporary.name + ".m4s")
+        try:
+            init = split_fmp4(temporary, media)
+            name = hashlib.sha256(init).hexdigest() + ".init.mp4"
+            target = directory / name
+            if not target.exists():
+                partial = directory / ("%s.%s.partial" % (name, uuid.uuid4().hex[:8]))
+                partial.write_bytes(init)
+                os.replace(partial, target)
+            os.replace(media, output)
+            return name
+        finally:
+            media.unlink(missing_ok=True)
+            temporary.unlink(missing_ok=True)
+
+    def _picture_selfcheck(self, value, choice, encoder, owner, start, output, init_name, hdr, preserve_hdr, transfer):
+        """Once per server run and picture plan that is not the v4 default (HEVC, GPU scaling, GPU tone mapping): decode
+        the first frame of the segment just made and compare it with the same source frame through the v4 CPU chain
+        (both 320x180 gray, PSNR). None when the plan is fine or was already found fine, else the problem text. The
+        numbers go to the server log as one 'tv picture self-check' line."""
+        tone = bool(hdr and not preserve_hdr)
+        plan = (choice.get("codec"), encoder, choice.get("filters"), choice.get("tonemap") if tone else None, bool(preserve_hdr))
+        with self._encoder_lock:
+            known = self._picture_checked.get(plan)
+        if known is not None:
+            return None if known["ok"] else "the picture self-check of this plan failed earlier"
+        width, height = SELFCHECK_SIZE
+        small = "scale=%d:%d:flags=bilinear,format=gray" % (width, height)
+        _, reference_chain, _ = self._video_filters(value, {"codec": "h264", "filters": "cpu", "tonemap": "cpu"}, hdr,
+                                                    preserve_hdr, "software", transfer)
+        made = "concat:%s|%s" % (output.parent / init_name, output) if init_name else str(output)
+        head = [self.config["ffmpeg"], "-hide_banner", "-loglevel", "error", "-nostdin"]
+        tail = ["-an", "-sn", "-frames:v", "1", "-f", "rawvideo", "-"]
+        psnr, problem = -1.0, None
+        try:
+            reference = owner.run(head + ["-ss", str(start), "-i", value["source"], "-vf", reference_chain + "," + small] + tail,
+                                  timeout=120) or b""
+            produced = owner.run(head + ["-i", made, "-vf", small] + tail, timeout=120) or b""
+            psnr = gray_psnr(reference[:width * height], produced[:width * height])
+        except Cancelled:
+            raise
+        except Exception as error:
+            problem = "%s: %s" % (type(error).__name__, str(error)[-160:])
+        limit = SELFCHECK_TONE_PSNR_DB if tone and choice.get("tonemap") != "cpu" else SELFCHECK_PSNR_DB
+        result = {"ok": problem is None and psnr >= limit, "psnr_db": round(psnr, 1), "limit_db": limit}
+        with self._encoder_lock:
+            self._picture_checked[plan] = result
+        logging.info("tv picture self-check %s", json.dumps({"codec": plan[0], "encoder": plan[1], "filters": plan[2],
+                                                            "tonemap": plan[3], "hdr": plan[4], "error": problem, **result}))
+        if result["ok"]:
+            return None
+        return "picture self-check failed: " + (problem or "PSNR %.1f dB, limit %.1f dB" % (psnr, limit))
+
+    def _adopt_init(self, value, choice, name, fresh):
+        """Every fMP4 segment of one playback generation must share one init segment. True when `name` is that one (or
+        becomes it). A cached segment with another init is simply encoded again (False); a fresh encode that disagrees
+        sends the playback back to H.264."""
+        with self._encoder_lock:
+            if choice.get("init") in (None, name):
+                choice["init"] = name
+                return True
+        if not fresh:
+            return False
+        self._restart_picture(value["id"], value["generation"], "the HEVC init segment changed between segments",
+                              codec_pin="init-mismatch")
+        raise Cancelled("picture plan changed")
+
+    @staticmethod
+    def _video_codec(encoder, preserve_hdr, threads, codec="h264"):
+        """(codec, options). Software options are exactly the v4 ones; NVENC is a quality-equivalent constant-quality VBR.
+        codec 'hevc' (F19): HEVC Main10 without B-frames (their reorder delay would shift an independently made fMP4
+        segment), hvc1 sample entry."""
+        if codec == "hevc":
+            if encoder == "nvenc":
+                return "hevc_nvenc", ["-preset", "p5", "-tune", "hq", "-rc", "vbr", "-cq", "24", "-b:v", "0",
+                                      "-profile:v", "main10", "-highbitdepth", "1", "-spatial-aq", "1", "-bf", "0",
+                                      "-forced-idr", "1", "-tag:v", "hvc1"]
+            return "libx265", ["-preset", "veryfast", "-crf", "22", "-tag:v", "hvc1", "-x265-params",
+                               "pools=%s:frame-threads=1:log-level=error:bframes=0:repeat-headers=0" % threads]
         if preserve_hdr:
             return "libx265", ["-preset", "veryfast", "-crf", "22",
                                "-x265-params", "pools=%s:frame-threads=1:log-level=error" % threads]
@@ -1869,6 +2703,7 @@ class TVService:
         self._sweep_partials()
         self._sweep_live()
         while not self.stop_event.is_set():
+            self._expire_linger()
             with self.lock:
                 snapshot = list(self.sessions.items())
             worked = False
@@ -1965,7 +2800,49 @@ class TVService:
                 self.wake.wait(.5)
                 self.wake.clear()
 
-    def render(self, value, index, owner):
+    def _seamless_on(self, value):
+        """tv.seamless_joins (default True): library films get the gapless argument list of relay/segment_join.py. Only an
+        explicit False restores the old list and cache key. The YouTube profile keeps the old list."""
+        latched = value.get("seamless")
+        if not isinstance(latched, bool):                # a session made before the latch existed (tests): the setting itself
+            latched = _producer._flag(self._tv_cfg(), "seamless_joins", True)
+        return latched and not value.get("yt_stream")
+
+    def _previous_window_audio(self, value, job, index, surround):
+        """(source, identity) of the audio window index - 1 has in this playback, decided the way render() decides it for
+        that window now: the pre-roll of segment `index`. The movie's own audio when that window has no ready dub.
+        Reads only; never requests work."""
+        rear_off = str(self.config["tv"].get("surround_rear", "off")).lower() != "on"
+        prefix = SURROUND_REAR_OFF if surround is not None and rear_off else ""
+        movie = ({"kind": "source", "path": value["source"], "stream": value["audio_index"], "prefix": prefix}, ["source"])
+        if not job:
+            return movie
+        try:
+            chunk = self.store.chunk(job["id"], index - 1)
+            if not chunk or chunk["state"] not in READY_CHUNK_STATES:
+                return movie
+            payload = chunk["payload"]
+            if int(payload.get("revision", job["payload"].get("revision", 1))) != job["payload"].get("revision", 1):
+                return movie
+            path = Path(payload["audio"])
+            digest = file_hash(path)
+            if digest != payload["sha256"]:
+                return movie
+        except (OSError, KeyError, TypeError, ValueError):
+            return movie
+        if surround is None:
+            return {"kind": "file", "path": str(path), "prefix": ""}, ["wav", digest]
+        bound = self._surround_mix(path, digest)
+        if bound is not None:
+            return {"kind": "file", "path": str(bound), "prefix": prefix}, ["mix", file_hash(bound)]
+        if not passthrough_mode(payload.get("mode")):
+            return {"kind": "file", "path": str(path), "prefix": SURROUND_UPMIX}, ["upmix", digest]
+        return movie
+
+    def render(self, value, index, owner, original=False):
+        """original=True (tv.original_when_dub_late): this window of a dubbed playback is muxed with the film's OWN
+        audio because its dub cannot arrive in time. Nothing is asked of the dub job; the job's one loudness gain is
+        applied like on every other window; in a 5.1 playback it takes the existing 'surround original' chain."""
         if shutil.disk_usage(self.config.cache).free < self.config["tv"]["min_free_disk_gib"] * 1024**3:
             raise ResourceBusy("PC cache space is low. Free space before continuing playback.")
         youtube = bool(value.get("yt_stream"))
@@ -1979,8 +2856,10 @@ class TVService:
             progress = self._yt_progress(value)
             if not progress["complete"] and start + duration + _ystream.READABLE_MARGIN > progress["readable"]:
                 raise TimeoutError("The downloaded part of the video is not ready yet")
-        audio, audio_hash = None, "original"
-        if value["job_id"]:
+        audio, audio_hash, job = None, "original", None
+        if value["job_id"] and original:
+            job = self.store.job(value["job_id"])       # only for the job's loudness gain below
+        elif value["job_id"]:
             job = self.store.job(value["job_id"])
             if job and job["state"] in KEEP_READY_STATES:
                 audio = self._ready_audio(job, index)
@@ -1996,7 +2875,8 @@ class TVService:
         value["_prepared_media_evidence"] = self._prepared_media_evidence(value, index, audio_hash, start, duration)
         # Playback loudness: only dub audio (a job's chunk) is levelled, with the job's ONE constant gain. Off (the
         # default), 0 dB, or no dub: gain_db stays 0.0 and the mux identity and filter are byte-identical to before.
-        loudness = self._playback_loudness(value, job, owner) if audio and _loudness_on(self.config) else None
+        loudness = (self._playback_loudness(value, job, owner)
+                    if (audio or (original and job)) and _loudness_on(self.config) else None)
         gain_db = float(loudness["gain_db"]) if loudness else 0.0
         leveled = abs(gain_db) >= 0.0005
         if loudness:
@@ -2009,20 +2889,31 @@ class TVService:
         preserve_hdr = hdr and value["hdr_mode"] == "auto"
         # 'auto' prefers NVENC when ffmpeg lists h264_nvenc and the nvenc_min_free_mib check passes; software otherwise
         # (and always for HDR-preserving libx265). Chosen once per playback generation, recorded in status().
-        encoder, _ = self._resolve_encoder(value, preserve_hdr)
+        encoder, choice = self._resolve_encoder(value, preserve_hdr)
+        codec_name, container = choice.get("codec", "h264"), choice.get("container", "ts")
+        value["_tone_mapped"] = bool(hdr and not preserve_hdr)
+        seamless = self._seamless_on(value)
         identity_parts = [value["fingerprint"], value["audio_index"], index, audio_hash,
                           value["quality"], value["upscale"], value["hdr_mode"],
-                          encoder, value["encoder_threads"], "tv-mux-cpu-v4" if encoder == "software" else "tv-mux-nvenc-v1"]
+                          encoder, value["encoder_threads"],
+                          _join.MUX_VERSION["software" if encoder == "software" else "nvenc"] if seamless
+                          else "tv-mux-cpu-v4" if encoder == "software" else "tv-mux-nvenc-v1"]
+        gpu_tone = value["_tone_mapped"] and choice.get("tonemap") in ("placebo", "opencl")
+        if codec_name == "hevc" or choice.get("filters") == "cuda" or gpu_tone:
+            # F19: another codec, container, scaler or tone-map chain is another cached segment (the default path adds nothing)
+            identity_parts.append([PICTURE_VERSION, codec_name, container, choice.get("filters"),
+                                   choice.get("tonemap") if value["_tone_mapped"] else None])
         if youtube:
             # segment length and rate cap are part of what a cached segment is (a library segment's index implies 30 s; this one does not)
             identity_parts.append(["youtube", value["segment_seconds"], str(self._yt_opt("stream_maxrate")), str(self._yt_opt("stream_bufsize"))])
-        audio_filter = "apad"
+        audio_filter, gain_filter = "apad", ""
         if leveled:
             from . import loudness_job as _lj, playback_loudness as _pl
             curve = {k: v for k, v in _lj.settings(self.config["tv"]["loudness"]).items()
                      if k in ("knee_dbfs", "ceiling_dbfs")}    # defaults -3 / -1 dBFS
             identity_parts.append(_pl.mux_identity(gain_db, **curve))   # a different gain/curve is a different mux output
-            audio_filter = _pl.mux_filter(gain_db, **curve) + ",apad"   # constant gain, stateless soft knee, then pad
+            gain_filter = _pl.mux_filter(gain_db, **curve)              # constant gain, stateless soft knee
+            audio_filter = gain_filter + ",apad"                        # ... then pad (old argument list)
         # 5.1 playback: every segment is six-channel AAC. A dub chunk uses its bound surround mix; a chunk whose english.wav is just the
         # original soundtrack (and a playback without dub) uses the film's own 5.1; a dub chunk without a surround mix is upmixed from
         # the stereo dub so the stream's layout never changes mid-way.
@@ -2045,49 +2936,78 @@ class TVService:
                 identity_parts.append(["surround", "rear-off"])                  # a different audio chain is a different cached segment
                 if not audio_prefix.startswith(SURROUND_UPMIX):                  # the stereo upmix already leaves the rear channels empty
                     audio_prefix = SURROUND_REAR_OFF + "," + audio_prefix
+        plan = pre = pre_identity = None
+        ts_source = seamless and _join.ts_like(value.get("container"))
+        if seamless:
+            plan = _join.audio_join_plan(index, math.ceil(value["duration"] / value["segment_seconds"]),
+                                         value["segment_seconds"], value["duration"])
+            pre, pre_identity = (None, ["none"]) if plan["first"] else self._previous_window_audio(value, job, index, surround)
+            # What the bytes depend on beyond the old identity: the sample plan, the pre-roll audio, the PTS base, the early seek.
+            identity_parts.append(["join", plan["pre"], plan["tail"], plan["keep"], _join.TS_BASE_SECONDS,
+                                   bool(ts_source), pre_identity])
         identity = json.dumps(identity_parts)
         if value.get("speech_engine") == "xtranslator":
             identity = json.dumps(["xtranslator", identity])
         key = hashlib.sha256(identity.encode()).hexdigest()
         directory = self.config.cache / "tv-media"
         directory.mkdir(parents=True, exist_ok=True)
-        output, receipt = directory / (key + ".ts"), directory / (key + ".json")
+        fmp4 = container == "fmp4"
+        output, receipt = directory / (key + (".m4s" if fmp4 else ".ts")), directory / (key + ".json")
         if output.exists() and receipt.exists():
             saved = json.loads(receipt.read_text())
-            if file_hash(output) == saved.get("sha256"):
+            if file_hash(output) == saved.get("sha256") and (not fmp4 or (
+                    saved.get("init") and (directory / saved["init"]).is_file()
+                    and self._adopt_init(value, choice, saved["init"], fresh=False))):
                 value["_mux_cached"] = True      # a reuse is instant: not a measurement of the mux rate
+                try:
+                    os.utime(output, None)       # F11: "used now", for the least-recently-used eviction of tv-media
+                except OSError:
+                    pass
                 return output
         # One file per attempt: a cancelled encode of this segment (seek back to it) may still be unwinding.
-        temporary = directory / ("%s.%s.partial.ts" % (key, uuid.uuid4().hex[:8]))
-        args = [self.config["ffmpeg"], "-hide_banner", "-loglevel", "error", "-nostdin",
-                "-ss", str(start), "-i", value["source"]]
-        if audio_input:
-            args += ["-i", str(audio_input)]
-        height, width = value["quality"], value["quality"] * 16 // 9
-        scale = ("scale=w=%s:h=%s" % (width, height) if value["upscale"] else
-                 "scale=w='min(%s,iw)':h='min(%s,ih)'" % (width, height))
-        scale += ":force_original_aspect_ratio=decrease:force_divisible_by=2:flags=lanczos,setsar=1"
+        temporary = directory / ("%s.%s.partial.%s" % (key, uuid.uuid4().hex[:8], "mp4" if fmp4 else "ts"))
         if not video:
             raise ValueError("No playable video stream")
-        if hdr and not preserve_hdr:
-            scale = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv," + scale
-        codec, codec_options = self._video_codec(encoder, preserve_hdr, value["encoder_threads"])
+        input_options, scale, pixel = self._video_filters(value, choice, hdr, preserve_hdr, encoder,
+                                                          video.get("color_transfer"))
+        height = value["quality"]
+        codec, codec_options = self._video_codec(encoder, preserve_hdr, value["encoder_threads"], codec_name)
         rate, buffer_size = ("30M" if height == 2160 else "8M"), ("60M" if height == 2160 else "16M")
+        if codec_name == "hevc":
+            rate, buffer_size = ("20M" if height == 2160 else "6M"), ("40M" if height == 2160 else "12M")
         if youtube:
             # optional caps (youtube.stream_maxrate / stream_bufsize); unset: the same rate rule as a library film at this height
             rate, buffer_size = str(self._yt_opt("stream_maxrate") or rate), str(self._yt_opt("stream_bufsize") or buffer_size)
         color = (["-color_primaries", "bt2020", "-color_trc", video["color_transfer"],
                   "-colorspace", "bt2020nc"] if preserve_hdr else [])
-        args += ["-map", "0:" + str(video["index"]), "-map", "1:a:0" if audio_input else "0:" + str(value["audio_index"]),
-                 "-t", "%.6f" % duration, "-vf", scale, "-c:v", codec, *codec_options,
-                 "-threads", str(value["encoder_threads"]), "-filter_threads", str(min(2, value["encoder_threads"])),
-                 "-pix_fmt", "yuv420p10le" if preserve_hdr else "yuv420p",
-                 "-maxrate", rate, "-bufsize", buffer_size, *color,
-                 "-force_key_frames", "expr:gte(t,n_forced*2)",
-                 "-c:a", "aac", "-b:a", audio_rate, "-ar", "48000", *channel_args,
-                 "-af", audio_prefix + audio_filter, "-sn", "-dn", "-output_ts_offset", str(start),
-                 "-muxdelay", "0", "-muxpreload", "0", "-mpegts_flags", "+resend_headers",
-                 "-f", "mpegts", "-y", str(temporary)]
+        if seamless:
+            prefix = audio_prefix.rstrip(",")
+            main = ({"kind": "file", "path": str(audio_input), "prefix": prefix} if audio_input else
+                    {"kind": "source", "path": value["source"], "stream": value["audio_index"], "prefix": prefix})
+            args = _join.mux_arguments(
+                ffmpeg=self.config["ffmpeg"], source=value["source"], video_stream=video["index"], start=start,
+                duration=duration, scale=scale, codec=codec, codec_options=codec_options, threads=value["encoder_threads"],
+                pix_fmt="yuv420p10le" if preserve_hdr else "yuv420p", maxrate=rate, bufsize=buffer_size, color=color,
+                audio_rate=audio_rate, channel_args=channel_args, plan=plan, pre=pre, main=main,
+                layout="5.1" if surround is not None else "stereo", gain=gain_filter, ts_source=ts_source, output=temporary,
+                input_options=input_options, pixel=pixel,      # F19: the plan's decoder options and pixel format
+                container_args=self._container_args(container, start + _join.TS_BASE_SECONDS, index, seamless=True))
+        else:
+            args = [self.config["ffmpeg"], "-hide_banner", "-loglevel", "error", "-nostdin", *input_options,
+                    "-ss", str(start), "-i", value["source"]]
+            if audio_input:
+                args += ["-i", str(audio_input)]
+            args += ["-map", "0:" + str(video["index"]), "-map", "1:a:0" if audio_input else "0:" + str(value["audio_index"]),
+                     "-t", "%.6f" % duration, "-vf", scale, "-c:v", codec, *codec_options,
+                     "-threads", str(value["encoder_threads"]), "-filter_threads", str(min(2, value["encoder_threads"])),
+                     *pixel,
+                     "-maxrate", rate, "-bufsize", buffer_size, *color,
+                     "-force_key_frames", "expr:gte(t,n_forced*2)",
+                     "-c:a", "aac", "-b:a", audio_rate, "-ar", "48000", *channel_args,
+                     "-af", audio_prefix + audio_filter, "-sn", "-dn",
+                     # fMP4 cannot hold segment 0's negative priming timestamp: +10 s base also without F07 (seamless off)
+                     *self._container_args(container, start + (10 if fmp4 else 0), index, seamless=False),
+                     "-y", str(temporary)]
         try:
             try:
                 owner.run(args, timeout=max(180, duration * 20))
@@ -2096,18 +3016,31 @@ class TVService:
             except (Cancelled, TimeoutError):
                 raise
             except RuntimeError as error:
-                if encoder != "nvenc":
-                    raise
                 # NVENC refused (sessions, VRAM, driver): software for the rest of this playback generation, then
                 # this segment again under the software identity. One stream never mixes encoders afterwards.
-                self._pin_software(value, "h264_nvenc encode failed: " + str(error)[-240:])
+                # F19: a GPU filter chain or the HEVC path that fails steps down first (_degrade_picture).
+                if not self._degrade_picture(value, choice, encoder, str(error)[-240:]):
+                    raise
                 fell_back = True
             if fell_back:
                 temporary.unlink(missing_ok=True)
-                return self.render(value, index, owner)
+                return self.render(value, index, owner, original)
             if not temporary.is_file() or temporary.stat().st_size < 188:
                 raise ValueError("TV mux produced no transport stream")
-            os.replace(temporary, output)
+            init_name = None
+            if fmp4:
+                init_name = self._install_fmp4(temporary, output, directory)
+                self._adopt_init(value, choice, init_name, fresh=True)
+            else:
+                os.replace(temporary, output)
+            if codec_name == "hevc" or choice.get("filters") == "cuda" or gpu_tone:
+                problem = self._picture_selfcheck(value, choice, encoder, owner, start, output, init_name, hdr, preserve_hdr,
+                                                  video.get("color_transfer"))
+                if problem:
+                    output.unlink(missing_ok=True)
+                    if not self._degrade_picture(value, choice, encoder, problem):
+                        raise ValueError(problem)
+                    return self.render(value, index, owner, original)
         except BaseException:
             try:
                 temporary.unlink(missing_ok=True)       # never leave a cancelled/failed attempt's partial output
@@ -2115,8 +3048,13 @@ class TVService:
                 pass
             raise
         saved = {"sha256": file_hash(output), "start": start, "duration": duration, "audio": audio_hash}
+        if init_name:
+            saved["init"] = init_name
         if leveled:
             saved["loudness_gain_db"] = gain_db
+        if seamless:
+            saved["join"] = {"version": 1, "pre_frames": plan["pre"], "tail": plan["tail"], "keep": plan["keep"],
+                             "pts_base": _join.TS_BASE_SECONDS, "pre_roll": pre_identity, "early_seek": bool(ts_source)}
         receipt.write_text(json.dumps(saved))
         return output
 
@@ -2180,11 +3118,55 @@ class TVService:
         opened = self.open_movie(device, node["id"], None)
         value = self.session(opened["id"], device)
         value["plex_key"], value["title"] = str(key), metadata.get("title", source.stem)
-        from .plex_neighbors import plex_info
-        value["plex"] = plex_info(self.plex, metadata)
+        from .plex_neighbors import fill_neighbours, plex_info
+        # F24: show / season / episode at once; the previous / next episode (up to four Plex requests) are looked up by
+        # a thread and appear in the session's `plex` block one status later.
+        value["plex"] = plex_info(self.plex, metadata, lookup=False)
+        if metadata.get("type") == "episode":
+            threading.Thread(target=fill_neighbours, args=(self.plex, metadata, value["plex"]),
+                             kwargs={"timeout": PLEX_NEIGHBOUR_TIMEOUT}, name="tv-plex-neighbours", daemon=True).start()
         if resume and metadata.get("viewOffset"):
             return self.control(value["id"], device, "seek", float(metadata["viewOffset"]) / 1000)
         return self.status(value["id"], device)
+
+    def apply_open_prefs(self, ident, device, prefs):
+        """F24. The preferences the TV used to send as separate control requests right after `open` (player.js
+        openMovie), applied in the same order through the same control() code, in the open request itself. A value a
+        control would refuse raises the same ValueError; the session is then stopped (no orphan session or dub job).
+        Returns the final status with prefs_applied True (an older server ignores "prefs": the TV then sends the
+        controls itself)."""
+        value = self.session(ident, device)
+        status = None
+        try:
+            position = prefs.get("resume_position")
+            if position is not None and float(position) > 10:
+                status = self.control(ident, device, "seek", position=float(position))
+            if prefs.get("quality") is not None and (
+                    int(prefs["quality"]) != value["quality"] or bool(prefs.get("upscale")) != value["upscale"]
+                    or prefs.get("hdr_mode", value["hdr_mode"]) != value["hdr_mode"]
+                    or (prefs.get("surround") or "auto") != value.get("surround", "auto")):
+                status = self.control(ident, device, "quality", position=value["position"], quality=prefs["quality"],
+                                      upscale=prefs.get("upscale"), hdr_mode=prefs.get("hdr_mode", value["hdr_mode"]),
+                                      surround=prefs.get("surround") or "auto")
+            if prefs.get("encoder") not in (None, "default"):
+                status = self.control(ident, device, "processing", position=value["position"], encoder=prefs["encoder"],
+                                      encoder_threads=prefs.get("encoder_threads") or 2)
+            if prefs.get("dub"):
+                status = self.control(ident, device, "dub", position=value["position"], enabled=True)
+            if prefs.get("watch"):
+                status = self.control(ident, device, "watch", enabled=True)
+            if prefs.get("watch_mode"):
+                status = self.control(ident, device, "watch_mode", watch_mode=prefs["watch_mode"])
+            if "progress_sync" in prefs:
+                status = self.control(ident, device, "progress_sync", enabled=bool(prefs["progress_sync"]))
+            if prefs.get("subtitles") and prefs["subtitles"] != "off":
+                status = self.control(ident, device, "subtitles", subtitles=prefs["subtitles"])
+        except Exception:
+            self.stop(ident)
+            raise
+        status = status or self.status(ident, device)
+        status["prefs_applied"] = True
+        return status
 
     def plex_poster(self, key):
         metadata = self.plex.metadata(key)

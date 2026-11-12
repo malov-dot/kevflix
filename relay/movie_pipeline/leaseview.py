@@ -22,6 +22,7 @@ How views and the real lease relate:
 from __future__ import annotations
 
 import threading
+import time
 import uuid
 
 
@@ -293,7 +294,11 @@ class LeaseHub:
             with self._lock:
                 lease = self._lease
             if lease is None:
-                lease = self.holder.acquire(holder=name)     # one attempt; raises when unavailable
+                try:
+                    lease = self.holder.acquire(holder=name)     # one attempt; raises when unavailable
+                except Exception as error:
+                    self._note_refused(error)
+                    raise
                 with self._lock:
                     self._lease = lease
                     self._last = {'state': 'held', 'reason': None, 'lease_id': getattr(lease, 'lease_id', None)}
@@ -306,6 +311,20 @@ class LeaseHub:
                 self._views.add(view)
                 return view
 
+    def _note_refused(self, error):
+        """A refused acquire that is a real hold (movie_faults kind 'resource': the other app is running, no VRAM, a
+        pending drain) is remembered for state(): {'state': 'refused', 'reason': <code>, 'detail', 'since', 'at'}.
+        'since' is kept across consecutive refusals; the next grant replaces the record. Permanent faults are not
+        recorded here (they stop the producer and are reported as 'failed')."""
+        code = getattr(error, 'fault_code', None)
+        if getattr(error, 'fault_kind', None) != 'resource' or not isinstance(code, str) or not code:
+            return
+        now = time.time()
+        with self._lock:
+            since = self._last.get('since') if self._last.get('state') == 'refused' else None
+            self._last = {'state': 'refused', 'reason': code, 'detail': str(getattr(error, 'detail', error))[:300],
+                          'since': since or now, 'at': now}
+
     def _on_preempt(self, lease, event):
         """Lease-reader thread: end every view of THAT lease. Takes only _lock briefly; never waits on _gate."""
         with self._lock:
@@ -313,7 +332,7 @@ class LeaseHub:
                 return
             views = list(self._views)
             self._last = {'state': 'preempted', 'reason': getattr(event, 'reason', 'preempted'),
-                          'detail': getattr(event, 'detail', '')}
+                          'detail': getattr(event, 'detail', ''), 'since': time.time()}
         calls = []
         for view in views:
             calls += view._end(getattr(event, 'reason', 'preempted'), getattr(event, 'detail', ''))

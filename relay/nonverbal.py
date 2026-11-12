@@ -473,6 +473,11 @@ CHANT_HELD_MIN_S = 0.40         # monotone recitation with the existing features
 CHANT_VOICED_MIN = 0.70
 CHANT_RANGE_MAX = 5.0           # pitch_range_semitones (10-90 percentile spread in the stem measurement)
 CHANT_SPEECH_MAX = 0.35
+# F16 (2026-11-11): rule 5 alone kept shouted and recited sentences original (4 lines of a full film, 9.6 s: a flat, voiced line
+# with a low Speech score and NO singing label above 0.03). It now needs a second witness: the classifier hears some singing,
+# or the pitch really sits on one tone for most of a second. Real chant in that film: singing-family label 0.06-0.49 or a 0.9 s run.
+CHANT_SING_SUPPORT = 0.05       # highest singing-family label (SING_LABELS) at or above this
+CHANT_TONE_RUN_SUPPORT_S = 0.8  # or tone_run_s (audio_features) at or above this
 TONE_SHARE_MIN = 0.75           # optional extra features (audio_features): share of voiced 50 ms blocks within +-1 semitone
 TONE_RUN_MIN_S = 1.0            # of the most common pitch, longest run of such blocks
 TONE_VOICED_MIN_S = 2.0
@@ -509,7 +514,7 @@ def _spoken_narration(speech, text, duration):
         return False
 
 
-def nonverbal_audio_reason(features, events, *, text=None, duration=None):
+def nonverbal_audio_reason(features, events, *, text=None, duration=None, chant_evidence=True):
     """Reason from the measured features of the ORIGINAL vocals excerpt and the classifier labels, else None.
 
     features: dict with voiced_fraction, longest_held_note_s, pitch_range_semitones, rms_active_db (the export fields) and,
@@ -545,10 +550,14 @@ def nonverbal_audio_reason(features, events, *, text=None, duration=None):
         if (float(f.get('tone_share') or 0) >= TONE_SHARE_MIN and float(f.get('tone_run_s') or 0) >= TONE_RUN_MIN_S
                 and float(f.get('voiced_s') or 0) >= TONE_VOICED_MIN_S and not _spoken_narration(speech, text, duration)):
             return 'chant_monotone'
-        # 5 recitative on one tone with the export features only (speech-like classifier score is low)
+        # 5 recitative on one tone with the export features only (speech-like classifier score is low). F16: only with a second
+        #   witness of singing (chant_evidence=False restores the rule without it)
         if (hold >= CHANT_HELD_MIN_S and vf >= CHANT_VOICED_MIN and rng is not None and float(rng) <= CHANT_RANGE_MAX
                 and speech is not None and speech <= CHANT_SPEECH_MAX):
-            return 'chant_monotone'
+            sung = max([ev.get(k, 0.0) for k in SING_LABELS] or [0.0]) >= CHANT_SING_SUPPORT
+            steady = float(f.get('tone_run_s') or 0) >= CHANT_TONE_RUN_SUPPORT_S
+            if sung or steady or not chant_evidence:
+                return 'chant_monotone'
         # 6 an unvoiced burst the classifier calls a cough / sneeze / sigh / laugh / breath and does not call speech
         if speech is not None and speech <= BURST_SPEECH_MAX and vf <= BURST_VOICED_MAX:
             best = max(((ev.get(k, 0.0), k) for k in BURST_LABELS), default=(0.0, None))
@@ -564,9 +573,10 @@ def nonverbal_audio_reason(features, events, *, text=None, duration=None):
         return None
 
 
-def nonverbal_reason(text, features=None, events=None, *, duration=None):
+def nonverbal_reason(text, features=None, events=None, *, duration=None, chant_evidence=True):
     """Text rule first, then the acoustic rule. None means: dub it."""
-    return nonverbal_text_reason(text) or (nonverbal_audio_reason(features, events, text=text, duration=duration) if features is not None else None)
+    return nonverbal_text_reason(text) or (nonverbal_audio_reason(features, events, text=text, duration=duration,
+                                                                  chant_evidence=chant_evidence) if features is not None else None)
 
 
 # --------------------------------------------------------------------------------------------------------------------

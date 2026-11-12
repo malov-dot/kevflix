@@ -69,6 +69,24 @@ def _gate_on(config_tv):
     return value if isinstance(value, bool) else True
 
 
+def window_lead(seconds, position, segment_seconds, low_water=10.0, enabled=True):
+    """`seconds` of required lead, counted in whole segments from the segment under the playhead.
+
+    The muxed lead always ends on a segment boundary, so "lead >= 60 s" from a position 0.4 s into a 30 s segment
+    needs three segments (89.6 s) instead of two. This returns what ceil(seconds / seg) whole segments leave ahead of
+    the playhead (two segments from 2970.4 s = 59.6 s) when that is at least one segment plus `low_water` seconds;
+    later in the segment the configured `seconds` stand (one more segment, as before). Never more than `seconds`,
+    never below 1 s. enabled False (tv.lead_whole_windows off) or an invalid segment length: `seconds` unchanged."""
+    seconds = float(seconds)
+    seg = float(segment_seconds or 0.0)
+    if not enabled or seg <= 0.0 or not math.isfinite(seconds) or seconds <= 0.0:
+        return seconds
+    whole = max(1, int(math.ceil(seconds / seg - 1e-9))) * seg - float(position) % seg
+    if whole < seg + max(0.0, float(low_water)) - 1e-9:
+        return seconds
+    return max(1.0, min(seconds, whole))
+
+
 def startup_threshold(config_tv, seeked, segment_seconds=30, remaining=None):
     """Short bounded startup buffer in seconds.
 
@@ -185,6 +203,15 @@ def buffer_metrics(session, now, config_tv=None, chunk_record=None):
     seeked = int(session.get("epoch", 0)) > 0
     seg = session["segment_seconds"]
     threshold = startup_threshold(config_tv or {}, seeked, seg, remaining)
+    if session.get("job_id") and not seeked and _gate_on(config_tv or {}):
+        # Same whole-window rule as producer_policy.required_seconds. The field that decides is that module's
+        # buffer_required_seconds; this informational one must not disagree with it.
+        whole = _read(config_tv or {}, "lead_whole_windows", True)
+        low_water = _read(config_tv or {}, "low_water_seconds", 10.0)
+        if isinstance(low_water, bool) or not isinstance(low_water, (int, float)):
+            low_water = 10.0
+        threshold = min(remaining, window_lead(threshold, position, seg, low_water,
+                                               whole if isinstance(whole, bool) else True))
     if session.get("speech_engine") in ("generic", "xtranslator") and session.get("dub"):
         threshold = float(session.get("generic_prebuffer_seconds", 120.0))
         if not math.isfinite(threshold) or threshold <= 0:

@@ -171,7 +171,7 @@ def voice_channels(speech, generated, envelope, rate):
     return voice
 
 
-def compose_surround(source51, stem, generated, envelope, *, origin, rate, protected_intervals, layout):
+def compose_surround(source51, stem, generated, envelope, *, origin, rate, protected_intervals, layout, bed_gain=None):
     """The 5.1 mix of one render window (same samples as the stereo mix) and its receipt.
 
     source51: (n, 6) float32 original 5.1; stem: (n, 2) removal stem; generated: (n, 2) English voices as placed in the stereo mix;
@@ -191,7 +191,9 @@ def compose_surround(source51, stem, generated, envelope, *, origin, rate, prote
     speech = speech_components(source51, stem, envelope, rate)
     voice = voice_channels(speech, generated, envelope, rate)
     mixed, receipt = protect_dialogue_mix(source51, speech, voice, envelope, origin=origin, rate=rate, channel_layout=layout,
-                                          protected_intervals=protected_intervals)
+                                          protected_intervals=protected_intervals, bed_gain=bed_gain)
+    if bed_gain is not None:
+        mixed[:, 3] = source51[:, 3]              # F26: the LFE is never touched, not even by the duck
     energy = {name: round(_rms(speech[:, c]), 6) for name, c in zip(('FL', 'FR', 'FC', 'SL', 'SR'), FULL_RANGE)}
     return np.ascontiguousarray(mixed, dtype=np.float32), {
         'version': VERSION, 'frames': int(len(mixed)), 'groups': len(replaced_groups(envelope, rate)),

@@ -52,10 +52,14 @@ from ..actor_beta_timing import publication_accounting
 
 LOG = logging.getLogger('relay.movie_pipeline')
 
-RETRY_RESOURCES_S = 30.0          # relay coordinator.loop cadence
+RETRY_RESOURCES_S = 30.0          # default of gpu_lease.retry_seconds: how often a held dub looks whether the card is free
+RETRY_RESOURCES_MAX_S = 300.0     # default of gpu_lease.retry_max_seconds: ceiling of the back-off after a retry round failed again
+RETRY_HELD_DELAY_S = 60.0         # without a probe verdict a held window is requeued only after this long (the old rule)
+PROBE_FRESH_S = 5.0               # an admission reuses a probe this young: one claim round costs one process scan
 FENCE_POLL_S = 1.0
 RELEASE_GRACE_S = 4.0              # no unfinished job for this long: the models leave RAM and VRAM (playback stopped / film done)
 RELEASE_POLL_S = 1.0
+REFUSED_FRESH_S = 150.0            # a refused lease acquire counts as 'waiting for the card' this long (blind retry rounds are 91 s apart)
 TERMINAL_JOB_STATES = ('complete', 'error', 'cancelled', 'needs_review')
 
 
@@ -68,8 +72,10 @@ class _Record:
         self.prepared = None
         self.actor_commit = None
         self.serial_reference_write = False  # a rejected prepared reuse must retry without speculative analysis
+        self.warmed = False                  # its raw inference was pre-run during the previous window's render (once)
         self.snapshot_dir = None
         self.pending_settle = None       # (kind, reason, stage, detail, fault): settle once no worker of it runs
+        self.requeue = False             # a background window that gave way: its claim returns to 'pending'
         self.outstanding = 0             # workers of THIS claim still running
         self.times = {'claimed': time.time()}
 
@@ -92,7 +98,25 @@ def options(config):
     return movie if isinstance(movie, dict) and movie.get('enabled') is True else None
 
 
+def _lease_seconds(config, key, default, low, high):
+    """gpu_lease.<key> in seconds, clamped; the default for anything unreadable (config.py validates the real file)."""
+    try:
+        data = getattr(config, 'data', config)
+        value = float((data.get('gpu_lease') or {}).get(key, default))
+    except (AttributeError, TypeError, ValueError):
+        return float(default)
+    return min(float(high), max(float(low), value)) if value == value else float(default)
+
+
 class MoviePipeline:
+    # GPU retry state (class defaults; __init__ reads gpu_lease.retry_seconds / retry_max_seconds).
+    _retry_base, _retry_max = RETRY_RESOURCES_S, RETRY_RESOURCES_MAX_S
+    _retry_wait, _retry_at, _retry_released = RETRY_RESOURCES_S, 0.0, 0
+    _gpu_wait = None                 # {'code', 'detail', 'since', 'checked', 'probes'} while the card is known to be unavailable
+    _probe_cache = None              # (monotonic time, record) of the latest holder.probe()
+    _probe_enabled = True            # gpu_lease.probe_before_retry; False: the old blind rule, exactly
+    _heat = None                     # relay.gpu_heat.HeatGuard (F28), built by __init__; None: no heat guard
+
     def __init__(self, config, store, *, coordinator, queues=None, poll_s=None):
         relay = _relay_modules()
         opts = options(config) or {}
@@ -100,6 +124,8 @@ class MoviePipeline:
         self.config, self.store, self.relay = config, store, relay
         self.run_dir = Path(config.state) / 'movie-pipeline'
         self.poll_s = float(poll_s or opts.get('poll_seconds', 0.5))
+        # actor_beta.movie_pipeline.warm_next_window (default on): pre-run the next window's raw inference during a render
+        self.warm_next = opts.get('warm_next_window', True) is True
         self.failed = None
         self.stop_event = threading.Event()
         self.stop_reason = None
@@ -122,9 +148,28 @@ class MoviePipeline:
         self.threads = []
         self.on_job = None
         self.jobs_seen = set()
+        self._retry_base = _lease_seconds(config, 'retry_seconds', RETRY_RESOURCES_S, 5.0, 600.0)
+        self._retry_max = max(self._retry_base,
+                              _lease_seconds(config, 'retry_max_seconds', RETRY_RESOURCES_MAX_S, 30.0, 3600.0))
+        self._retry_wait = self._retry_base
+        self._probe_enabled = (getattr(config, 'data', config).get('gpu_lease') or {}).get('probe_before_retry', True) is not False
+        from ..gpu_heat import HeatGuard
+        limit = _lease_seconds(config, 'max_gpu_celsius', 85, 0, 95)
+        self._heat = HeatGuard(limit, min(_lease_seconds(config, 'resume_gpu_celsius', 78, 40, 93), max(40.0, limit - 2)))
         self._idle_since = None          # monotonic time the pipeline last had no unfinished work (models are released after RELEASE_GRACE_S)
         self._models_released = False
         self._release_check_at = 0.0
+        # Background finish (tv.background_finish): the gate (setting, no playback, PC idle, GPU temperature), whether
+        # it is open now, and the keeper of the below-normal process priority.
+        from ..background_gate import BackgroundGate, BackgroundPriority
+        try:
+            tv_cfg = config['tv']
+        except (KeyError, TypeError):
+            tv_cfg = None
+        self.background_gate = BackgroundGate(
+            tv_cfg, playback=lambda: bool(getattr(coordinator, 'playback_active', lambda: False)()))
+        self.background_priority = BackgroundPriority()
+        self._background_open, self._background_reason = False, None
         # english_windows counts only windows settled ready with generated English; original-audio outcomes are
         # counted apart and never as rendered English. fallback_original includes original-unverified windows.
         self.counts = {'claimed': 0, 'render_attempts': 0, 'english_windows': 0, 'english_generated_seconds': 0.0,
@@ -203,18 +248,38 @@ class MoviePipeline:
         except OSError:
             pass
 
+    def _gpu_waiting(self, lease):
+        """{'code', 'since'} while dub work is waiting for the graphics card, else None. Sources: the retry gate's
+        probe (self._gpu_wait, when that change is installed), a refused lease acquire younger than REFUSED_FRESH_S,
+        a preemption. Never reported when no dub job is unfinished: a preemption hours ago must not put a notice on
+        the TV's library screen."""
+        found = None
+        gate = getattr(self, '_gpu_wait', None)
+        if gate:
+            found = {'code': gate.get('code'), 'since': gate.get('since')}
+        elif lease.get('state') == 'refused' and time.time() - float(lease.get('at') or 0.0) <= REFUSED_FRESH_S:
+            found = {'code': lease.get('reason'), 'since': lease.get('since')}
+        elif lease.get('state') == 'preempted':
+            found = {'code': lease.get('reason'), 'since': lease.get('since')}
+        if found is None or not self._work_pending():
+            return None
+        return found
+
     def state(self):
-        """Producer state for /tv-api/producer: running | preempted | failed | stopped."""
+        """Producer state for /tv-api/producer: running | preempted | failed | stopped. 'preempted' also covers a
+        dub that was REFUSED the card (it never held it): every released TV player knows that name. waiting_gpu
+        (bool) and since (unix seconds) are additive."""
         if self.failed:
             return {'state': 'failed', 'reason': self.failed, 'producer': 'movie-pipeline'}
         if self.stop_event.is_set():
             return {'state': 'stopped', 'reason': self.stop_reason, 'producer': 'movie-pipeline'}
         lease = self.hub.state()
         analysis = self.analysis.device_report() if self.analysis is not None else None
-        if lease.get('state') == 'preempted':
-            return {'state': 'preempted', 'reason': lease.get('reason'), 'producer': 'movie-pipeline', 'lease': lease,
-                    'analysis': analysis}
-        return {'state': 'running', 'reason': None, 'producer': 'movie-pipeline', 'lease': lease,
+        waiting = self._gpu_waiting(lease)
+        if waiting is not None:
+            return {'state': 'preempted', 'reason': waiting['code'], 'waiting_gpu': True, 'since': waiting['since'],
+                    'producer': 'movie-pipeline', 'lease': lease, 'analysis': analysis}
+        return {'state': 'running', 'reason': None, 'waiting_gpu': False, 'producer': 'movie-pipeline', 'lease': lease,
                 'analysis': analysis,
                 'counts': {k: (dict(v) if isinstance(v, dict) else v) for k, v in self.counts.items()}}
 
@@ -223,6 +288,60 @@ class MoviePipeline:
         for record in list(self.records.values()):
             if record.claim.job_id == job_id:
                 record.owner.cancel()
+
+    # ---- background finish ---------------------------------------------------------------------------------------
+    def yield_background(self, background_jobs):
+        """Any thread (Coordinator.request of a film being watched, the gate watcher): every window in flight for a
+        BACKGROUND job gives way now. Its owner is cancelled; the claim then settles back to 'pending' (see _settle)
+        and is produced again when the gate is open and no other job is unfinished. Returns how many gave way."""
+        yielded = 0
+        for record in list(self.records.values()):
+            if record.claim.job_id in background_jobs and not record.requeue and record.pending_settle is None:
+                record.requeue = True
+                record.owner.cancel()
+                yielded += 1
+        if yielded:
+            self.emit('background_yielded', windows=yielded)
+        return yielded
+
+    def _background_jobs(self):
+        jobs = getattr(self.jobs, 'background_jobs', None)
+        return jobs() if callable(jobs) else ()
+
+    def _background_tick(self):
+        """Coordinator thread, once a second: evaluate the gate for the background job (if any), log every change,
+        make its windows give way when the gate closed, and keep the child processes at below-normal priority while
+        ONLY background windows are in production."""
+        gate = getattr(self, 'background_gate', None)
+        jobs = self._background_jobs() if gate is not None else ()
+        allowed, reason = gate.check() if jobs else (False, None)
+        if (allowed, reason) != (getattr(self, '_background_open', False), getattr(self, '_background_reason', None)):
+            self.emit('background_gate', open=allowed, reason=reason)
+        self._background_open, self._background_reason = allowed, reason
+        if jobs and not allowed:
+            self.yield_background(jobs)
+        priority = getattr(self, 'background_priority', None)
+        if priority is not None:
+            if allowed and self.records and all(r.claim.job_id in jobs for r in self.records.values()):
+                priority.lower()
+            elif priority.lowered:
+                priority.restore()
+
+    def _background_watch(self):
+        """Own thread, because the coordinator thread is busy for a whole render: once a second, while background
+        windows are in flight, re-check the gate and make them give way at once when it closed (keyboard or mouse
+        input, a playback, the GPU at its limit). While it stays open and only background windows are in production,
+        child processes started meanwhile (ffmpeg, a worker) are put at below-normal priority here too."""
+        while not self.stop_event.wait(1.0):
+            jobs = getattr(self.jobs, '_background', None) or ()
+            records = list(self.records.values())
+            if jobs and any(r.claim.job_id in jobs for r in records):
+                allowed, _ = self.background_gate.check()
+                if not allowed:
+                    self._background_open = False
+                    self.yield_background(jobs)
+                elif all(r.claim.job_id in jobs for r in records):
+                    self.background_priority.lower()
 
     # ---- lifecycle ------------------------------------------------------------------------------------------------
     def stop(self, why='stop'):
@@ -233,15 +352,23 @@ class MoviePipeline:
             record.owner.cancel()
 
     def start_workers(self):
-        for name, target in (('movie-separation', self._separation_worker), ('movie-analysis', self._analysis_worker)):
+        for name, target in (('movie-separation', self._separation_worker), ('movie-analysis', self._analysis_worker),
+                             ('movie-background-watch', self._background_watch)):
             thread = threading.Thread(target=target, name=name, daemon=True)
             thread.start()
             self.threads.append(thread)
+        # F15: the film scout feeds Diart ahead of playback, only while the analysis worker is warm and no window waits for it
+        from .. import film_scout
+        self.scout = film_scout.ScoutHost(self.config, self.store, self.analysis, terminal=TERMINAL_JOB_STATES,
+                                          busy=lambda: self.analysing is not None or not self.ana_q.empty())
+        self.scout.start()
 
     def close(self):
         if self._closed:
             return
         self._closed = True
+        if getattr(self, 'scout', None) is not None:
+            self.scout.stop()
         self.stop(self.stop_reason or 'close')
         for q in (self.sep_q, self.ana_q):
             try:
@@ -280,6 +407,11 @@ class MoviePipeline:
             item = self.ana_q.get()
             if item is None:
                 return
+            if item[0] == 'warm':
+                _, claim, owner, separated = item
+                self.results.put(('warmed', _stages.warm_window(self.config, self.store, claim, owner,
+                                                                self.analysis_pipeline, separated)))
+                continue
             claim, owner, separated, snapshot_claimed, base = item
             self.results.put(('prepared', _stages.prepare_window(self.config, snapshot_claimed, claim, owner,
                                                                  self.analysis_pipeline, separated, base, _actors)))
@@ -299,21 +431,21 @@ class MoviePipeline:
         self.start_workers()
         self.emit('coordinator_started', max_inflight=self.max_inflight,
                   queues={'separation': self.sep_bound, 'analysis': self.ana_bound})
-        retry_at = fence_at = 0.0
+        fence_at = 0.0
         while not self.stop_event.is_set() and not self.jobs.stop_event.is_set():
             now = time.monotonic()
             self.resident.idle_check()
             self.analysis.idle_check()
             self._release_idle_models(now)
-            if now >= retry_at:
-                self.store.retry_resources()
-                retry_at = now + RETRY_RESOURCES_S
+            self._retry_resources(now)
             if now >= fence_at:
                 self._cancel_superseded()
+                self._background_tick()
                 fence_at = now + FENCE_POLL_S
             worked = self._drain_results()
             worked = self._admit() or worked
             worked = self._dispatch_analysis() or worked
+            worked = self._dispatch_warm() or worked
             if self._render_next():
                 continue
             if not worked:
@@ -345,16 +477,138 @@ class MoviePipeline:
         else:
             self.busy[key] = left
 
+    # ---- GPU availability: probe before retrying (gpu_lease.retry_seconds / retry_max_seconds) ------------------------
+    def _lease_held(self):
+        try:
+            return self.hub.state().get('state') == 'held'
+        except Exception:  # noqa: BLE001 -- no hub (tests) or an unreadable state: not held
+            return False
+
+    def _gpu_probe(self, now, max_age=0.0):
+        """holder.probe() (relay.app_runtime.movie_lease.Holder.probe), reused for max_age seconds. None when the
+        holder has no probe or it failed: every caller then behaves exactly as before this check existed."""
+        if not self._probe_enabled:
+            return None
+        cached = self._probe_cache
+        if cached is not None and now - cached[0] <= max_age:
+            return cached[1]
+        probe = getattr(getattr(getattr(self, 'hub', None), 'holder', None), 'probe', None)
+        if not callable(probe):
+            return None
+        try:
+            record = probe()
+        except Exception as error:  # noqa: BLE001 -- a probe that cannot run never holds the dub back
+            LOG.warning('movie GPU probe failed: %s: %s', type(error).__name__, error)
+            return None
+        if not isinstance(record, dict):
+            return None
+        self._probe_cache = (now, record)
+        return record
+
+    def _note_gpu_wait(self, record):
+        """Remember that the card is unavailable (one log line when it starts or its reason changes, one when it
+        ends). record: a probe record, or None / an obtainable one to clear."""
+        previous = self._gpu_wait
+        if record is None or record.get('obtainable', True):
+            if previous is not None:
+                self.emit('gpu_wait_ended', code=previous['code'], waited_s=round(time.time() - previous['since'], 1),
+                          probes=previous['probes'])
+            self._gpu_wait = None
+            return
+        now = time.time()
+        code, detail = str(record.get('code')), str(record.get('detail') or '')[:300]
+        if previous is None or previous['code'] != code:
+            self.emit('gpu_wait', code=code, detail=detail, free_mib=record.get('free_mib'))
+        self._gpu_wait = {'code': code, 'detail': detail, 'since': previous['since'] if previous is not None else now,
+                          'checked': now, 'probes': (previous['probes'] if previous is not None else 0) + 1}
+
+    def _waiting_count(self):
+        count = getattr(self.store, 'waiting_resources', None)
+        if not callable(count):
+            return 1                                 # a store without the counter: always look (the old behaviour)
+        try:
+            return int(count())
+        except Exception:  # noqa: BLE001
+            return 1
+
+    def _retry_resources(self, now):
+        """Requeue the windows held in waiting_resources, once per period, and only when the card can be had.
+        * nothing held: nothing is probed or requeued;
+        * no lease and the probe names a hold (the other app is running, no VRAM, a pending drain): nothing is
+          requeued, so no window is claimed, extracted from the NAS and refused again; the probe repeats every
+          gpu_lease.retry_seconds, so dubbing resumes within one period of the hold ending;
+        * the probe allows it: every held window is requeued at once (delay 0). If that round is refused again (a
+          hold the probe cannot see) the next round waits twice as long, up to gpu_lease.retry_max_seconds;
+        * a lease is held, or there is no probe: the old rule (windows held for 60 s are requeued)."""
+        if now < self._retry_at:
+            return
+        if not self._waiting_count():
+            self._note_gpu_wait(None)
+            self._retry_wait, self._retry_released = self._retry_base, 0
+            self._retry_at = now + self._retry_base
+            return
+        heat = self._heat_block(now)
+        if heat is not None:                         # hot: nothing is requeued; looked at again after one base period
+            self._note_gpu_wait(heat)
+            self._retry_wait, self._retry_released = self._retry_base, 0
+            self._retry_at = now + self._retry_base
+            return
+        held = self._lease_held()
+        record = None if held else self._gpu_probe(now)
+        if record is not None and not record.get('obtainable', True):
+            self._note_gpu_wait(record)
+            self._retry_wait, self._retry_released = self._retry_base, 0
+            self._retry_at = now + self._retry_base
+            return
+        self._note_gpu_wait(None)
+        if record is not None and self._retry_released and not held:   # the probe let the last round through and it still got no lease
+            self._retry_wait = min(self._retry_max, max(self._retry_base, self._retry_wait * 2))
+        else:
+            self._retry_wait = self._retry_base
+        self._retry_released = int(self.store.retry_resources(delay=0 if record is not None else RETRY_HELD_DELAY_S) or 0)
+        self._retry_at = now + self._retry_wait
+
+    def _heat_block(self, now):
+        """The heat guard's hold record (code 'gpu_hot', relay/gpu_heat.py), or None. None without a guard (objects
+        built with __new__, as the tests do) or when the guard itself fails."""
+        heat = self._heat
+        if heat is None:
+            return None
+        try:
+            return heat.block(now)
+        except Exception as error:  # noqa: BLE001 -- a guard that cannot run never stops a film someone is watching
+            LOG.warning('movie heat guard failed: %s: %s', type(error).__name__, error)
+            return None
+
+    def _admission_block(self, now):
+        """The hold record when a window claimed just now must not start: the card is hot (heat guard, also while the
+        lease is held), or no lease is held and the probe names a hold. Else None."""
+        heat = self._heat_block(now)
+        if heat is not None:
+            self._note_gpu_wait(heat)
+            return heat
+        if self._gpu_wait is not None and self._gpu_wait.get('code') == 'gpu_hot':
+            self._note_gpu_wait(None)                # cooled down: the heat wait ends here (one gpu_wait_ended line)
+        if self._lease_held():
+            return None
+        record = self._gpu_probe(now, PROBE_FRESH_S)
+        if record is None or record.get('obtainable', True):
+            return None
+        self._note_gpu_wait(record)
+        return record
+
     # ---- admission -------------------------------------------------------------------------------------------------
     def _admit(self):
-        admitted = False
+        admitted = started = False
         for record in list(self.deferred):           # claims that waited for an older claim's workers
             if self._chunk(record.claim) not in self.busy and not self.sep_q.full():
                 self.deferred.remove(record)
                 self._start_separation(record)
-                admitted = True
+                admitted = started = True
         while len(self.records) < self.max_inflight and not self.sep_q.full() and not self.stop_event.is_set():
-            item = self.store.claim()
+            # Background chunks are asked for only while the gate is open (store.claim then still puts every other
+            # unfinished job first).
+            item = self.store.claim(background=True) if getattr(self, '_background_open', False) else self.store.claim()
             if not item:
                 break
             job = self.store.job(item['job_id'])
@@ -370,13 +624,21 @@ class MoviePipeline:
             self.records[self._key(claim)] = record
             self.counts['claimed'] += 1
             self.emit('chunk_claimed', job_id=claim.job_id, index=claim.index, token=claim.token, priority=claim.priority)
+            admitted = True
+            block = self._admission_block(time.monotonic())
+            if block is not None:
+                # The card cannot be had: hold the window now, before its audio is extracted from the NAS. The job
+                # goes to waiting_resources (summarize), so this loop claims nothing more of it.
+                self._settle(record, 'resource', '%s: %s' % (block['code'], block['detail']), 'admission',
+                             fault={'kind': 'resource', 'code': block['code'], 'detail': block['detail']})
+                continue
             if self._chunk(claim) in self.busy:
                 record.state = 'deferred'
                 self.deferred.append(record)
             else:
                 self._start_separation(record)
-            admitted = True
-        if admitted:
+            started = True
+        if started:
             self._prewarm_analysis()
         return admitted
 
@@ -386,7 +648,12 @@ class MoviePipeline:
         if self.records or self.deferred or not self.sep_q.empty() or not self.ana_q.empty():
             return True
         try:
-            return any(job['state'] not in TERMINAL_JOB_STATES for job in self.store.jobs())
+            # A background job counts as work only while its gate is open: paused (PC in use, GPU hot, a playback), it
+            # must not keep the models in RAM and VRAM.
+            waiting = getattr(self, '_background_open', False)
+            return any(job['state'] not in TERMINAL_JOB_STATES
+                       and (waiting or (job.get('payload') or {}).get('background') is not True)
+                       for job in self.store.jobs())
         except Exception:  # noqa: BLE001
             return True
 
@@ -452,7 +719,7 @@ class MoviePipeline:
 
     def _on_result(self, kind, result):
         key = self._key(result.claim)
-        if kind == 'prepared' and self.analysing == key:
+        if kind in ('prepared', 'warmed') and self.analysing == key:
             self.analysing = None
         record = self.records.get(key)
         if record is None:
@@ -463,6 +730,16 @@ class MoviePipeline:
             record.snapshot_dir = None
         if record.pending_settle is not None:          # the claim ended while this worker ran: settle now
             self._settle(record, *record.pending_settle)
+            return
+        if kind == 'warmed':                             # nothing was decided: the window stays 'separated'
+            record.times['warmed'] = time.time()
+            self.emit('stage', job_id=result.claim.job_id, index=result.claim.index, stage='warm', ok=result.ok,
+                      state=result.state, seconds=result.seconds, timing=result.timing, error=result.error or None)
+            # Three warm-ups in a row that did not run (wrong lane, a fault): stop trying until the server restarts.
+            self._warm_failures = 0 if result.ok else getattr(self, '_warm_failures', 0) + 1
+            if self._warm_failures >= 3 and getattr(self, 'warm_next', False):
+                self.warm_next = False
+                self.emit('warm_disabled', reason=result.error or result.state)
             return
         if kind == 'separated':
             record.separated = result
@@ -556,6 +833,34 @@ class MoviePipeline:
         self.ana_q.put((claim, record.owner, record.separated, claimed, base))
         return True
 
+    def _dispatch_warm(self):
+        """While the best committed window is about to render (the coordinator thread is then busy for its ~20 s and the
+        analysis worker would sit idle), pre-run the RAW inference of the next window of the same film on the analysis
+        worker (stages.warm_window: ASR + speaker analysis). This is NOT a preparation: no snapshot, no ledger, no
+        speaker bank, no plan. The window stays 'separated' and is prepared only after its predecessor was published
+        (_behind, unchanged), because preparation reads the predecessor's published takes and its committed-window
+        record. Never beside a render that may bind references, never twice for one claim."""
+        if not getattr(self, 'warm_next', False) or self.analysing is not None or self.ana_q.full() \
+                or self.stop_event.is_set():
+            return False
+        renders = self._ready_renders()
+        if not renders or any(self._render_may_bind(r) for r in renders):
+            return False
+        ready = [r for r in renders if not self._behind(r)]
+        if not ready:
+            return False
+        claim = min(ready, key=self._current_priority).claim            # the window _render_next renders now
+        record = next((r for r in self.records.values()
+                       if r.state == 'separated' and r.pending_settle is None and not r.warmed
+                       and r.claim.job_id == claim.job_id and r.claim.index == claim.index + 1), None)
+        if record is None:
+            return False
+        record.warmed = True
+        self.analysing = self._key(record.claim)
+        self._busy_add(record)
+        self.ana_q.put(('warm', record.claim, record.owner, record.separated))
+        return True
+
     def _current_priority(self, record):
         row = self.store.chunk(record.claim.job_id, record.claim.index)
         return (int(row['priority']) if row else 1 << 30, record.claim.index)
@@ -633,7 +938,11 @@ class MoviePipeline:
         claim = record.claim
         store = self.store
         outcome = kind
-        if kind == 'cancelled':
+        if record.requeue:                               # a background window that gave way (its owner was cancelled by
+            # yield_background): whatever the interrupted stage reported, the claim goes back to the queue
+            store.settle_claimed_chunk(claim.job_id, claim.index, claim.token, 'pending')
+            outcome = 'yielded'
+        elif kind == 'cancelled':
             store.settle_claimed_chunk(claim.job_id, claim.index, claim.token, 'cancelled')
         elif kind == 'resource':
             if store.settle_claimed_chunk(claim.job_id, claim.index, claim.token, 'waiting_resources',
@@ -735,6 +1044,9 @@ class MoviePipeline:
             if record.pending_settle is not None or record.state == 'rendering':
                 continue
             claim = record.claim
+            if record.requeue and record.outstanding == 0:   # gave way while no worker of it was running
+                self._settle(record, 'cancelled', 'background window gave way', record.state)
+                continue
             job = self.store.job(claim.job_id)
             chunk = self.store.chunk(claim.job_id, claim.index)
             stale = (not job or job['state'] in ('cancelled', 'error')

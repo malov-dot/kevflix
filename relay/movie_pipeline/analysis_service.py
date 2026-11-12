@@ -75,6 +75,25 @@ STOP_WAIT_S = 15.0
 POLL_S = 0.2
 IDLE_UNLOAD_S = 150.0
 MEASURE_INTERVAL_S = 10.0
+# F21: when no outside reader can see the worker, its own report is used: PyTorch reserved memory plus this allowance for
+# what PyTorch does not count (the CTranslate2 recognizer and the CUDA context). An upper-side figure is still a measurement;
+# 'unknown' held every Vox admission at one instance for a whole film.
+SELF_REPORT_ALLOWANCE_MIB = 3072
+
+
+def worker_pid_of(ready_info, launcher_pid):
+    """The pid of the interpreter that loaded the models: the ready reply's own 'pid' when it is a positive int, else the
+    launcher pid. On Windows the venv's python.exe is a launcher; the process that holds the VRAM is its child."""
+    pid = (ready_info or {}).get('pid') if isinstance(ready_info, dict) else None
+    return pid if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0 else launcher_pid
+
+
+def self_reported_vram(devices, allowance=SELF_REPORT_ALLOWANCE_MIB):
+    """(MiB, method) from the worker's own device report ('torch_reserved_mib'), or (None, None) without that number."""
+    reserved = (devices or {}).get('torch_reserved_mib') if isinstance(devices, dict) else None
+    if isinstance(reserved, bool) or not isinstance(reserved, (int, float)) or reserved <= 0:
+        return None, None
+    return int(reserved) + int(allowance), 'worker torch_reserved_mib + %d MiB allowance (no outside reader saw the process)' % allowance
 MAX_CONSECUTIVE_DEATHS = 3
 WATCH_S = 1.0                    # service-owned watchdog cadence (deadlines hold even when every caller detached)
 CHILD_DEADLINE_MARGIN_S = 60.0   # the child's own guard deadline backs up the service watchdog
@@ -83,7 +102,8 @@ CHILD_DEADLINE_MARGIN_S = 60.0   # the child's own guard deadline backs up the s
 # 'Dubbing error'; they now get the same room as speech recognition.
 OP_TIMEOUTS = {'text_language': 300.0, 'speech': 900.0, 'english': 300.0, 'english_batch': 600.0, 'analyze': 900.0,
                'embed': 300.0, 'refine_utterances': 900.0, 'device_report': 60.0, 'generic_vad': 300.0,
-               'generic_synthesize': 300.0, 'language_id': 600.0, 'audio_events': 600.0, 'warmup': 900.0}
+               'generic_synthesize': 300.0, 'language_id': 600.0, 'audio_events': 600.0, 'warmup': 900.0,
+               'scout_feed': 60.0, 'scout_centers': 30.0}
 SLOW_OP_LOG_S = 3.0               # a request that took at least this long is logged with its queued and running seconds
 PREWARM_RETRY_S = 15.0            # after a warm-up stopped (resource hold, fault) the next claim may try again after this
 # A request that ran past its limit costs that worker only: the next request starts a fresh one. MAX_CONSECUTIVE_DEATHS in a row
@@ -217,6 +237,16 @@ class AnalysisService:
 
     def speakers(self, owner):
         return SpeakerClient(self, owner)
+
+    def scout_client(self):
+        """F15: a speaker client for the film scout, or None unless a warm worker is already running. The scout never
+        starts the worker and never keeps it alive: models are loaded and released by the dub alone."""
+        with self._lock:
+            gen = self._gen
+            if (self._closed or self._fatal is not None or self._warming or gen is None or not self._live(gen)
+                    or not getattr(gen, 'warmed', False)):
+                return None
+        return SpeakerClient(self, _NoOwner())
 
     # ---- child lifecycle ------------------------------------------------------------------------------------------
     def _env(self):
@@ -930,9 +960,11 @@ class AnalysisService:
             return
         gen.last_measure = now
         mib, method = None, None
+        # F21: measure the interpreter that holds the VRAM (it names itself in the ready reply), not the launcher.
+        worker_pid = worker_pid_of(gen.ready_info, gen.pid)
         if self.vram_reader is not None:
             try:
-                reading = self.vram_reader(gen.pid) or {}
+                reading = self.vram_reader(worker_pid) or {}
                 if reading.get('rows') and reading.get('process_dedicated_mib') is not None:
                     mib, method = int(round(float(reading['process_dedicated_mib']))), reading.get('method')
             except Exception:  # noqa: BLE001 - no reading: fall back, never assume zero
@@ -946,8 +978,11 @@ class AnalysisService:
                 out = ''
             for line in out.splitlines():
                 parts = [p.strip() for p in line.split(',')]
-                if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) == gen.pid and parts[1].isdigit():
+                if len(parts) == 2 and parts[0].isdigit() and int(parts[0]) == worker_pid and parts[1].isdigit():
                     mib, method = int(parts[1]), 'nvidia-smi --query-compute-apps used_memory'
+        if mib is None:
+            # F21: last resort, the worker's own figure (latest reply, else its start-up report)
+            mib, method = self_reported_vram(self._devices or (gen.ready_info or {}).get('devices'))
         if hasattr(gen.view, 'report_resident') and not gen.released:
             gen.view.report_resident(gen.pid, mib)   # None keeps the pid active-unknown
         self.vram_mib = mib
@@ -1186,6 +1221,15 @@ class SpeakerClient(_Client):
             args['source_fingerprint'] = str(source_fingerprint)
         turns, aligned, vectors = self._call('analyze', args)
         return list(turns), list(aligned), dict(vectors)
+
+    def scout_feed(self, waveform, start, source_fingerprint):
+        """F15: SpeakerAnalyzer.scout_feed in the worker."""
+        return dict(self._call('scout_feed', {'waveform': _ArrayArg(waveform), 'start': float(start),
+                                              'source_fingerprint': str(source_fingerprint)}))
+
+    def scout_centers(self, source_fingerprint):
+        """F15: SpeakerAnalyzer.scout_centers in the worker."""
+        return dict(self._call('scout_centers', {'source_fingerprint': str(source_fingerprint)}))
 
     def embed(self, waveform):
         return list(self._call('embed', {'waveform': _ArrayArg(waveform)}))

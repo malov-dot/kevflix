@@ -113,6 +113,36 @@ def _number(value, reason):
     return round(float(value), 3)
 
 
+TURN_BRIDGE_SECONDS = .3          # same-label turns this close, with nobody else between them, are one turn
+TURN_BLIP_SECONDS = .3            # a turn shorter than this that lies wholly inside another speaker's turn is noise
+TURN_CLEANUP = {'version': 'turn-cleanup-v1', 'bridge_seconds': TURN_BRIDGE_SECONDS, 'blip_seconds': TURN_BLIP_SECONDS}
+
+
+def clean_turns(turns, *, bridge=TURN_BRIDGE_SECONDS, blip=TURN_BLIP_SECONDS):
+    """F14: the detector's turns with its two kinds of noise removed (rows {'start', 'end', 'speaker'}; a new sorted list).
+
+    1. A turn shorter than ``blip`` that lies wholly inside a turn of ANOTHER label is dropped (a half-second line cut in two
+       by a 0.1 s flicker of a second label kept that line from being its own voice reference).
+    2. Two turns of the SAME label no more than ``bridge`` apart become one turn when no other label speaks in the gap
+       between them (one sentence the detector reported in two pieces).
+    Nothing is moved, no label is renamed, and a turn of another label that really overlaps is never touched."""
+    rows = sorted(({'start': float(t['start']), 'end': float(t['end']), 'speaker': t['speaker']} for t in turns),
+                  key=lambda r: (r['start'], r['end'], r['speaker']))
+    kept = [r for r in rows
+            if not (r['end'] - r['start'] < blip
+                    and any(o['speaker'] != r['speaker'] and o['start'] <= r['start'] and o['end'] >= r['end'] for o in rows))]
+    merged = []
+    for row in sorted(kept, key=lambda r: (r['speaker'], r['start'], r['end'])):
+        last = merged[-1] if merged else None
+        if last and last['speaker'] == row['speaker'] and row['start'] - last['end'] <= bridge and not any(
+                o['speaker'] != row['speaker'] and o['start'] < row['start'] and o['end'] > last['end'] for o in kept):
+            last['end'] = max(last['end'], row['end'])
+        else:
+            merged.append(dict(row))
+    merged.sort(key=lambda r: (r['start'], r['end'], r['speaker']))
+    return merged
+
+
 def split_exclusive(turns):
     """(aligned, overlaps) from possibly overlapping turns, by one sweep over the boundaries.
 
@@ -161,13 +191,16 @@ class DiartTurns:
             raise DiartTurnsUnavailable('window_not_covered', '%.3f-%.3f outside %.3f-%.3f'
                                         % (start, end, self.coverage[0], self.coverage[1]))
 
-    def window(self, start, end):
-        """Turns clipped to [start, end] (film seconds, labels DIART_Dnnn) plus the derived aligned/overlap views."""
+    def window(self, start, end, cleanup=False):
+        """Turns clipped to [start, end] (film seconds, labels DIART_Dnnn) plus the derived aligned/overlap views.
+        ``cleanup`` (F14) passes them through clean_turns first."""
         turns = []
         for turn in self.turns:
             a, b = max(turn['start'], start), min(turn['end'], end)
             if b - a >= MIN_PIECE:
                 turns.append({'start': round(a, 3), 'end': round(b, 3), 'speaker': LABEL_PREFIX + turn['speaker']})
+        if cleanup:
+            turns = [dict(row, start=round(row['start'], 3), end=round(row['end'], 3)) for row in clean_turns(turns)]
         turns.sort(key=lambda row: (row['start'], row['end'], row['speaker']))
         aligned, overlaps = split_exclusive(turns)
         return {'turns': turns, 'aligned': aligned, 'overlaps': overlaps}

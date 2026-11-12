@@ -52,7 +52,8 @@ def caption_text(text):
 
 
 def plan_dialogue(segments, turns, captions=(), *, origin=0.0, minimum_probability=.65, speech_regions=None,
-                  whisper_no_speech=False, caption_edge_pause=None, overlap_fraction=.25, word_floor=.5, low_word_share=0.0):
+                  whisper_no_speech=False, caption_edge_pause=None, overlap_fraction=.25, word_floor=.5, low_word_share=0.0,
+                  keep_untimed_text=False):
     """Never use an entire caption list in place of uncovered recognized speech.
 
     Times in segments are relative; turns and captions use the movie timeline.
@@ -62,6 +63,10 @@ def plan_dialogue(segments, turns, captions=(), *, origin=0.0, minimum_probabili
     whisper_no_speech  drop a segment only by Whisper's two-part rule (is_no_speech).
     caption_edge_pause also start a new group at an inter-word pause of at least
                        this many seconds that contains a caption start or end.
+    keep_untimed_text  (F22) a word the recognizer reported with start == end has no usable timing and is still
+                       listed in ``discarded``; its TEXT joins the neighbouring timed word of the same segment
+                       (the previous one, else the next), so the line is translated with all its words. No
+                       duration is invented.
     """
     groups, discarded, issues = [], [], []
     edges = caption_edges(captions) if caption_edge_pause is not None else ()
@@ -73,11 +78,21 @@ def plan_dialogue(segments, turns, captions=(), *, origin=0.0, minimum_probabili
             continue
         tokens = segment.get('words') or [dict(segment, probability=0)]
         new_segment=True
+        waiting=[]          # F22: untimed words of this segment that precede its first timed word: (text, discarded row)
         for token in tokens:
             if not _positive_interval(token.get('start'), token.get('end')):
-                discarded.append({'reason':'asr_invalid_interval', 'text':token.get('text',''),
-                                  'start':token.get('start'), 'end':token.get('end'),
-                                  'time_basis':'analysis-relative-seconds'})
+                row={'reason':'asr_invalid_interval', 'text':token.get('text',''),
+                     'start':token.get('start'), 'end':token.get('end'),
+                     'time_basis':'analysis-relative-seconds'}
+                discarded.append(row)
+                text=token.get('text','')
+                if (keep_untimed_text and isinstance(text,str) and text.strip() and segment.get('words')
+                        and token.get('start') is not None and token.get('start')==token.get('end')):
+                    if not new_segment:
+                        last=groups[-1]['words'][-1]
+                        last['text']=last['text']+text
+                        row['text_kept_with']='previous-word'
+                    else:waiting.append((text,row))
                 continue
             word = {**token, 'start':token['start']+origin, 'end':token['end']+origin}
             if not _positive_interval(word['start'], word['end']):
@@ -87,6 +102,10 @@ def plan_dialogue(segments, turns, captions=(), *, origin=0.0, minimum_probabili
                 continue
             if not word.get('text','').strip():
                 continue
+            if waiting:
+                word['text']=''.join(text for text,_ in waiting)+word['text']
+                for _,row in waiting:row['text_kept_with']='next-word'
+                waiting=[]
             coverage = defaultdict(float)
             for turn in turns:
                 coverage[turn['speaker']] += overlap(word,turn)
