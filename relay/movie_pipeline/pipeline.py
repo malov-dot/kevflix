@@ -800,8 +800,23 @@ class MoviePipeline:
         is analysed and rendered after it, so the previous window's takes are in the ledger (carry, removal) when this one is
         mixed; rendering out of order left original speech and clicks at the joins (owner review 2026-10-20)."""
         job, previous = record.claim.job_id, record.claim.index - 1
-        return any(r is not record and r.claim.job_id == job and r.claim.index == previous and r.state in self.PREDECESSOR_BLOCKS
-                   for r in self.records.values())
+        blocker = next((r for r in self.records.values()
+                        if r is not record and r.claim.job_id == job and r.claim.index == previous and r.state in self.PREDECESSOR_BLOCKS),
+                       None)
+        if blocker is None:
+            return False
+        # Owner, 2026-11-25 (a film: the TV buffered ~3 min after a resume while the film's first four windows, which the viewer
+        # had already passed, were dubbed ahead of his own). A predecessor that the store now ranks BELOW this window (a seek
+        # parked it, store.demote_pending) is not needed by the viewer: it never holds back the window that is watched now.
+        # Only that skipped join can then be rendered out of order.
+        store = getattr(self, 'store', None)
+        if store is not None:
+            try:
+                if self._current_priority(blocker)[0] > self._current_priority(record)[0]:
+                    return False
+            except Exception:  # noqa: BLE001 - an unreadable row keeps the old, safe order
+                pass
+        return True
 
     def _dispatch_analysis(self):
         if self.analysing is not None or self.ana_q.full():

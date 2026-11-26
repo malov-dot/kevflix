@@ -50,7 +50,9 @@ VERSION = 'kevflix-original-window-v2'
 CUE_REASONS = frozenset({'reference_unverified', 'reference_invalid', 'untrusted_actor', 'text_invalid', 'output_invalid'})
 RECOVERABLE_TYPES = frozenset({'DeadlineExpired', 'LineClaimLost', 'InaudibleTakes', 'LineCommitRace'})
 RECOVERABLE_MESSAGES = ('A synthesis cue overlaps protected original audio', 'A synthesis cue was not scheduled',
-                        'No English dialogue was produced', 'Resolve the speaker before synthesizing this line')
+                        'No English dialogue was produced', 'Resolve the speaker before synthesizing this line',
+                        # 2026-11-25: a short decode of one window stopped the whole film; that window plays original
+                        'Render range is outside the analyzed audio')
 LEDGER_ATTEMPTS = 2
 CARRY_FADE_SECONDS = .01      # the 10 ms fades ActorPipeline uses for speech-only removal intervals
 

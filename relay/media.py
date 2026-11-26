@@ -69,12 +69,17 @@ def extract_audio(config, owner, source, audio_index, start, seconds, dest, rate
         mix = []
     else:
         mix = ["-ac", channels]
-    owner.run([config["ffmpeg"], "-hide_banner", "-loglevel", "error", "-nostdin",
+    command = [config["ffmpeg"], "-hide_banner", "-loglevel", "error", "-nostdin",
                "-ss", f"{start:.6f}", "-i", source, "-t", f"{seconds:.6f}",
                "-map", f"0:{audio_index}", "-vn", "-sn", *mix, "-ar", rate,
-               "-c:a", "pcm_s16le", "-y", dest], timeout=max(60, seconds * 4))
+               "-c:a", "pcm_s16le", "-y", dest]
+    owner.run(command, timeout=max(60, seconds * 4))
     if preserve_layout is None:
         return None
+    # A film, 2026-11-25 22:19: one window's decode came out 25.3 s of the 36 s asked (a read hiccup on the film) and
+    # the whole dub stopped. A short decode is made once more; a film whose audio really ends early stays short.
+    if _decoded_seconds(dest, CHANNEL_LAYOUTS[preserve_layout], rate) < seconds - SHORT_DECODE_TOLERANCE:
+        owner.run(command, timeout=max(60, seconds * 4))
     expected = CHANNEL_LAYOUTS[preserve_layout]
     header = wav_format(dest)
     if header is None or header["channels"] != expected:
@@ -83,6 +88,18 @@ def extract_audio(config, owner, source, audio_index, start, seconds, dest, rate
         raise ValueError(f"Extracted audio speaker mask {header.get('channel_mask')!r} does not prove "
                          f"the source {preserve_layout} layout; refusing to relabel remapped channels")
     return resolve_channel_layout(expected, source=preserve_layout, wav=header)
+
+
+SHORT_DECODE_TOLERANCE = 0.5     # seconds: a decode shorter than asked by more than this is made once more
+
+
+def _decoded_seconds(path, channels, rate):
+    """Seconds of 16-bit PCM in a WAV this module wrote (file size minus a generous header; inf when unreadable)."""
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return float("inf")
+    return max(0, size - 100) / float(2 * int(channels) * int(rate))
 
 
 # Supported source layouts and their WAVE_FORMAT_EXTENSIBLE speaker masks.
